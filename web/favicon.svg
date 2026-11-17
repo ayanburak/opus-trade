@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Sekme ikonu. Zemin arayüzün panel rengi, mumlar grafiğin yükselen ve düşen mum renkleri. -->
+  <rect width="32" height="32" rx="8" fill="#151a24"/>
+  <rect x=".5" y=".5" width="31" height="31" rx="7.5" fill="none" stroke="#2a3242"/>
+  <g stroke-linecap="round" stroke-width="1.6">
+    <path d="M9 7v18" stroke="#26a69a"/>
+    <rect x="6.5" y="11" width="5" height="9" rx="1" fill="#26a69a"/>
+    <path d="M16 5v15" stroke="#ef5350"/>
+    <rect x="13.5" y="8" width="5" height="8" rx="1" fill="#ef5350"/>
+    <path d="M23 9v18" stroke="#26a69a"/>
+    <rect x="20.5" y="13" width="5" height="10" rx="1" fill="#26a69a"/>
+  </g>
+</svg>

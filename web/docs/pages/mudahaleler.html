@@ -1,0 +1,32 @@
+<p class="eyebrow">Opus</p>
+<h1>Yönetici müdahaleleri</h1>
+<p class="lead">Her hesap bir yöneticinin gözetimindedir. Yönetici Opus'u zamanından önce çağırabilir, ona bilgi verebilir, soru sorabilir, hesapta işlem yapabilir ya da kısıt koyabilir. Opus bunu talimatından bilir, her müdahale ona yöneticiden geldiği belirtilerek bildirilir.</p>
+
+<h2>Müdahale türleri</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tür</th><th>Ne olur</th></tr></thead>
+  <tbody>
+    <tr><td>Çağırma</td><td>Opus hemen ya da yöneticinin seçtiği bir saatte çağrılır. Yönetici belli bir pariteye bakmasını da isteyebilir.</td></tr>
+    <tr><td>Haber ve bilgi</td><td>Yönetici bir haber, bir bilgi ya da araştırılacak bir konu verir. Opus habere bakar ve değerlendirmesini yazar.</td></tr>
+    <tr><td>Soru</td><td>Opus cevabını kararının <code>yoneticiye_cevap</code> alanına yazar.</td></tr>
+    <tr><td>Hesap işlemi</td><td>Pozisyon açma, kapatma, emir, koruma ya da alarm. Opus'un kendi eylemleriyle aynı işlemlerdir.</td></tr>
+    <tr><td>Kısıt</td><td>Yeni pozisyon açmama, kaldıraç ya da marjin sınırı, tek yön, bir paritenin yasaklanması. Bir bitiş saati olabilir ya da kaldırılana kadar sürer.</td></tr>
+    <tr><td>Not defteri</td><td>Opus'un not defterine yöneticinin bir notu eklenir.</td></tr>
+  </tbody>
+</table></div>
+
+<h2>Teklif ve Kesin</h2>
+<p>Hesap işlemi, kısıt ve not defteri müdahaleleri iki ağırlıktan biriyle gider. Bu ayrım yöneticinin hafif bir öneriden doğrudan yönlendirmeye kadar her müdahaleyi yapabilmesi içindir.</p>
+<ul>
+  <li><strong>Teklif:</strong> Hiçbir şey uygulanmaz. Opus teklifi değerlendirir, mantıklı bulursa kendi eylemiyle uygular. Teklif edilen bir kısıta uyup uymamak da onun kararıdır.</li>
+  <li><strong>Kesin:</strong> Opus'un uymasına bırakılmaz. Kesin bir hesap işlemi gönderildiği anda hesaba uygulanır ve Opus onu uygulanmış olarak öğrenir. Kesin bir not o anda not defterine eklenir. Kesin bir kısıt yürürlükte kaldıkça, onu aşan eylemleri reddedilir.</li>
+</ul>
+<p>Kesin bir hesap işlemi hesap kurallarına takılırsa müdahale hiç kaydedilmez, hata yöneticiye döner. Opus'a yalnızca gerçekten uygulanmış işlemler bildirilir.</p>
+
+<h2>Kapı</h2>
+<p>Hesabı değiştiren her istek tek bir kapıdan geçer ve isteği kimin yaptığını taşır: Opus, yönetici ya da sistem. Opus'un eylemleri, yöneticinin kesin işlemleri ve dönem sonundaki kapanışlar aynı kurallardan geçer. Başarılı her işlem yapanıyla birlikte kaydedilir, böylece bir pozisyonu Opus'un mu yöneticinin mi kapattığı her zaman bellidir.</p>
+<p>Kesin kısıtlar yalnızca Opus'un isteklerine uygulanır. Kısıtlara yalnızca riski artıran işlemler takılır: pozisyon açma, emir verme ve ekleme. Kapatma ve iptal hiçbir zaman engellenmez. TP, SL, iz süren stop, likidasyon, emir tetiklenmesi ve fonlama ise kapıdan değil hesap motorunun kendi kuralından geçer.</p>
+
+<h2>Opus'a nasıl gider</h2>
+<p>Müdahaleler istemin başında, <a href="./gordukleri">Yöneticiden</a> bölümünde saatiyle birlikte listelenir. Yürürlükteki kısıtlar numaralarıyla ve ağırlıklarıyla ayrıca yazılır. Müdahale olmayan bir çağrıda bu bölüm hiç bulunmaz.</p>
+<p>Bir müdahale ancak başarılı bir çağrının isteminde gösterilince teslim edilmiş sayılır. Çağrı hata verirse bir sonraki çağrıda yine gösterilir, hiçbiri kaybolmaz. Her müdahale profilin veritabanında kaydıyla, teslim zamanıyla ve sonucuyla saklanır.</p>

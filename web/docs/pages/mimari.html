@@ -1,0 +1,115 @@
+<p class="eyebrow">Sistem</p>
+<h1>Mimari</h1>
+<p class="lead">Bütün profiller tek bir Python sürecinde çalışır. Süreç Binance'i dinler, hesapları yürütür, Opus'u gerektiğinde ayrı bir alt süreçle çağırır ve arayüze canlı veri akıtır.</p>
+
+<h2>Genel resim</h2>
+<div class="arch">
+  <div class="arch-row"><div class="arch-label">İstemci</div><div class="arch-boxes">
+    <div class="arch-box"><b>Masa</b><span>Grafik, hesap ve günlük. Canlı olayları server sent events ile alır.</span></div>
+    <div class="arch-box"><b>Doküman</b><span>Bu sayfa. Verisini api/about'tan okur.</span></div>
+  </div></div>
+  <div class="arch-row"><div class="arch-label">Kenar</div><div class="arch-boxes">
+    <div class="arch-box"><b>nginx</b><span>TLS, alt yol, yalnızca GET, kapatma ucu dışarıya kapalı, canlı akış için tamponsuz.</span></div>
+  </div></div>
+  <div class="arch-row"><div class="arch-label">Program</div><div class="arch-boxes">
+    <div class="arch-box accent"><b>server.py</b><span>FastAPI, Unix soket, tek asyncio döngüsü.</span></div>
+    <div class="arch-box"><b>Engine</b><span>Her profil için bir tane: zamanlayıcı, olaylar, Opus çağrısı, müdahaleler.</span></div>
+    <div class="arch-box"><b>Kapı</b><span>Hesabı değiştiren her istek kaynağıyla buradan geçer.</span></div>
+    <div class="arch-box"><b>Account</b><span>Hesap motoru: pozisyon, emir, TP, SL, likidasyon, fonlama.</span></div>
+  </div></div>
+  <div class="arch-row"><div class="arch-label">Opus</div><div class="arch-boxes">
+    <div class="arch-box accent"><b>claude -p</b><span>Her çağrıda yeni bir alt süreç, kendi çalışma klasöründe.</span></div>
+    <div class="arch-box"><b>MCP sunucusu</b><span>Piyasa araçları. claude başlatır, stdio üzerinden konuşur.</span></div>
+  </div></div>
+  <div class="arch-row"><div class="arch-label">Veri</div><div class="arch-boxes">
+    <div class="arch-box"><b>Binance</b><span>Tek bir websocket: mumlar ve likidasyonlar. Herkese açık REST uçları.</span></div>
+    <div class="arch-box"><b>SQLite</b><span>Her profil için account.db, likidasyonlar için ortak market.db.</span></div>
+  </div></div>
+</div>
+
+<h2>Tek süreç, tek döngü</h2>
+<p>Program tek bir asyncio döngüsünde çalışır. Fiyat akışı, zamanlayıcılar, fonlama takibi, Opus çağrılarının beklenmesi ve web istekleri aynı döngüyü paylaşır. Veritabanı yazmaları küçük ve seyrek olduğu için her profilin tek bir SQLite bağlantısı yeterlidir, async bir sürücüye gerek kalmaz.</p>
+<p>Opus çağrıları döngüyü bloklamaz. claude komutu ayrı bir alt süreç olarak başlatılır, çıktısı satır satır okunur. Bir profilde aynı anda yalnızca bir çağrı yapılır, farklı profillerin çağrıları aynı anda sürebilir.</p>
+
+<h2>Profiller ve yalıtım</h2>
+<p>Her profil kendi Engine nesnesi, kendi veritabanı ve kendi çalışma klasörüyle çalışır. claude komutu her profil için ayrı bir klasörde başlatılır, böylece bir profilin araçları yalnızca kendi veritabanını görür. Fiyat akışı ise bütün profillerde ortaktır: program bütün profillerin paritelerini tek bir websocket'ten dinler ve her mumu ilgili profillere dağıtır. Bir profilin hatası akışı kesmez, diğer profiller fiyat almaya devam eder. Akış koparsa yeniden bağlanınca aradaki dakikalık mumlar Binance'ten çekilip işlenir, böylece kopukken değip dönen bir SL, TP ya da emir kaçmaz.</p>
+
+<h2>Opus çağrısı</h2>
+<p>Çağrı claude komutunun print moduyla, abonelikten yapılır. Komut şu kısıtlarla başlatılır:</p>
+<ul>
+  <li>Oturum diske yazılmaz, kullanıcı ayarları, hook'lar ve başka MCP sunucuları yüklenmez.</li>
+  <li>Yalnızca web araçları, araştırmacı ajan ve programın kendi MCP sunucusu kullanılabilir.</li>
+  <li>Sistem metni tamamen talimatla değiştirilir, cevap bir JSON şemasıyla sınırlanır.</li>
+  <li>Adım sayısı ve süre sınırlıdır, aşılırsa çağrı hata sayılır.</li>
+</ul>
+<p>Çıktı stream-json biçiminde okunur. Opus bir araç kullandıkça kaydı arayüze anında iletilir, son satırdaki sonuç kararı taşır. Araştırmacı ajan kullanıldığında claude komutu çalışma klasörünün adıyla küçük bir alt ajan kaydı bırakıyor, program her çağrıdan sonra bu izi siler.</p>
+
+<h2>Hesap motoru</h2>
+<p>Account sınıfı bir dolar bakiyesini, pozisyonları, emirleri ve alarmları yönetir. Kurala aykırı her istek, Opus'un okuyacağı açıklıkta bir mesajla reddedilir. Fiyat kontrolü temkinli bir sıra izler: bir aralıkta fiyatın önce hangi uca gittiği bilinemediği için önce zarar tarafı, en son TP kademeleri uygulanır. Zarar tarafında SL ile likidasyondan fiyatın önce vardığı seviye seçilir, SL likidasyondan önce geliyorsa pozisyon SL'den kapanır. İz süren stop en son güncellenir, böylece aynı aralıktaki hareket kendi stopunu aynı anda tetikleyemez.</p>
+<p>Hesabı değiştiren istekler Account'a doğrudan değil, bir kapıdan ulaşır. Her istek bir komut olur ve kimin yaptığını taşır: Opus, yönetici ya da sistem. Yöneticinin kesin kısıtlarını da kapı uygular. Ayrıntısı <a href="./mudahaleler">Yönetici müdahaleleri</a> bölümünde. Hesap motoru ve kapı, beklenen rakamları kuraldan elle hesaplanmış senaryo testleriyle sınanır.</p>
+
+<h2>Veri</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Yer</th><th>İçerik</th></tr></thead>
+  <tbody>
+    <tr><td><code>data/&lt;profil&gt;/account.db</code></td><td>Profilin bütün kaydı. Tabloları aşağıda.</td></tr>
+    <tr><td><code>data/market.db</code></td><td>Bütün profillerin ortak likidasyon kayıtları. En uzun dönemden bir gün fazla saklanır, böylece dönem bitince arşive eksiksiz kopyalanabilir.</td></tr>
+    <tr><td><code>private/profiles/*.toml</code></td><td>Profil ayarları. Yoksa program <code>profiles/ornek.toml</code> ile açılır.</td></tr>
+  </tbody>
+</table></div>
+
+<p>Bir profilin veritabanı dönemin tam kaydını tutar, sonradan her kararın ve her işlemin nedeni geri izlenebilir:</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Tablo</th><th>İçerik</th></tr></thead>
+  <tbody>
+    <tr><td><code>state</code></td><td>Nakit, dönem tarihleri, not defteri gibi tekil değerler.</td></tr>
+    <tr><td><code>trades</code>, <code>orders</code>, <code>alerts</code></td><td>Açık ve kapanmış pozisyonlar, bekleyen emirler, alarmlar.</td></tr>
+    <tr><td><code>journal</code></td><td>Her çağrı: istem, ham cevap, karar, eylemlerin sonuçları, süre, maliyet, model ayarları, kodun sürümü ve çağrı anındaki fiyatlar.</td></tr>
+    <tr><td><code>tool_calls</code></td><td>Bir çağrıdaki her aracın girdisi, sonucunun tamamı, hata bilgisi ve süresi.</td></tr>
+    <tr><td><code>trade_events</code></td><td>Hesaptaki her değişiklik ve onu yapan: Opus, yönetici ya da sistem.</td></tr>
+    <tr><td><code>equity</code></td><td>Özkaynak, dakikada bir ve her olaydan sonra.</td></tr>
+    <tr><td><code>system_events</code></td><td>Programın kendi olayları: açılış, kapanış, kapalı süre, dönem sonu, çağrı hataları.</td></tr>
+    <tr><td><code>interventions</code></td><td>Yöneticinin müdahaleleri ve kısıtları, teslim zamanları ve sonuçlarıyla.</td></tr>
+  </tbody>
+</table></div>
+<p>Masa şimdilik bu kayıtların bir kısmını gösterir. Özkaynak eğrisi, araçların tam sonuçları ve işlem olayları veritabanında durur, arayüze ayrıca eklenecek.</p>
+
+<h2>Canlı akış ve önbellek</h2>
+<p>Arayüz her profil için bir server sent events bağlantısı açar: mum güncellemeleri, hesap durumu, yeni günlük kayıtları ve Opus'un o an kullandığı araçlar bu bağlantıdan gelir. Bağlantı koparsa tarayıcı kendiliğinden yeniden bağlanır. Grafiğin mumları ve 24 saatlik özet bütün ziyaretçiler için birkaç saniye saklanır, böylece ziyaretçi sayısı sunucunun Binance'e attığı istek sayısını artırmaz.</p>
+
+<h2>Kapanış ve açılış</h2>
+<p>Arayüzde kapatma düğmesi yoktur. Program her açılışta rastgele bir anahtar üretip yalnızca sahibinin okuyabildiği bir dosyaya yazar. Kapatma ucu bu anahtarı ister ve nginx'te dışarıya hiç açılmaz. Planlı kapanışta her profilin Opus'u bilgilendirilir, hepsinin son kararı uygulanınca program kendini kapatır. Açılışta kapalı kalınan süre dakikalık mumlarla yeniden işlenir.</p>
+
+<h2>Sunucu ve güvenlik</h2>
+<ul>
+  <li>Program kendi sistem kullanıcısıyla bir systemd servisi olarak çalışır ve port açmaz, bir Unix soketini dinler.</li>
+  <li>Servisin yerel ve özel ağ adreslerine erişimi kapalıdır. Opus'un web aracı sunucudaki başka servislere ulaşamaz.</li>
+  <li>Dosya sisteminin büyük kısmı servise salt okunurdur, yalnızca kendi klasörüne yazabilir.</li>
+  <li>Opus'a dosya, terminal ve kod çalıştırma araçları verilmez.</li>
+</ul>
+
+<h2>Kod düzeni</h2>
+<p>Kod <code>opus_trade</code> paketindedir ve sorumluluklarına göre alt paketlere bölünür.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Modül</th><th>Sorumluluğu</th></tr></thead>
+  <tbody>
+    <tr><td><code>settings.py</code></td><td>Ortak ayarlar, parite kataloğu ve profillerin yüklenmesi.</td></tr>
+    <tr><td><code>db.py</code></td><td>Profil veritabanının tabloları.</td></tr>
+    <tr><td><code>engine/scheduler.py</code></td><td>Bir profilin zamanlayıcısı, olayları, Opus çağrısı, kapanış akışı ve müdahale girişi.</td></tr>
+    <tr><td><code>engine/account.py</code></td><td>Hesap motoru.</td></tr>
+    <tr><td><code>engine/commands.py</code></td><td>Hesabı değiştiren bütün isteklerin geçtiği kapı.</td></tr>
+    <tr><td><code>engine/interventions.py</code></td><td>Yönetici müdahalelerinin doğrulanması, uygulanması ve istemdeki satırları.</td></tr>
+    <tr><td><code>opus/agent.py</code></td><td>Talimat, istem, karar şeması ve claude çağrısı.</td></tr>
+    <tr><td><code>opus/actions.py</code></td><td>Eylemlerin şeması, açıklamaları ve kapının komutlarına çevirisi.</td></tr>
+    <tr><td><code>tools/market.py</code></td><td>Bütün profillerin gördüğü piyasa araçlarının MCP sunucusu.</td></tr>
+    <tr><td><code>market/data.py</code></td><td>Binance'in REST uçları ve birleşik canlı akış.</td></tr>
+    <tr><td><code>market/indicators.py</code>, <code>market/analysis.py</code></td><td>Göstergeler, seviyeler, hacim profili ve korelasyon. Saf Python.</td></tr>
+    <tr><td><code>market/hours.py</code></td><td>Borsa seansları, tatiller ve erken kapanışlar.</td></tr>
+    <tr><td><code>market/liquidations.py</code></td><td>Likidasyon kayıtları ve dalgalar.</td></tr>
+    <tr><td><code>market/opening.py</code></td><td>NY açılışı ölçümleri, açılış araçlarının hesabı.</td></tr>
+    <tr><td><code>fingerprint.py</code></td><td>Her profilin dönemini sıfırlatan parçalarının özetini çıkarır, yayın bir fark varsa durur.</td></tr>
+    <tr><td><code>web/server.py</code></td><td>Engine'leri kurar, akışı dağıtır, uçları ve canlı olayları sunar.</td></tr>
+    <tr><td><code>web/about.py</code></td><td>Bu dokümanın verisi.</td></tr>
+  </tbody>
+</table></div>
+<p>Bağımlılıklar az tutuldu: FastAPI, uvicorn, httpx, websockets, mcp ve borsa tatilleri için holidays. Testler pytest ile yazılır, ağa çıkmaz ve Opus'u çağırmaz. Hesaplar bilerek numpy ya da pandas olmadan yazıldı, en büyük girdi birkaç bin mumdur.</p>

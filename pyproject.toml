@@ -1,0 +1,26 @@
+[project]
+name = "opus-trade"
+version = "0.1.0"
+description = "Claude Opus'un Binance vadeli piyasasının canlı verisiyle kâğıt üstünde hesap yönettiği trading masası"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "websockets",
+    "mcp>=2.3.0",
+    "holidays>=0.108",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-p no:cacheprovider"

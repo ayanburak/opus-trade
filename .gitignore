@@ -1,0 +1,16 @@
+# Proje içindeki sanal ortam, uv sync ile yeniden kurulur.
+.venv/
+__pycache__/
+
+# Profiller ve yayın dosyaları kendi özel deposunda durur. Klasör yoksa program
+# profiles/ornek.toml örnek profiliyle açılır.
+private/
+
+# Canlı veri yalnızca sunucuda durur. Yerel testler ayrı klasörle yapılır.
+data/
+
+# Biten ya da sıfırlanan dönemlerin sunucudan çekilen kopyaları.
+archive/
+
+# Büyük değişikliklerden önce alınan elle yedekler.
+.yedek/

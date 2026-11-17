@@ -1,0 +1,31 @@
+<p class="eyebrow">Opus</p>
+<h1>Karar şeması</h1>
+<p class="lead">Opus serbest metin değil, bir JSON şemasına uyan bir karar döndürür. Şema claude komutuna verilir, şemaya uymayan bir cevap kabul edilmez.</p>
+
+<h2>Alanlar</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Alan</th><th>İçerik</th></tr></thead>
+  <tbody>
+    <tr><td><code>analiz</code></td><td>Piyasayı nasıl değerlendirdiği, araçlardan ne öğrendiği ve kararının gerekçeleri. Opus'un işlem günlüğüdür, kartın ayrıntısında görünür.</td></tr>
+    <tr><td><code>pariteler</code></td><td>Her parite için ayrı ve zorunlu bir alan: görüş ve bir iki cümlelik değerlendirme. Opus hiçbir pariteyi atlayamaz.</td></tr>
+    <tr><td><code>ozet</code></td><td>Tek cümlelik özet. Kartın başlığı olur.</td></tr>
+    <tr><td><code>gorus</code></td><td>Piyasa hakkındaki genel kanaati: yükseliş, düşüş, yatay ya da belirsiz.</td></tr>
+    <tr><td><code>guven</code></td><td>Kararına ne kadar güvendiği, 0 ile 100 arası.</td></tr>
+    <tr><td><code>eylemler</code></td><td>Sırayla uygulanacak eylemler. Boş olabilir, bu bekle demektir.</td></tr>
+    <tr><td><code>not_defteri</code></td><td>Bir sonraki çağrıda kendine lazım olacak notlar. Önceki not defterinin yerine geçer.</td></tr>
+    <tr><td><code>sonraki_cagri_dk</code></td><td>Bir sonraki çağrının kaç dakika sonra olacağı. Profilin çağrı aralığına sınırlanır.</td></tr>
+    <tr><td><code>yoneticiye_cevap</code></td><td>Yöneticinin sorularına, verdiği haberlere ve araştırılmasını istediği konulara cevap. Böyle bir müdahale yoksa boş kalır. Ayrıntısı <a href="./mudahaleler">Yönetici müdahaleleri</a> bölümünde.</td></tr>
+  </tbody>
+</table></div>
+<p>Alan adları Türkçedir, çünkü Opus'a görünen her şey Türkçedir. Kodun geri kalanı İngilizcedir.</p>
+
+<h2>Eylemler</h2>
+<p>Her eylem şemada ayrı bir seçenektir: tipi, ne yaptığını anlatan açıklaması ve zorunlu alanları kendisinde durur. Zorunlu bir alanı eksik bir eylem daha çağrı sürerken şemaya takılır.</p>
+<div data-render="actions"><p class="loading-text">Eylemler yükleniyor…</p></div>
+<p>Eylemlerin açıklamaları talimatta değil şemadadır. Talimatın çekirdeği değişince dönem sıfırlanır, şemaya yeni bir eylem eklemek ise dönemi etkilemez. Böylece Opus'un eline yeni bir işlem vermek süren dönemi bozmaz.</p>
+<p>Opus'un eylemleri, yöneticinin işlemleriyle aynı kapıdan ve aynı kurallarla geçer. Kapı <a href="./mudahaleler">Yönetici müdahaleleri</a> bölümünde anlatılır.</p>
+<p>Eylemler sırayla uygulanır. Biri reddedilirse, örneğin yetersiz nakit, yanlış taraftaki bir SL ya da en küçük işlem büyüklüğünün altındaki bir miktar yüzünden, diğerleri yine denenir. Her eylemin sonucu bir sonraki çağrıda Opus'a aynen gösterilir. Bu mesajlar Opus'un okuyacağı kadar açık yazılır, örneğin hemen tetiklenecek bir iz süren stop reddedildiğinde mesajda verilebilecek en küçük yüzde de yazar.</p>
+
+<h2>Tam şema</h2>
+<p>Parite listesi profile göre değiştiği için şema da profil başınadır.</p>
+<div data-render="schema"><p class="loading-text">Şema yükleniyor…</p></div>

@@ -1,0 +1,30 @@
+# Örnek profil. Program private/profiles/ klasörünü bulamazsa bu klasördeki
+# profillerle açılır. Yeni bir profil için bu dosya kopyalanıp düzenlenir.
+#
+# Profil kimliği dosyanın adıdır, ornek. Kimlik küçük harf ve ASCII olur,
+# verisi data/<kimlik>/ altında durur. Profiller kimliğe göre alfabetik
+# sıralanır, arayüz ilk profili varsayılan açar. Dönem sürerken buradaki bir
+# değer değişirse Opus'a giden talimat değişir ve dönem sıfırdan başlatılmak
+# zorunda kalır. name ve short yalnızca arayüzde görünür, Opus'a gitmez.
+
+name = "Örnek Opus"
+short = "Örnek"
+
+# Başlangıç bakiyesi, dolar.
+balance = 100.0
+
+# İşlem yapılabilen pariteler, settings.py'deki katalogdan seçilir. Boş liste
+# bütün katalog demektir.
+symbols = ["BTCUSDT", "ETHUSDT"]
+
+# Dönemin uzunluğu, saat. 336 saat on dört gündür.
+period_hours = 336
+
+# Opus'un bir sonraki çağrı için seçebileceği bekleme, dakika.
+min_wait = 5
+max_wait = 720
+
+# Talimata ayrı bir bölüm olarak eklenen çalışma tarzı. Boşsa talimata hiçbir
+# bölüm eklenmez ve Opus kararlarını kendisi verir. Satır sonundaki ters bölü
+# satırları birleştirir, metin Opus'a tek paragraf olarak gider.
+style = ""

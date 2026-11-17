@@ -1,0 +1,29 @@
+<p class="eyebrow">Başlarken</p>
+<h1>Profiller</h1>
+<p class="lead">Her profil ayrı bir Opus ve ayrı bir hesaptır. Hepsi aynı programda, aynı canlı fiyat akışıyla çalışır ama hesapları, hafızaları ve dönemleri birbirinden tamamen ayrıdır.</p>
+
+<div data-render="profiles"><p class="loading-text">Profiller yükleniyor…</p></div>
+
+<h2>Profillerin farkı</h2>
+<p><strong>Otonom Opus</strong> projenin asıl sorusunu taşır. Talimatı yalnızca hedefi, kuralları ve araçları anlatır. Talimatında bir çalışma tarzı bölümü yoktur. Risk tarzını, kaldıracı, pozisyon büyüklüğünü ve hangi paritede işlem açacağını kendisi seçer. Talimatı yalnızca nasıl çalışacağını anlatır: bütün pariteleri değerlendirmek, haberleri takip etmek, kendi tezine karşı kanıt aramak. Tam metni <a href="./talimat">Talimat</a> bölümünde. Yönetici onu da diğer profiller gibi <a href="./mudahaleler">müdahalelerle</a> yönlendirebilir.</p>
+<p><strong>Swing Opus</strong> bir karşılaştırma alanıdır. Talimatına bilerek bir çalışma tarzı bölümü eklenir ve yalnızca BTC'de işlem yapar. Böylece aynı model, aynı araçlar ve aynı kurallarla, yalnızca bir strateji metninin davranışı nasıl değiştirdiği görülür.</p>
+<p><strong>Swing Pro Opus</strong> Swing'in çıkış yönetimini geliştirir. Pariteleri, bakiyesi, dönemi, çağrı aralığı ve giriş tarzı Swing'le aynıdır. Tek fark çıkışlarıdır: hedefini seviyenin biraz önüne, stopunu fiyatın normal dalgalanmasının dışına koyar, ilk hedefte bir kısmı kapatıp kalanını oynaklığa göre ayarladığı iz süren stopla taşır ve kapanan işlemlerinin çıkış karnesine bakarak çıkışlarını sınar. Swing değişmeden kalır, böylece iki profilin farkı yalnızca çıkış metninden gelir.</p>
+
+<h2>Dönem</h2>
+<p>Her profilin sabit süreli bir dönemi vardır. Dönem bitince açık pozisyonlar o anki fiyattan kapatılır, bekleyen emirler ve alarmlar iptal edilir ve Opus artık çağrılmaz. Başarı yalnızca dönem sonundaki özkaynakla ölçülür. Bakiye <span data-bind="end_equity">1</span> doların altına düşer ve açık pozisyon kalmazsa dönem erken biter.</p>
+<p>Dönem sürerken profilin dosyası, talimatın çekirdeği, istemin biçimi, hesap kuralları ya da model ayarı değişirse o profilin dönemi sıfırdan başlar. Yoksa farklı kurallarla verilmiş kararlar aynı sonuca karışır. Hesap motoru bütün profillerde ortaktır, motordaki bir kural değişikliği hepsini birden sıfırlatır.</p>
+<p>Opus'un elini güçlendiren işler dönemi etkilemez: yeni bir piyasa aracı, bir aracın düzeltilmesi, şemaya yeni bir eylem ve arayüzdeki değişiklikler. Program her yayından önce her profilin dönemini sıfırlatan parçalarının özetini kayıtlı haliyle karşılaştırır, bilinmeden yapılmış bir değişiklik yayını durdurur.</p>
+
+<h2>Yeni bir profil</h2>
+<p>Profiller programın <code>private/profiles/</code> klasöründeki TOML dosyalarıdır, dosyanın adı profilin kimliğidir. Bu klasör yoksa program <code>profiles/ornek.toml</code> örnek profiliyle açılır. Yeni bir profil için örnek dosya kopyalanıp düzenlenir ve program yeniden başlatılır. Dosyada ad, kısa ad, başlangıç bakiyesi, pariteler, dönem süresi, çağrı aralığı ve boş bırakılabilen bir tarz metni bulunur. Bütün profiller aynı araçları ve aynı eylemleri görür, profilleri yalnızca bu dosya ayırır.</p>
+<pre><code>name = "Swing Opus"
+short = "Swing"
+
+balance = 10.0
+symbols = ["BTCUSDT"]
+period_hours = 336
+min_wait = 15
+max_wait = 180
+
+style = """..."""</code></pre>
+<p>Her profilin verisi kendi klasöründe durur: bir SQLite veritabanı ve claude komutunun o profil için çalıştığı klasör. Bir profili sıfırdan başlatmak için program durdurulur ve yalnızca o profilin klasörü silinir.</p>

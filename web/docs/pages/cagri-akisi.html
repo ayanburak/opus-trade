@@ -1,0 +1,29 @@
+<p class="eyebrow">Opus</p>
+<h1>Bir çağrının akışı</h1>
+<p class="lead">Opus sürekli çalışmaz. Yalnızca çağrıldığında düşünür, karar verir ve bir sonraki çağrısının ne zaman olacağını kendisi seçer. Arada hesabı programın hesap motoru yürütür.</p>
+
+<h2>Adım adım</h2>
+<div class="flow">
+  <div class="flow-step"><div><h3>Bir tetikleyici gelir</h3>
+    <p>Opus'un istediği bekleme süresi dolar, ya da beklemeden çağrılmasını gerektiren bir olay olur: bir emir gerçekleşir, bir emrin süresi dolar, TP, SL ya da likidasyon olur, bir alarm çalar, yönetici onu çağırır. Opus düşünürken gelen olaylar kaybolmaz, sıraya alınır ve bir sonraki çağrıda birleştirilerek verilir.</p></div></div>
+  <div class="flow-step"><div><h3>İstem kurulur</h3>
+    <p>Program o anki piyasa verisini Binance'ten çeker, likidasyon kayıtlarını ve borsa seanslarını ekler, hesabın durumunu, son kararları, not defterini ve varsa yöneticinin müdahalelerini bir araya getirir. İstemin her parçası <a href="./gordukleri">Opus'un gördükleri</a> bölümünde.</p></div></div>
+  <div class="flow-step"><div><h3>Opus çağrılır</h3>
+    <p>Program claude komutunu print modunda ayrı bir süreç olarak başlatır. Model <code data-bind="model">opus</code>, düşünme seviyesi <code data-bind="effort">high</code>. Talimat sistem metni olarak, istem standart girdiden verilir. Cevabın bir JSON şemasına uyması zorunludur.</p></div></div>
+  <div class="flow-step"><div><h3>Opus araştırır</h3>
+    <p>Karar vermeden önce istediği araçları kullanır: web araması, sayfa okuma, Haiku'ya araştırma devretme ve piyasa araçları. Bir çağrıda en fazla <span data-bind="tool_step_limit">25</span> adım bildirilir, sert sınır <span data-bind="hard_step_limit">30</span> adım ve <span data-bind="call_timeout_s">600</span> saniyedir.</p></div></div>
+  <div class="flow-step"><div><h3>Karar uygulanır</h3>
+    <p>Opus'un cevabı şemaya uyan bir karardır: analizi, her parite için değerlendirmesi, eylemleri, not defteri, bir sonraki çağrının kaç dakika sonra olacağı ve varsa yöneticiye cevabı. Program eylemleri sırayla, yöneticinin işlemleriyle aynı kapıdan geçirerek hesaba uygular. Kurala ya da yöneticinin kesin bir kısıtına aykırı bir eylem reddedilir, nedeni bir sonraki çağrıda Opus'a gösterilir.</p></div></div>
+  <div class="flow-step"><div><h3>Kaydedilir ve yayınlanır</h3>
+    <p>Çağrının istemi, cevabı, kullanılan araçlar, süresi ve API fiyatıyla maliyeti profilin veritabanına yazılır. Arayüz kartı canlı akıştan anında alır. Bir sonraki çağrı Opus'un seçtiği zamana kurulur.</p></div></div>
+</div>
+
+<h2>Çağrılar arasında</h2>
+<p>Hesap motoru her fiyat güncellemesinde, yani birkaç saniyede bir, bütün pozisyonları, emirleri ve alarmları kontrol eder. TP, SL, iz süren stop ve likidasyon fiyat oraya değdiği an uygulanır, Opus'un çağrılmasını beklemez. Fonlama Binance'in gerçek oranıyla, her paritenin kendi aralığında uygulanır.</p>
+<p>Fiyat akışı dakikalık mumların canlı güncellemesidir. İki güncelleme arasında fiyatın gittiği en uç noktalar mumun en yüksek ve en düşük değerindeki değişimden anlaşılır, böylece ani iğneler de yakalanır.</p>
+
+<h2>Hata olursa</h2>
+<p>Bir çağrı hata verirse, örneğin abonelik limiti dolduysa ya da zaman aşımı olduysa, program <span data-bind="error_retry_min">10</span> dakika sonra yeniden dener. Çağrıyı tetikleyen olayların mesajı kaybolmaz, bir sonraki başarılı çağrıda Opus'a verilir. Opus'a bu çağrının hatadan sonraki bir deneme olduğu da söylenir.</p>
+
+<h2>Program kapalıyken</h2>
+<p>Program planlı olarak kapatılırsa her profilin Opus'u son bir kez çağrılır ve kapanacağı söylenir, böylece emirlerini buna göre düzenleyebilir. Program açıldığında kapalı kalınan süredeki bütün dakikalık mumlar ve fonlamalar Binance'ten çekilir ve hesaptan zaman sırasıyla geçirilir. Kapalı süre hiç kapalı kalınmamış gibi işlenir ve Opus'a bir sonraki çağrısında bildirilir.</p>
