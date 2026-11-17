@@ -540,6 +540,12 @@ class Account:
         self._check_sl(side, trigger, sl)
         self._check_trail(trail_pct)
         levels = self._levels(side, trigger, tp, tp_levels)
+        # Kademelerin miktara bölünüp bölünemediği normalde pozisyon açılırken
+        # anlaşılır. Aynı hesap burada tetik fiyatındaki miktarla yapılır ki
+        # hiç açılamayacak bir emir tetik anında değil kurulurken reddedilsin.
+        # Tetik anında nakit azalmışsa miktar küçülüp yine takılabilir, o durum
+        # check_price'taki order_failed yolundan Opus'a döner.
+        self._levels_to_qty(symbol, levels, self._round_step(symbol, margin * leverage / trigger))
         if valid_min is not None and valid_min <= 0:
             raise AccountError("Geçerlilik süresi sıfırdan büyük olmalı.")
         condition = "below" if trigger < price else "above"

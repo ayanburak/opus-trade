@@ -256,6 +256,16 @@ def test_order_that_cannot_open_is_cancelled(account):
     assert status == "cancelled"
 
 
+# 49000'den on kat on beş dolar 0.00306 eder, adıma yuvarlanıp 0.003 olur.
+# Yüzde otuz üçlük kademe 0.00099 eder ve sıfıra düşer. Emir tetik anında
+# açılamayacağı için kurulurken reddedilir.
+def test_order_with_unsplittable_levels_is_rejected(account):
+    levels = [{"price": 50000 + 1000 * i, "pct": 33} for i in range(1, 4)]
+    with pytest.raises(AccountError, match="en küçük adımın"):
+        account.place_order(BTC, "long", 49000, 10, 15, 50000, NOW, tp_levels=levels)
+    assert account.pending_orders() == []
+
+
 def test_alert_triggers_once(account):
     account.set_alert(BTC, 51000, "direnç", 50000, NOW)
     assert account.check_price(BTC, 50500, 49900, NOW + 60) == []
