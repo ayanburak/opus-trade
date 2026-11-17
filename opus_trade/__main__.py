@@ -14,10 +14,15 @@ programı kapatır ama o zaman Opus'a önceden haber verilmez.
 TRADE_SOCKET ortam değişkeni verilirse program port yerine o Unix soket
 dosyasını dinler, shutdown komutu da isteğini o dosya üzerinden gönderir.
 
+TRADE_ADMIN_SOCKET verilirse ve proje klasöründe private/admin varsa aynı
+program ikinci bir Unix soketinde private.admin.server uygulamasını da açar.
+Public depoda bu klasör yoktur, değişken o zaman bir şey değiştirmez.
+
 description: Programı başlatan ve çalışan programı kapatan giriş noktası.
 """
 
 import argparse
+import asyncio
 import logging
 import os
 import socket
@@ -58,12 +63,39 @@ def _run() -> None:
     # Tarayıcıdaki canlı akış bağlantısı hiç kendiliğinden bitmez. Kapanışta
     # beklenecek süre sınırlanmazsa Ctrl+C programı hiç durduramaz.
     opts = {"log_level": "warning", "timeout_graceful_shutdown": 3}
-    if settings.WEB_SOCKET:
+    admin = os.environ.get("TRADE_ADMIN_SOCKET")
+    if settings.WEB_SOCKET and admin and (settings.ROOT / "private" / "admin").is_dir():
+        print(f"{names} · Soket: {settings.WEB_SOCKET} · Yönetim: {admin}")
+        # uvicorn.run de kapanıştaki kesmeyi böyle yutar. Yutulmazsa program
+        # sıfırdan farklı bir kodla çıkar ve servis planlı kapanıştan sonra
+        # hata sanılıp yeniden başlatılır.
+        try:
+            asyncio.run(_serve_with_admin(uvicorn, admin, opts))
+        except KeyboardInterrupt:
+            pass
+    elif settings.WEB_SOCKET:
         print(f"{names} · Soket: {settings.WEB_SOCKET}")
         uvicorn.run("opus_trade.web.server:app", fd=_bind_socket(settings.WEB_SOCKET), **opts)
     else:
         print(f"{names} · Arayüz: http://{settings.WEB_HOST}:{settings.WEB_PORT}")
         uvicorn.run("opus_trade.web.server:app", host=settings.WEB_HOST, port=settings.WEB_PORT, **opts)
+
+
+# Yönetim uygulaması asıl programla aynı süreçte çalışır, çünkü müdahale
+# çalışan Engine nesnesine gitmek zorunda. İki uvicorn sunucusu aynı olay
+# döngüsünde döner. Yönetim sunucusunun lifespan'i kapalıdır, motorları asıl
+# sunucu başlatır ve durdurur. Kesme sinyalini sonra başlayan yönetim sunucusu
+# yakalar. Kapanırken asıl sunucunun sinyal yakalayıcısını geri koyup sinyali
+# yeniden gönderir, böylece Ctrl+C ve planlı kapanış ikisini de sırayla
+# kapatır. Asıl sunucu kendiliğinden biterse yönetim sunucusu da durdurulur.
+async def _serve_with_admin(uvicorn, admin_socket: str, opts: dict) -> None:
+    main = uvicorn.Server(uvicorn.Config("opus_trade.web.server:app", fd=_bind_socket(settings.WEB_SOCKET), **opts))
+    side = uvicorn.Server(uvicorn.Config("private.admin.server:app", fd=_bind_socket(admin_socket),
+                                         lifespan="off", **opts))
+    task = asyncio.create_task(side.serve())
+    await main.serve()
+    side.should_exit = True
+    await task
 
 
 # Soket dosyası herkese yazılabilir açılır, çünkü nginx başka bir kullanıcıyla
