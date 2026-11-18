@@ -156,14 +156,24 @@ function levelQtys(s, levels, total) {
   });
 }
 
-function tpCell(s, side, entry, qty, levels, openFee, funding) {
+// Kademeler pozisyonun tamamını kapatmıyorsa kalan kısım ayrı satırda
+// yazılır, yoksa yarım pozisyonun kazancı tamamının zararıyla yan yana
+// durur ve R:R olduğundan küçük görünür. Kalanın sabit hedefi yoktur,
+// iz süren stop varsa onun yüzdesi yazılır.
+function tpCell(s, side, entry, qty, levels, openFee, funding, trail) {
   if (!levels?.length) return `<td class="positive">—</td>`;
-  const lines = levelQtys(s, levels, qty).map((k) => {
+  const parts = levelQtys(s, levels, qty);
+  const left = qty - parts.reduce((t, k) => t + k.closes, 0);
+  const lines = parts.map((k) => {
     const share = qty ? k.closes / qty : 0;
     const net = exitResult(s, side, entry, k.closes, k.price, true, openFee * share, funding * share);
     const pct = levels.length > 1 || k.pct < 100 ? ` <span class="level-pnl">%${fmtNum(k.pct, 0)}</span>` : "";
     return `<span class="level">${fmtPrice(k.price)}${pct} <span class="level-pnl">/ ${fmtSigned(net)}</span></span>`;
   });
+  if (qty && left / qty > 1e-6) {
+    const rest = trail ? `iz %${fmtNum(trail, 2)}` : "hedefsiz";
+    lines.push(`<span class="level level-pnl">kalan %${fmtNum((left / qty) * 100, 0)} · ${rest}</span>`);
+  }
   return `<td class="positive">${lines.join("")}</td>`;
 }
 
@@ -606,7 +616,7 @@ function drawBottom() {
         <td>${p.id}</td><td>${pairLabel(p.symbol)}</td><td>${sideBadge(p.side, p.leverage)}</td>
         <td>${fmtUsd(p.margin)}</td><td>${fmtUsd(p.qty * p.entry_price)}</td>
         <td>${fmtPrice(p.entry_price)}</td><td>${fmtPrice(f)}</td>
-        ${tpCell(p.symbol, p.side, p.entry_price, p.qty, p.tp_levels, p.fee, p.funding)}
+        ${tpCell(p.symbol, p.side, p.entry_price, p.qty, p.tp_levels, p.fee, p.funding, p.trail_pct)}
         ${slCell(p.symbol, p.side, p.entry_price, p.qty, p.sl, p.trail_pct, p.fee, p.funding)}
         <td style="color:var(--orange)">${fmtPrice(p.liq_price)}</td>
         <td class="${signClass(-p.funding)}">${p.funding ? fmtSigned(-p.funding) : "—"}</td>
@@ -628,7 +638,7 @@ function drawBottom() {
         <td style="color:var(--blue)">${fmtPrice(o.trigger_price)}</td>
         <td>${condText(o.condition)} <span class="badge b-gray">${o.maker ? "maker" : "taker"}</span></td>
         <td>${fmtPct(((o.trigger_price - f) / f) * 100)}</td><td>${fmtUsd(o.margin)}</td>
-        ${tpCell(o.symbol, o.side, entry, qty, o.tp_levels, openFee, 0)}
+        ${tpCell(o.symbol, o.side, entry, qty, o.tp_levels, openFee, 0, o.trail_pct)}
         ${slCell(o.symbol, o.side, entry, qty, o.sl, o.trail_pct, openFee, 0)}
         <td>${o.expires_at ? fmtDate(o.expires_at) : "—"}</td>
         <td>${fmtDate(o.created_at)}</td></tr>`;
