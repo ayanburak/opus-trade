@@ -82,16 +82,23 @@ def test_other_symbols_are_ignored():
     assert w.tick(T0 + 100) is None
 
 
-# Her paritenin kendi eşiği vardır. Aynı saniyede biten dalgalardan eşiğine
-# göre en güçlüsü bildirilir, tutarı en büyük olan değil.
-def test_per_symbol_threshold_and_strongest_wave():
-    w = watchers.LiquidationWave(["BTCUSDT", "SOLUSDT"], min_usd={"BTCUSDT": 600_000, "SOLUSDT": 80_000}, quiet_s=60)
+# Her paritenin kendi eşiği ve kendi bekleme süresi vardır. Aynı saniyede
+# biten dalgaların hepsi tek mesajda bildirilir.
+def test_per_symbol_threshold_and_cooldown():
+    w = watchers.LiquidationWave(["BTCUSDT", "SOLUSDT"], min_usd={"BTCUSDT": 600_000, "SOLUSDT": 80_000},
+                                 quiet_s=60, cooldown_s=600)
     w.on_liquidation(liq(T0, "long", 500_000))
     assert w.tick(T0 + 61) is None
     w.on_liquidation(liq(T0 + 100, "long", 900_000))
     w.on_liquidation(liq(T0 + 100, "short", 200_000, price=73.0, symbol="SOLUSDT"))
     msg = w.tick(T0 + 161)
-    assert msg.startswith("SOL/USDT") and "200 bin dolarlık short" in msg
+    assert msg.startswith("BTC/USDT") and "SOL/USDT" in msg
+    w.on_liquidation(liq(T0 + 200, "long", 900_000))
+    assert w.tick(T0 + 261) is None
+    w.on_liquidation(liq(T0 + 300, "long", 100_000, price=73.0, symbol="SOLUSDT"))
+    assert w.tick(T0 + 361) is None
+    w.on_liquidation(liq(T0 + 800, "long", 100_000, price=73.0, symbol="SOLUSDT"))
+    assert w.tick(T0 + 861).startswith("SOL/USDT")
 
 
 # --- Katalog ---

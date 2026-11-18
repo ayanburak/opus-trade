@@ -120,7 +120,7 @@ class LiquidationWave(Watcher):
         min_usd: Baskın tarafın, yani long ya da short likidasyonlarından büyük olanının en az tutarı, dolar.
             Tek bir sayı bütün paritelerde geçerlidir. Parite adından tutara bir sözlük her paritenin eşiğini ayrı verir.
         quiet_s: Dalganın bittiği sayılması için son likidasyondan sonra geçmesi gereken süre, saniye.
-        cooldown_s: Bu gözcünün iki çağrısı arasındaki en kısa süre, saniye.
+        cooldown_s: Aynı paritenin iki bildirimi arasındaki en kısa süre, saniye. Her paritenin süresi ayrıdır.
     """
 
     kind = "liquidation_wave"
@@ -128,6 +128,7 @@ class LiquidationWave(Watcher):
     def __init__(self, symbols: list[str], min_usd: float | dict[str, float] = 300_000, quiet_s: int = 120,
                  cooldown_s: int = 300) -> None:
         super().__init__(symbols, cooldown_s)
+        self._last: dict[str, float] = {}
         if isinstance(min_usd, dict):
             missing = self.symbols - set(min_usd)
             if missing:
@@ -164,24 +165,27 @@ class LiquidationWave(Watcher):
         w["low"], w["high"] = min(w["low"], event["price"]), max(w["high"], event["price"])
         return msg
 
-    # Aynı saniyede birden fazla parite biterse eşiğine göre en güçlü dalga
-    # bildirilir. Bekleme süresi bütün paritelerde ortaktır, diğerleri atılır.
+    # Aynı saniyede birden fazla parite biterse hepsi tek bir mesajda, alt
+    # alta bildirilir. Opus her dalgaya ayrı karar verir.
     def tick(self, now: float) -> str | None:
-        done = [d for s in list(self._waves) if (d := self._finish(s, now))]
-        if not done:
-            return None
-        return self._emit(now, max(done)[1])
+        out = [m for s in list(self._waves) if (m := self._close_if_quiet(s, now))]
+        return "\n\n".join(out) if out else None
 
+    # Bekleme süresi her paritede ayrıdır. Ortak bir bekleme, bir paritenin
+    # bildiriminden hemen sonra biten başka paritelerin dalgalarını atardı.
     def _close_if_quiet(self, s: str, now: float) -> str | None:
         d = self._finish(s, now)
-        return self._emit(now, d[1]) if d else None
+        if d is None or now - self._last.get(s, -1e18) < self.cooldown_s:
+            return None
+        self._last[s] = now
+        return d
 
     def _threshold(self, s: str) -> float:
         return self.min_usd[s] if isinstance(self.min_usd, dict) else self.min_usd
 
-    # Biten ve eşiği geçen dalganın gücünü, yani baskın tutarın eşiğe oranını,
-    # ve mesajını döndürür. Dalga bitmediyse ya da eşiğin altındaysa None.
-    def _finish(self, s: str, now: float) -> tuple[float, str] | None:
+    # Biten ve eşiği geçen dalganın mesajını döndürür. Dalga bitmediyse ya da
+    # eşiğin altındaysa None.
+    def _finish(self, s: str, now: float) -> str | None:
         w = self._waves.get(s)
         if w is None or now - w["end"] <= self.quiet_s:
             return None
@@ -190,7 +194,7 @@ class LiquidationWave(Watcher):
         if w[side] < self._threshold(s):
             return None
         other = "short" if side == "long" else "long"
-        return w[side] / self._threshold(s), (
+        return (
             f"{s[:-4]}/USDT'de bir likidasyon dalgası bitti. {_clock(w['start'])}-{_clock(w['end'])} arasında "
             f"{_usd(w[side])} {side} ve {_usd(w[other])} {other} "
             f"likidasyonu oldu. Dalganın başladığı dakikadan bu yana fiyat en düşük {_price(w['low'])}, "
