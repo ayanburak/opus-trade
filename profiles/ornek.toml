@@ -34,6 +34,8 @@ style = ""
 # süresi dolunca çağrılır. Türler opus_trade/engine/watchers.py CATALOG'da.
 # Örnek, likidasyon dalgası: baskın taraf en az min_usd dolar olan bir dalga
 # quiet_s saniye durulunca çağırır, aynı gözcü cooldown_s saniyeden sık çağıramaz.
+# min_usd her parite için ayrı da verilebilir:
+# min_usd = { BTCUSDT = 600000, ETHUSDT = 500000 }
 #
 # [[watchers]]
 # type = "liquidation_wave"

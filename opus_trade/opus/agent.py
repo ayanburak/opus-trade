@@ -86,7 +86,7 @@ def system_prompt(p: settings.Profile, start: int, end: int) -> str:
         end: Dönemin biteceği an, unix saniye.
     """
     s = settings
-    # Otonom profilde tarz boştur, talimata çalışma tarzı bölümü eklenmez.
+    # Tarzı boş bir profilin talimatına çalışma tarzı bölümü eklenmez.
     style = f"## Çalışma tarzın\n\n{p.style}\n\n" if p.style else ""
     return f"""Bir Binance USDT sürekli vadeli hesabını yönetiyorsun. Hesabın başlangıç bakiyesi \
 {p.balance:.0f} dolar. Fiyatlar, fonlama oranları ve piyasa verileri Binance'in gerçek ve canlı verileridir.

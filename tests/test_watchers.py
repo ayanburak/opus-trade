@@ -82,6 +82,18 @@ def test_other_symbols_are_ignored():
     assert w.tick(T0 + 100) is None
 
 
+# Her paritenin kendi eşiği vardır. Aynı saniyede biten dalgalardan eşiğine
+# göre en güçlüsü bildirilir, tutarı en büyük olan değil.
+def test_per_symbol_threshold_and_strongest_wave():
+    w = watchers.LiquidationWave(["BTCUSDT", "SOLUSDT"], min_usd={"BTCUSDT": 600_000, "SOLUSDT": 80_000}, quiet_s=60)
+    w.on_liquidation(liq(T0, "long", 500_000))
+    assert w.tick(T0 + 61) is None
+    w.on_liquidation(liq(T0 + 100, "long", 900_000))
+    w.on_liquidation(liq(T0 + 100, "short", 200_000, price=73.0, symbol="SOLUSDT"))
+    msg = w.tick(T0 + 161)
+    assert msg.startswith("SOL/USDT") and "200 bin dolarlık short" in msg
+
+
 # --- Katalog ---
 
 def test_large_amounts_are_written_in_millions():
@@ -95,7 +107,8 @@ def test_build_from_spec():
     assert isinstance(w, watchers.LiquidationWave) and w.min_usd == 1e6
 
 
-@pytest.mark.parametrize("spec", [{"type": "yok"}, {"min_usd": 1}, {"type": "liquidation_wave", "esik": 1}])
+@pytest.mark.parametrize("spec", [{"type": "yok"}, {"min_usd": 1}, {"type": "liquidation_wave", "esik": 1},
+                                  {"type": "liquidation_wave", "min_usd": {"ETHUSDT": 1}}])
 def test_build_rejects_bad_spec(spec):
     with pytest.raises(ValueError):
         watchers.build(spec, ["BTCUSDT"])

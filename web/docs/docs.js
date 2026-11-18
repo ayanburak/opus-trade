@@ -204,7 +204,7 @@ function toolCard(t) {
     ${params ? `<div class="params">${params}</div>` : ""}</div>`;
 }
 
-// Asıl profilin en son başarılı çağrısının istemi olduğu gibi gösterilir.
+// Listedeki ilk profilin en son başarılı çağrısının istemi olduğu gibi gösterilir.
 async function renderLastPrompt(data) {
   const pid = data.profiles[0].id;
   const list = await (await fetch(`../api/${pid}/journal`)).json();
