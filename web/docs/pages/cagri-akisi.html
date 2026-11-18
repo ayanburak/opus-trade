@@ -5,7 +5,7 @@
 <h2>Adım adım</h2>
 <div class="flow">
   <div class="flow-step"><div><h3>Bir tetikleyici gelir</h3>
-    <p>Opus'un istediği bekleme süresi dolar, ya da beklemeden çağrılmasını gerektiren bir olay olur: bir emir gerçekleşir, bir emrin süresi dolar, TP, SL ya da likidasyon olur, bir alarm çalar, yönetici onu çağırır. Opus düşünürken gelen olaylar kaybolmaz, sıraya alınır ve bir sonraki çağrıda birleştirilerek verilir.</p></div></div>
+    <p>Opus'un istediği bekleme süresi dolar, ya da beklemeden çağrılmasını gerektiren bir olay olur: bir emir gerçekleşir, bir emrin süresi dolar, TP, SL ya da likidasyon olur, bir alarm çalar, yönetici onu çağırır ya da profilin bir gözcüsü piyasada izlediği olayı görür. Gözcüler profil dosyasında açılır, ilki likidasyon dalgası gözcüsüdür: bir paritedeki likidasyon dalgası durulunca, baskın taraf belirlenen tutarı geçtiyse Opus'u çağırır. Opus düşünürken gelen olaylar kaybolmaz, sıraya alınır ve bir sonraki çağrıda birleştirilerek verilir.</p></div></div>
   <div class="flow-step"><div><h3>İstem kurulur</h3>
     <p>Program o anki piyasa verisini Binance'ten çeker, likidasyon kayıtlarını ve borsa seanslarını ekler, hesabın durumunu, son kararları, not defterini ve varsa yöneticinin müdahalelerini bir araya getirir. İstemin her parçası <a href="./gordukleri">Opus'un gördükleri</a> bölümünde.</p></div></div>
   <div class="flow-step"><div><h3>Opus çağrılır</h3>

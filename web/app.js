@@ -697,6 +697,7 @@ const TRIGGER = {
   tp: ["TP", "b-long", "target"],
   sl: ["SL", "b-short", "shield"],
   liquidation: ["Likidasyon", "b-orange", "warning"],
+  liquidation_wave: ["Likidasyon dalgası", "b-orange", "warning"],
 };
 const VIEW = {
   yukselis: ["▲ Yükseliş", "b-long"],

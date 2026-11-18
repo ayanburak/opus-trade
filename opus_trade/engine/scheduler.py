@@ -14,6 +14,7 @@ uygulanınca kurulurken verilen on_closed fonksiyonunu çağırır. Programı
 kapatmak web katmanının işidir. Olan her şeyi listen() ile
 alınan kuyruklara yayınlar, web arayüzü bunları dinler. intervene()
 yöneticinin bir müdahalesini kaydeder ve istenirse Opus'u hemen çağırır.
+on_liquidation() akıştan gelen likidasyonları profilin gözcülerine verir.
 
 description: Fiyat akışını, hesabı, fonlamayı, kapanışları ve Opus çağrılarını yöneten ana döngü.
 """
@@ -42,6 +43,11 @@ description: Fiyat akışını, hesabı, fonlamayı, kapanışları ve Opus ça�
 # kaynağıyla, yöneticinin kesin işlemleri admin kaynağıyla. Opus'un Türkçe
 # eylemleri kapıya girmeden önce actions.py'de komuta çevrilir. Eksik bir
 # alanın KeyError mesajı Türkçe adı taşır ve Opus'a aynen gösterilir.
+#
+# NOTE: Gözcüler watchers.py'dedir ve profil dosyasındaki watchers listesinden
+# açılışta kurulur. Engine onlara likidasyonları, canlı mumları ve saniyede
+# bir zamanı verir, bir gözcü mesaj döndürürse Opus'u gözcünün kind'ıyla
+# çağırır. Gözcüsü olmayan bir profilde bu yolların hiçbiri bir şey yapmaz.
 
 import asyncio
 import json
@@ -55,7 +61,7 @@ from ..db import connect, get_state, rows, set_state
 from ..market import analysis, indicators, liquidations
 from ..market import data as market_data
 from ..opus import actions, agent
-from . import interventions
+from . import interventions, watchers
 from .account import Account, AccountError
 from .commands import Command, execute
 
@@ -113,6 +119,10 @@ class Engine:
         self._queue: list[tuple[str, str]] = []
         self._listeners: set[asyncio.Queue] = set()
         self._tasks: list[asyncio.Task] = []
+        try:
+            self._watchers = [watchers.build(w, list(profile.symbols)) for w in profile.watchers]
+        except ValueError as e:
+            raise SystemExit(f"{profile.id}: {e}")
 
     # --- Yayın ---
 
@@ -241,6 +251,8 @@ class Engine:
             asyncio.create_task(self._timer()),
             asyncio.create_task(self._watch_funding()),
         ]
+        if self._watchers:
+            self._tasks.append(asyncio.create_task(self._tick_watchers()))
         if self._queue:
             self._start_call()
 
@@ -373,6 +385,38 @@ class Engine:
             for e in events:
                 e["message"] = f"{_clock(at)} civarında: {e['message']}"
         self._handle_events(events)
+        # Sonradan işlenen mumlar gözcülere verilmez, geç gelen bir bildirim
+        # karar için işe yaramaz.
+        if not at:
+            for w in self._watchers:
+                self._watched(w, w.on_candle(candle))
+
+    # --- Gözcüler ---
+
+    def on_liquidation(self, event: dict) -> None:
+        """Akıştan gelen bir likidasyonu profilin gözcülerine verir.
+
+        Args:
+            event: time, symbol, side, price, qty ve usd anahtarlı kayıt.
+        """
+        for w in self._watchers:
+            self._watched(w, w.on_liquidation(event))
+
+    async def _tick_watchers(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            now = time.time()
+            for w in self._watchers:
+                self._watched(w, w.tick(now))
+
+    # Dönem bittiyse ya da planlı kapanış başladıysa gözcü Opus'u çağırmaz.
+    # Kapanış çağrısı son karar içindir, araya yeni bir olay girmemeli.
+    def _watched(self, w: watchers.Watcher, message: str | None) -> None:
+        if message is None or self.ended or self.shutting_down:
+            return
+        self.log.info(message)
+        self._broadcast("event", {"kind": w.kind, "message": message, "time": int(time.time())})
+        self.trigger(w.kind, message)
 
     # Canlı akış koptuğunda yeniden bağlanana kadar geçen mumlar akıştan
     # gelmez. Akış her bağlandığında web katmanı bunu çağırır. Her paritenin

@@ -63,8 +63,10 @@ START, END = 1794711823, 1795921423
 NOW = 1794839400 - 3600
 
 # Hesabı yürüten kurallar bu dosyalardadır: hesap, zamanlayıcı, kapı,
-# müdahaleler ve tablolar.
-_SOURCES = ("engine/account.py", "engine/scheduler.py", "engine/commands.py", "engine/interventions.py", "db.py")
+# müdahaleler, gözcüler ve tablolar. Gözcüler Opus'un ne zaman çağrılacağını
+# belirlediği için motorun parçası sayılır.
+_SOURCES = ("engine/account.py", "engine/scheduler.py", "engine/commands.py", "engine/interventions.py",
+            "engine/watchers.py", "db.py")
 
 # Hesap kurallarının ve modelin ayarları. Katalog satırları profil parçasına
 # girer, Türkçe ay ve gün adları da talimat ve istem çıktısına.

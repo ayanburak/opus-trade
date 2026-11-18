@@ -158,7 +158,9 @@ class Profile:
     id dosyanın adıdır ve verinin klasör adı olarak da kullanılır. symbols,
     katalogdan yalnızca bu profilin işlem yapabildiği paritelerdir. style boşsa
     talimata tarz bölümü eklenmez. effort profil dosyasında yazmıyorsa
-    bütün profillerin ortak EFFORT değeridir.
+    bütün profillerin ortak EFFORT değeridir. watchers profilin gözcü
+    tanımlarıdır, her biri type anahtarlı bir sözlük. Boşsa profil yalnızca
+    hesap olaylarında ve zamanlayıcıyla çağrılır.
     """
 
     id: str
@@ -171,6 +173,7 @@ class Profile:
     max_wait: int
     style: str
     effort: str = EFFORT
+    watchers: tuple = ()
 
     # claude komutu da bu klasörde çalışır. Haiku araştırmacısının bıraktığı
     # iz klasörü bu yolun adını taşır, profiller ayrı klasörde çalıştığı için
@@ -196,7 +199,7 @@ def _load(path: Path) -> Profile:
             id=path.stem, name=d["name"], short=d["short"], balance=float(d["balance"]),
             symbols={s: SYMBOLS[s] for s in d["symbols"]} if d["symbols"] else dict(SYMBOLS),
             period_s=int(d["period_hours"] * 3600), min_wait=d["min_wait"], max_wait=d["max_wait"], style=d["style"],
-            effort=d.get("effort", EFFORT),
+            effort=d.get("effort", EFFORT), watchers=tuple(d.get("watchers", ())),
         )
     except KeyError as e:
         raise SystemExit(f"{path.name}: {e} alanı eksik.")

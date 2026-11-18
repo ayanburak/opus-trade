@@ -113,8 +113,15 @@ async def _catch_up() -> None:
             log.exception("[%s] Akış kopukken geçen mumlar işlenemedi.", e.p.short)
 
 
+# Likidasyon önce kaydedilir, sonra gözcüsü olan profillere verilir. Bir
+# profilin gözcüsündeki hata kaydı ve diğer profilleri durdurmaz.
 def _record_liquidation(event: dict) -> None:
     liquidations.record(market_con, event)
+    for e in engines.values():
+        try:
+            e.on_liquidation(event)
+        except Exception:
+            log.exception("[%s] Likidasyon gözcülere verilirken hata oluştu.", e.p.short)
 
 
 # Likidasyonlar en az bir dönem boyu saklanır, dönem bitince arşive

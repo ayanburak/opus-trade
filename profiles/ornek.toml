@@ -28,3 +28,15 @@ max_wait = 720
 # bölüm eklenmez ve Opus kararlarını kendisi verir. Satır sonundaki ters bölü
 # satırları birleştirir, metin Opus'a tek paragraf olarak gider.
 style = ""
+
+# Gözcüler hesapta olmayan bir piyasa olayında Opus'u beklemeden çağırır.
+# Yazılmazsa profil yalnızca hesap olaylarında ve kendi seçtiği bekleme
+# süresi dolunca çağrılır. Türler opus_trade/engine/watchers.py CATALOG'da.
+# Örnek, likidasyon dalgası: baskın taraf en az min_usd dolar olan bir dalga
+# quiet_s saniye durulunca çağırır, aynı gözcü cooldown_s saniyeden sık çağıramaz.
+#
+# [[watchers]]
+# type = "liquidation_wave"
+# min_usd = 300000
+# quiet_s = 120
+# cooldown_s = 300
