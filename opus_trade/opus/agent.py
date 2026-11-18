@@ -466,7 +466,7 @@ def _command(p: settings.Profile, system: str) -> list[str]:
     return [
         "claude", "-p",
         "--model", settings.MODEL,
-        "--effort", settings.EFFORT,
+        "--effort", p.effort,
         "--no-session-persistence",
         "--setting-sources", "",
         "--strict-mcp-config",
