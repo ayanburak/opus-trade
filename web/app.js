@@ -111,6 +111,8 @@ const ui = {
   source: null,
   layers: {},
   fullscreen: false,
+  watchSkew: 0,
+  flash: new Set(),
 };
 
 const pair = (s) => ui.acct?.symbols?.[s] || { name: s, icon: "btc", slippage: 0.0005, qty_step: 0.001 };
@@ -601,6 +603,15 @@ function drawBottom() {
   $("orderCount").textContent = a.orders.length;
   $("alertCount").textContent = a.alerts.length;
   $("historyCount").textContent = closed.length;
+  const meter = a.watch?.liquidation_wave;
+  $("meterTab").hidden = !meter;
+  if (meter) {
+    const live = Object.values(meter.symbols).filter((x) => x.wave).length;
+    $("meterCount").textContent = live;
+    $("meterCount").classList.toggle("live", live > 0);
+  } else if (ui.tab === "meter") {
+    selectTab("positions");
+  }
   const box = $("tabContent");
   const empty = (text) => (box.innerHTML = `<div class="empty">${text}</div>`);
 
@@ -683,12 +694,79 @@ function drawBottom() {
         <td style="color:var(--muted)">${fmtUsd(t.fee)}</td>
         <td>${duration(t.exit_time - t.entry_time)}</td><td>${fmtDate(t.exit_time)}</td></tr>`;
       }).join("")}</tbody></table>`;
+  } else if (ui.tab === "meter") {
+    box.innerHTML = meterHtml(meter);
   } else {
     const n = a.notebook;
     box.innerHTML = n
       ? `<pre class="notebook">${esc(n)}</pre>`
       : `<div class="empty">Not defteri boş.<br>Opus her çağrıda kendine buraya not bırakır.</div>`;
   }
+}
+
+// --- Likit sayacı ---
+
+// Sayaç likidasyon gözcüsünün durumunu gösterir, kendisi hesap yapmaz. Bar
+// baskın tarafın paritenin eşiğine oranıyla dolar. Dalga son likidasyonundan
+// quiet_s sonra kapanır, kalan süre sunucu saatiyle aradaki fark düzeltilerek
+// sayılır. Biten dalga bir sonraki dalga başlayana kadar soluk görünür.
+const fmtCompact = (x) => (x >= 1e6 ? "$" + fmtNum(x / 1e6, 2) + " mn" : "$" + fmtNum(Math.round(x / 1e3), 0) + " bin");
+const fmtLeft = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const OUTCOME = {
+  fired: ["Opus çağrıldı", "b-purple"],
+  below: ["eşik altında kaldı", "b-gray"],
+  cooldown: ["bekleme süresindeydi", "b-gray"],
+};
+
+function meterRow(s, x, quiet) {
+  const w = x.wave || x.last;
+  const label = `<span class="meter-pair">${pairLabel(s)}</span>`;
+  if (!w) {
+    return `<div class="meter-row idle">${label}<div class="meter-bar"></div>
+      <span class="meter-amount">$0 <span class="of">/ ${fmtCompact(x.min_usd)}</span></span><span class="meter-other">—</span>
+      <span><span class="badge b-gray">Sakin</span></span></div>`;
+  }
+  const side = w.long >= w.short ? "long" : "short";
+  const other = side === "long" ? "short" : "long";
+  const ratio = w[side] / x.min_usd;
+  const over = ratio >= 1;
+  let status;
+  if (x.wave) {
+    const left = Math.max(0, quiet - (Date.now() / 1000 - ui.watchSkew - w.end));
+    status = over
+      ? `<span class="badge b-orange"><span class="meter-dot"></span>Opus'u çağıracak · ${fmtLeft(left)}</span>`
+      : `<span class="badge b-gray meter-wait"><span class="meter-dot"></span>${fmtLeft(left)} sonra kapanır</span>`;
+  } else {
+    const [text, cls] = OUTCOME[w.outcome];
+    status = `<span class="badge ${cls}">${fmtClock(w.end)} · ${text}</span>`;
+  }
+  const fill = `meter-fill ${side}${over ? " over" : ""}${ui.flash.has(s) ? " flash" : ""}`;
+  return `<div class="meter-row${x.wave ? "" : " done"}" data-symbol="${s}" title="${side === "long" ? "Long" : "Short"} likidasyonları baskın">${label}
+    <div class="meter-bar"><div class="${fill}" style="width:${Math.min(ratio, 1) * 100}%"></div></div>
+    <span class="meter-amount"><b>${fmtCompact(w[side])}</b> <span class="of">/ ${fmtCompact(x.min_usd)}</span><span class="pct">%${Math.round(ratio * 100)}</span></span>
+    <span class="meter-other ${other}">${other === "long" ? "Long" : "Short"} ${fmtCompact(w[other])}</span>
+    <span>${status}</span></div>`;
+}
+
+function meterHtml(m) {
+  const rows = Object.entries(m.symbols).map(([s, x]) => meterRow(s, x, m.quiet_s)).join("");
+  ui.flash.clear();
+  return `<div class="meter">
+    <div class="meter-row meter-head"><span>Parite</span><span>Baskın taraf / eşik</span><span>Biriken</span><span>Diğer taraf</span>
+      <span class="meter-info" title="Binance her parite için saniyede yalnızca en büyük likidasyonu bildirir. Tutarlar gerçek toplamın altındadır, Opus da aynı rakamı görür.">Tutarlar alt sınırdır${icon("info")}</span></div>
+    ${rows}</div>`;
+}
+
+// Yeni bir likidasyonla tutarı artan paritenin barı bir an parlar.
+function applyWatch(data) {
+  const prev = ui.acct.watch?.liquidation_wave?.symbols || {};
+  const next = data.watch.liquidation_wave?.symbols || {};
+  for (const [s, x] of Object.entries(next)) {
+    const before = prev[s]?.wave;
+    if (x.wave && (!before || x.wave.long + x.wave.short > before.long + before.short)) ui.flash.add(s);
+  }
+  ui.acct.watch = data.watch;
+  ui.watchSkew = Date.now() / 1000 - data.time;
 }
 
 // --- Günlük ---
@@ -1016,11 +1094,15 @@ $("profileList").addEventListener("click", (e) => {
   selectProfile(b.dataset.profile);
 });
 
+function selectTab(tab) {
+  document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("selected", x.dataset.tab === tab));
+  ui.tab = tab;
+}
+
 $("tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
-  document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("selected", x === b));
-  ui.tab = b.dataset.tab;
+  selectTab(b.dataset.tab);
   drawBottom();
 });
 
@@ -1056,6 +1138,11 @@ function connectStream() {
   source.addEventListener("trades", (e) => {
     ui.trades = JSON.parse(e.data);
     drawMarkers(); drawBottom(); drawJournal();
+  });
+  source.addEventListener("watch", (e) => {
+    if (!ui.acct) return;
+    applyWatch(JSON.parse(e.data));
+    drawBottom();
   });
   source.addEventListener("tool", (e) => {
     ui.liveTools.push(JSON.parse(e.data));
@@ -1121,6 +1208,8 @@ async function boot() {
   // Veri akış bağlantısını beklemeden hemen yüklenir. Akış açılınca bir kez
   // daha yüklenir ki iki istek arasında kaçan bir şey kalmasın.
   setInterval(drawProfiles, 1000);
+  // Sayaçtaki geri sayım akıştan olay gelmese de saniyede bir ilerler.
+  setInterval(() => { if (ui.tab === "meter") drawBottom(); }, 1000);
   setInterval(pollOthers, 5000);
   pollOthers();
   ui.connected = true;

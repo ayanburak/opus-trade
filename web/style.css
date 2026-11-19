@@ -333,6 +333,47 @@ tr:last-child td { border-bottom: 0; }
   font-size: 13px; color: var(--text);
 }
 
+/* --- Likit sayacı --- */
+
+.tabs b.live { background: var(--orange-bg); color: var(--orange); }
+
+.meter { min-width: 720px; font-variant-numeric: tabular-nums; }
+.meter-row {
+  display: grid; grid-template-columns: 112px minmax(160px, 1fr) 150px 120px 196px;
+  align-items: center; gap: 16px; padding: 0 14px; height: 32px; border-bottom: 1px solid var(--line);
+}
+.meter-row:last-child { border-bottom: 0; }
+.meter-head {
+  height: 26px; position: sticky; top: 0; z-index: 1; background: var(--panel);
+  color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; font-weight: 500;
+}
+.meter-info { justify-self: end; display: inline-flex; align-items: center; gap: 5px; color: var(--faint); cursor: help; text-transform: none; letter-spacing: 0; }
+.meter-info .ic { width: 12px; height: 12px; }
+.meter-pair { font-weight: 550; }
+
+.meter-bar { position: relative; height: 8px; border-radius: 999px; background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+.meter-fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; transition: width .5s ease, background-color .3s; }
+.meter-fill.long { background: var(--green); color: var(--green); }
+.meter-fill.short { background: var(--red); color: var(--red); }
+.meter-fill.over { box-shadow: 0 0 10px currentColor; }
+/* Yeni bir likidasyon gelince bar kısa bir an parlar. */
+.meter-fill.flash { animation: meter-flash .6s ease-out; }
+@keyframes meter-flash { from { filter: brightness(1.8); } to { filter: none; } }
+
+.meter-amount b { font-weight: 600; }
+.meter-amount .of { color: var(--faint); }
+.meter-amount .pct { margin-left: 6px; color: var(--muted); font-size: 11.5px; }
+.meter-other { color: var(--faint); font-size: 12px; }
+.meter-other.long { color: rgba(34, 197, 94, .6); }
+.meter-other.short { color: rgba(240, 82, 82, .6); }
+.meter-wait { color: var(--text); }
+.meter-wait .meter-dot { color: var(--orange); }
+.meter-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* Biten dalga bir sonraki dalga başlayana kadar soluk kalır. */
+.meter-row.done .meter-bar, .meter-row.done .meter-amount, .meter-row.done .meter-other { opacity: .42; }
+.meter-row.idle .meter-amount, .meter-row.idle .meter-other { color: var(--faint); }
+
 /* --- Rozetler --- */
 
 .badge {

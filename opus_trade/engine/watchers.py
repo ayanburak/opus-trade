@@ -7,6 +7,7 @@ Gözcüler piyasayı izleyip hesapta olmayan bir olay gördüklerinde Opus'u
 girişi vardır: on_liquidation() akıştan gelen her likidasyonu, on_candle()
 her canlı mumu, tick() saniyede bir geçen zamanı alır. Bir giriş olay
 bulursa Opus'a gidecek Türkçe mesajı döndürür, bulmazsa None döndürür.
+snapshot() gözcünün o anki durumunu arayüz için verir.
 build() bir gözcü tanımından, yani type anahtarı ve ayarlarını taşıyan bir
 sözlükten, CATALOG'daki sınıfı kurar. Engine her profilin gözcülerini
 açılışta build() ile kurar ve döndürdükleri mesajla Opus'u çağırır.
@@ -90,6 +91,10 @@ class Watcher(ABC):
         """Geçen zamanı alır. Engine saniyede bir çağırır."""
         return None
 
+    def snapshot(self) -> dict | None:
+        """Arayüzde gösterilecek o anki durumu döndürür. Gösterecek bir şeyi olmayan gözcü None döndürür."""
+        return None
+
     # Bekleme süresi dolmadan gelen olay atılır, sıraya alınmaz. Eski bir
     # olay sonradan bildirilirse Opus artık geçerli olmayan bir duruma göre
     # karar verebilirdi.
@@ -139,6 +144,7 @@ class LiquidationWave(Watcher):
         self.quiet_s = int(quiet_s)
         self._waves: dict[str, dict] = {}
         self._candles: dict[str, dict] = {}
+        self._results: dict[str, dict] = {}
 
     def on_candle(self, candle: dict) -> str | None:
         s = candle["s"]
@@ -175,9 +181,13 @@ class LiquidationWave(Watcher):
     # bildiriminden hemen sonra biten başka paritelerin dalgalarını atardı.
     def _close_if_quiet(self, s: str, now: float) -> str | None:
         d = self._finish(s, now)
-        if d is None or now - self._last.get(s, -1e18) < self.cooldown_s:
+        if d is None:
+            return None
+        if now - self._last.get(s, -1e18) < self.cooldown_s:
+            self._results[s]["outcome"] = "cooldown"
             return None
         self._last[s] = now
+        self._results[s]["outcome"] = "fired"
         return d
 
     def _threshold(self, s: str) -> float:
@@ -191,6 +201,8 @@ class LiquidationWave(Watcher):
             return None
         del self._waves[s]
         side = "long" if w["long"] >= w["short"] else "short"
+        self._results[s] = {"start": w["start"], "end": w["end"], "long": w["long"], "short": w["short"],
+                            "outcome": "below"}
         if w[side] < self._threshold(s):
             return None
         other = "short" if side == "long" else "long"
@@ -201,6 +213,31 @@ class LiquidationWave(Watcher):
             f"en yüksek {_price(w['high'])} oldu. "
             f"Son likidasyondan bu yana {int(now - w['end']) // 60} dakika geçti. Binance akışı saniyede yalnızca "
             f"en büyük likidasyonu bildirdiği için tutarlar gerçek toplamın altındadır.")
+
+
+    # Biten dalganın sonucu bir sonraki dalga bitene kadar tutulur, arayüz
+    # onu yeni dalga başlayana kadar gösterir. outcome üç değer alır: below
+    # eşiğin altında kaldı, cooldown eşiği geçti ama bekleme süresine denk
+    # geldi, fired Opus'u çağırdı.
+    def snapshot(self) -> dict:
+        """Her paritenin eşiğini, süren dalgasını ve biten son dalgasının sonucunu döndürür.
+
+        Returns:
+            quiet_s ve symbols anahtarlı sözlük. symbols her parite için
+            min_usd, wave ve last taşır. wave süren dalgadır ya da None,
+            last biten son dalgadır ya da None. İkisi de start, end, long ve
+            short taşır, last ayrıca outcome taşır.
+        """
+        out = {}
+        for s in sorted(self.symbols):
+            w = self._waves.get(s)
+            last = self._results.get(s)
+            out[s] = {
+                "min_usd": self._threshold(s),
+                "wave": {k: w[k] for k in ("start", "end", "long", "short")} if w else None,
+                "last": dict(last) if last else None,
+            }
+        return {"quiet_s": self.quiet_s, "symbols": out}
 
 
 # --- Katalog ---

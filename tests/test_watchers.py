@@ -4,8 +4,9 @@ importable: yok
 
 Gözcülerin testleri. Likidasyon dalgası gözcüsünün dalgayı ne zaman bitmiş
 saydığı, eşiğin altındaki dalgayı atması, bekleme süresi ve katalogdan
-kurulumun hataları denenir. Son test bir Engine'in gözcü mesajıyla Opus'u
-çağırmaya kalktığını ve gözcüsü olmayan profilin hiçbir şey yapmadığını sınar.
+kurulumun hataları denenir. Arayüzdeki sayacın durumu ve bu durumun yalnızca
+değişince yayınlanması da denenir. Son testler bir Engine'in gözcü mesajıyla
+Opus'u çağırmaya kalktığını ve gözcüsü olmayan profilin hiçbir şey yapmadığını sınar.
 
 description: Gözcülerin ve Engine'e bağlanmalarının testleri.
 """
@@ -101,6 +102,28 @@ def test_per_symbol_threshold_and_cooldown():
     assert w.tick(T0 + 861).startswith("SOL/USDT")
 
 
+# Sayaç süren dalgayı, biten dalganın sonucunu ve bekleme süresine denk gelen
+# dalgayı ayrı gösterir. Yeni dalga başlasa da biten son dalga kalır.
+def test_snapshot_tracks_wave_and_outcome():
+    w = watchers.LiquidationWave(["BTCUSDT"], min_usd=300_000, quiet_s=60, cooldown_s=600)
+    snap = w.snapshot()
+    assert snap["quiet_s"] == 60
+    assert snap["symbols"]["BTCUSDT"] == {"min_usd": 300_000, "wave": None, "last": None}
+    w.on_liquidation(liq(T0, "long", 200_000))
+    w.on_liquidation(liq(T0 + 10, "short", 30_000))
+    assert w.snapshot()["symbols"]["BTCUSDT"]["wave"] == {"start": T0, "end": T0 + 10, "long": 200_000, "short": 30_000}
+    w.tick(T0 + 71)
+    btc = w.snapshot()["symbols"]["BTCUSDT"]
+    assert btc["wave"] is None and btc["last"]["outcome"] == "below"
+    w.on_liquidation(liq(T0 + 100, "long", 400_000))
+    assert w.tick(T0 + 161)
+    assert w.snapshot()["symbols"]["BTCUSDT"]["last"]["outcome"] == "fired"
+    w.on_liquidation(liq(T0 + 200, "long", 400_000))
+    assert w.snapshot()["symbols"]["BTCUSDT"]["last"]["outcome"] == "fired"
+    assert w.tick(T0 + 261) is None
+    assert w.snapshot()["symbols"]["BTCUSDT"]["last"]["outcome"] == "cooldown"
+
+
 # --- Katalog ---
 
 def test_large_amounts_are_written_in_millions():
@@ -138,6 +161,18 @@ def test_engine_triggers_on_wave(tmp_path, monkeypatch):
     e.on_liquidation(liq(T0, "long", 200_000))
     e._watched(e._watchers[0], e._watchers[0].tick(T0 + 61))
     assert len(calls) == 1 and calls[0][0] == "liquidation_wave"
+
+
+# Gözcünün durumu hesap durumuna girer ve yalnızca değişince yayınlanır.
+def test_engine_broadcasts_watch_on_change(tmp_path, monkeypatch):
+    e = _engine(tmp_path, monkeypatch, ({"type": "liquidation_wave", "min_usd": 100_000, "quiet_s": 60},))
+    q = e.listen()
+    e.on_liquidation(liq(T0, "long", 50_000))
+    e.on_liquidation(liq(T0, "long", 50_000, symbol="ETHUSDT"))
+    sent = [q.get_nowait() for _ in range(q.qsize())]
+    assert [m["kind"] for m in sent] == ["watch"]
+    assert sent[0]["data"]["watch"]["liquidation_wave"]["symbols"]["BTCUSDT"]["wave"]["long"] == 50_000
+    assert e._watch_snapshot() == sent[0]["data"]["watch"]
 
 
 def test_engine_without_watchers_does_nothing(tmp_path, monkeypatch):

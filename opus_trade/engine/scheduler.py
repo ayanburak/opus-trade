@@ -48,6 +48,7 @@ description: Fiyat akışını, hesabı, fonlamayı, kapanışları ve Opus ça�
 # açılışta kurulur. Engine onlara likidasyonları, canlı mumları ve saniyede
 # bir zamanı verir, bir gözcü mesaj döndürürse Opus'u gözcünün kind'ıyla
 # çağırır. Gözcüsü olmayan bir profilde bu yolların hiçbiri bir şey yapmaz.
+# Gözcülerin durumu arayüze watch olayıyla gider, yalnızca değiştiğinde.
 
 import asyncio
 import json
@@ -123,6 +124,7 @@ class Engine:
             self._watchers = [watchers.build(w, list(profile.symbols)) for w in profile.watchers]
         except ValueError as e:
             raise SystemExit(f"{profile.id}: {e}")
+        self._last_watch: dict = {}
 
     # --- Yayın ---
 
@@ -177,6 +179,7 @@ class Engine:
             "busy": self.busy,
             "shutting_down": self.shutting_down,
             "symbols": self.p.symbols,
+            "watch": self._watch_snapshot(),
             "fee_taker": settings.FEE_TAKER,
             "fee_maker": settings.FEE_MAKER,
         }
@@ -401,6 +404,7 @@ class Engine:
         """
         for w in self._watchers:
             self._watched(w, w.on_liquidation(event))
+        self._broadcast_watch()
 
     async def _tick_watchers(self) -> None:
         while True:
@@ -408,6 +412,20 @@ class Engine:
             now = time.time()
             for w in self._watchers:
                 self._watched(w, w.tick(now))
+            self._broadcast_watch()
+
+    # Anahtar gözcünün kind'ıdır. Gösterecek durumu olmayan gözcü girmez.
+    def _watch_snapshot(self) -> dict:
+        return {w.kind: snap for w in self._watchers if (snap := w.snapshot()) is not None}
+
+    # Durum yalnızca değiştiğinde gönderilir. time sunucunun saatidir, arayüz
+    # dalganın kapanmasına kalan süreyi kendi saatindeki farkı düzelterek sayar.
+    def _broadcast_watch(self) -> None:
+        snap = self._watch_snapshot()
+        if snap == self._last_watch:
+            return
+        self._last_watch = snap
+        self._broadcast("watch", {"time": time.time(), "watch": snap})
 
     # Dönem bittiyse ya da planlı kapanış başladıysa gözcü Opus'u çağırmaz.
     # Kapanış çağrısı son karar içindir, araya yeni bir olay girmemeli.
