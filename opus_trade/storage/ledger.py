@@ -62,7 +62,8 @@ def _order(r: sqlite3.Row) -> Order:
 
 
 def _trade(r: sqlite3.Row) -> Trade:
-    return Trade(**{k: r[k] for k in r.keys() if k != "side"}, side=Side(r["side"]))
+    rest = {k: r[k] for k in r.keys() if k not in ("side", "tp_levels")}
+    return Trade(**rest, side=Side(r["side"]), tp_levels=_levels(r["tp_levels"]))
 
 
 # Olayın detayı JSON'a çevrilirken Trade gibi iç içe tipler de sözlük olur,
@@ -158,6 +159,7 @@ class Ledger:
         row = asdict(t)
         row.pop("id")
         row["side"] = str(row["side"])
+        row["tp_levels"] = _levels_json(t.tp_levels)
         cur = self.con.execute(f"INSERT INTO trades ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
                                tuple(row.values()))
         return _trade(self.con.execute("SELECT * FROM trades WHERE id = ?", (cur.lastrowid,)).fetchone())

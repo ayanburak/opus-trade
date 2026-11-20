@@ -222,7 +222,8 @@ class PaperBroker(Broker, PriceDriven):
             id=0, account_id=self.account_id, position_id=p.id, number=p.number, symbol=p.symbol, side=p.side,
             leverage=p.leverage, qty=qty, margin=margin, entry_price=p.entry_price, entry_time=p.entry_time,
             exit_price=exit_, exit_time=now, reason=reason, pnl=pnl, fee=open_fee + close_fee, funding=funding,
-            best_price=_better(p.side, p.best_price, exit_), worst_price=_worse(p.side, p.worst_price, exit_)))
+            best_price=_better(p.side, p.best_price, exit_), worst_price=_worse(p.side, p.worst_price, exit_),
+            tp_levels=p.tp_levels, sl=p.sl))
         if full:
             self.ledger.mark_closed(p.id)
         else:

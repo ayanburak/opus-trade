@@ -104,7 +104,7 @@ class Order:
 # Bir pozisyonun kapanan her parçası bir Trade'dir, tam kapanış da son
 # parçadır. pnl fiyat kârı eksi fonlamadır, komisyon fee'de ayrı durur, net
 # sonuç pnl eksi fee'dir. fee bu parçanın açılış ve kapanış komisyonlarının
-# payıdır.
+# payıdır. tp_levels ve sl pozisyonun kapanış anındaki korumasıdır.
 @dataclass(frozen=True)
 class Trade:
     id: int
@@ -126,6 +126,8 @@ class Trade:
     funding: float
     best_price: float
     worst_price: float
+    tp_levels: tuple[TpLevel, ...] = ()
+    sl: float | None = None
 
     @property
     def net(self) -> float:

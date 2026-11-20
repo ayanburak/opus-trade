@@ -1,0 +1,28 @@
+"""
+file: plugins.py
+importable: load
+
+load() bütün strateji türlerinin ve tetikleyicilerin modüllerini yükler.
+Her modül yüklenirken kendini STRATEGIES ya da TRIGGERS kayıt defterine
+yazar. Giriş noktaları ve testler kayıt defterini okumadan önce bunu bir kez
+çağırır.
+
+description: Eklenti modüllerinin yüklendiği tek yer.
+"""
+
+# NOTE: Yeni bir strateji türü ya da tetikleyici yazıldığında modülü buraya bir
+# satırla eklenir. Kayıt defterinin geri kalanı, panel ve arayüz dahil, onu
+# kendiliğinden görür.
+
+import importlib
+
+_MODULES = (
+    "opus_trade.strategy.llm.strategy",
+    "opus_trade.strategy.rules.liquidation_reversal",
+    "opus_trade.triggers.liquidation_wave",
+)
+
+
+def load() -> None:
+    for name in _MODULES:
+        importlib.import_module(name)
