@@ -21,6 +21,8 @@ description: Binance vadeli piyasasının herkese açık REST uçlarından piyas
 # XXX: premiumIndex ucu symbol verilince tek bir sözlük, verilmeyince bütün
 # paritelerin listesini döndürür. _premium iki biçimi de listeye çevirir.
 
+import asyncio
+
 import httpx
 
 from ..models import Candle, DailyStats, Funding, LongShortRatio, OpenInterest, OrderBook, Premium, TakerVolume
@@ -77,14 +79,33 @@ def _premium(d: dict) -> Premium:
 # İstemci dışarıdan verilir, böylece testler httpx'in sahte taşıyıcısıyla ağa
 # çıkmadan gerçek cevap biçimlerini deneyebilir ve program tek istemciyi bütün
 # parçalar arasında paylaşır.
+#
+# min_interval_s iki istek arasında en az geçmesi gereken süredir. Binance'in
+# istek sınırı IP başınadır ve sunucuda eski sistemle yeni toplayıcı aynı
+# adresten istek atar. Geriye dönük doldurma gibi yoğun işler bu süreyle
+# yavaşlatılır.
 class BinanceRest(MarketData):
-    def __init__(self, client: httpx.AsyncClient) -> None:
+    def __init__(self, client: httpx.AsyncClient, min_interval_s: float = 0) -> None:
         self._client = client
+        self._gap = min_interval_s
+        self._next = 0.0
+        self._lock = asyncio.Lock()
+
+    async def _wait_turn(self) -> None:
+        if not self._gap:
+            return
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            delay = self._next - loop.time()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            self._next = loop.time() + self._gap
 
     # Ağ hatası ve HTTP hata kodu aynı MarketDataError'a çevrilir. Binance'in
     # hata gövdesi kısa bir JSON'dur ve hatanın nedenini söyler, mesaja eklenir.
     async def _get(self, path: str, **params) -> list | dict:
         params = {k: v for k, v in params.items() if v is not None}
+        await self._wait_turn()
         try:
             r = await self._client.get(path, params=params)
         except httpx.HTTPError as e:
