@@ -1,0 +1,58 @@
+"""
+file: model_access.py
+importable: ModelAccess
+
+ModelAccess bütün LLM profillerinin ortak model erişimidir. close_until()
+erişimi verilen ana kadar kapatır, open() hemen açar, closed() o anda kapalı
+olup olmadığını söyler. report_error() bir çağrı hatasının metnine bakar,
+limitin dolduğunu gösteriyorsa panelde görünecek uyarıyı yazar.
+
+description: Abonelik limiti dolunca LLM çağrılarının bekletilmesi.
+"""
+
+# NOTE: Saat ayarlarda saklanır, program yeniden başlasa da erişim kapalı kalır.
+# Saat geçince erişim kendiliğinden açılır, ayrıca bir işlem gerekmez.
+#
+# NOTE: Uyarı kendiliğinden erişimi kapatmaz. Limitin ne zaman yenileneceğini
+# Burak bilir ve girer, program yalnızca dikkatini çeker.
+#
+# XXX: Limit hatasının metni claude komutunun sürümüyle değişebilir. Tanınan
+# ifadeler _LIMIT_HINTS'tedir, yeni bir ifade görülürse buraya eklenir.
+
+from ..domain.clock import Clock
+from ..storage.runtime_state import StateRepo
+
+_UNTIL = "model_closed_until"
+_WARNING = "model_limit_warning"
+_LIMIT_HINTS = ("usage limit", "rate limit", "limit reached", "hit your limit", "limit will reset", "5-hour limit")
+
+
+class ModelAccess:
+    def __init__(self, state: StateRepo, clock: Clock) -> None:
+        self.state = state
+        self.clock = clock
+
+    def closed(self) -> bool:
+        until = self.state.setting(_UNTIL)
+        return until is not None and self.clock.time() < until
+
+    def until(self) -> int | None:
+        until = self.state.setting(_UNTIL)
+        return until if until is not None and self.clock.time() < until else None
+
+    def close_until(self, when: int) -> None:
+        self.state.set_setting(_UNTIL, int(when))
+        self.state.set_setting(_WARNING, None)
+
+    def open(self) -> None:
+        self.state.set_setting(_UNTIL, None)
+
+    def warning(self) -> dict | None:
+        return self.state.setting(_WARNING)
+
+    def report_error(self, text: str) -> bool:
+        """Hata limitin dolduğunu gösteriyorsa uyarıyı yazar ve True döndürür."""
+        if not any(h in text.lower() for h in _LIMIT_HINTS):
+            return False
+        self.state.set_setting(_WARNING, {"time": self.clock.time(), "text": text[:500]})
+        return True

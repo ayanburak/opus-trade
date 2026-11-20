@@ -21,7 +21,8 @@ description: Strateji soyut sınıfı, bağlamı, kararı ve tür kayıt defteri
 # yani teklif, soru ve haberi okuyabilen stratejidedir, admin paneli bu
 # müdahaleleri yalnızca orada açar. corrects reddedilen bir komuttan hemen sonra
 # düzeltme için yeniden uyandırılmak isteyen stratejidedir. Kural stratejisi
-# ikisini de istemez, aynı girdiyle aynı reddi tekrar alırdı.
+# ikisini de istemez, aynı girdiyle aynı reddi tekrar alırdı. uses_model model
+# çağıran stratejidedir, model erişimi kapalıyken o strateji bekletilir.
 #
 # NOTE: memory stratejinin uyanmalar arasında taşıdığı kendi durumudur,
 # örneğin Opus'un not defteri. Çalıştırıcı onu JSON olarak saklar ve bir
@@ -120,6 +121,7 @@ class Deps:
 class Strategy(ABC):
     accepts_messages: ClassVar[bool] = False
     corrects: ClassVar[bool] = False
+    uses_model: ClassVar[bool] = False
 
     @abstractmethod
     async def decide(self, ctx: Context) -> Decision:

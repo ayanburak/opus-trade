@@ -7,7 +7,8 @@ FakeMarket MarketData'nın ağa çıkmayan bir uygulamasıdır, beş dakikalık
 istatistikleri istenen aralık için üretir ve her isteği calls listesine
 yazar. Bir sembolü fail kümesine eklemek o sembolün isteklerini
 MarketDataError ile düşürür. oldest verilirse ondan eski bir başlangıç da
-Binance'teki gibi MarketDataError alır.
+Binance'teki gibi MarketDataError alır. minutes paritelerin dakikalık
+mumlarıdır, candles() aralıktakileri döndürür.
 
 description: Testlerde kullanılan sahte saat ve sahte piyasa verisi.
 """
@@ -15,7 +16,7 @@ description: Testlerde kullanılan sahte saat ve sahte piyasa verisi.
 from datetime import datetime, timezone
 
 from opus_trade.domain.clock import Clock
-from opus_trade.market.models import LongShortRatio, OpenInterest, Premium, TakerVolume
+from opus_trade.market.models import Candle, LongShortRatio, OpenInterest, Premium, TakerVolume
 from opus_trade.market.source import MarketData, MarketDataError
 
 
@@ -39,6 +40,7 @@ class FakeMarket(MarketData):
         self.fail: set[str] = set()
         self.premiums: list[Premium] = []
         self.oldest: int | None = None
+        self.minutes: dict[str, list[Candle]] = {}
 
     def _record(self, name: str, symbol: str, start: int | None, end: int | None) -> None:
         self.calls.append((name, symbol, start, end))
@@ -62,13 +64,14 @@ class FakeMarket(MarketData):
     async def premium(self, symbol=None):
         return list(self.premiums)
 
-    async def candles(self, *a, **k):
-        raise NotImplementedError
+    # Yalnızca kapalı süre işlenirken istenen dakikalık mumlar verilir.
+    async def candles(self, symbol, interval, limit=500, start=None, end=None):
+        return [c for c in self.minutes.get(symbol, []) if start <= c.time < end]
+
+    async def funding_history(self, symbol, start=None, end=None, limit=1000):
+        return []
 
     async def daily_stats(self, *a, **k):
-        raise NotImplementedError
-
-    async def funding_history(self, *a, **k):
         raise NotImplementedError
 
     async def open_interest(self, *a, **k):

@@ -53,6 +53,7 @@ class LLMStrategy(Strategy):
 
     accepts_messages = True
     corrects = True
+    uses_model = True
 
     def __init__(self, llm: LLMClient, catalog: Catalog, work_dir, tool_env: dict, market_db, style: str,
                  model: str, effort: str, min_wait: int, max_wait: int, step_limit: int, timeout_s: int,

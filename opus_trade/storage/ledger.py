@@ -96,6 +96,13 @@ class Ledger:
                                    (kind, balance, balance, now))
         return cur.lastrowid
 
+    def close_account(self, account_id: int, now: int) -> None:
+        with self.con:
+            self.con.execute("UPDATE accounts SET closed_at = ? WHERE id = ?", (now, account_id))
+
+    def start_balance(self, account_id: int) -> float:
+        return self.con.execute("SELECT start_balance FROM accounts WHERE id = ?", (account_id,)).fetchone()[0]
+
     def cash(self, account_id: int) -> float:
         return self.con.execute("SELECT cash FROM accounts WHERE id = ?", (account_id,)).fetchone()[0]
 
