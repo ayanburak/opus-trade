@@ -44,13 +44,16 @@ from ..market.source import MarketData
 from ..market.stream import MarketStream
 from ..runtime.bus import EventBus
 from ..runtime.interventions import Interventions
+from ..runtime.health import CollectorWatch
 from ..runtime.model_access import ModelAccess
+from ..runtime.notifications import Notifier, PanelChannel
 from ..runtime.profiles import ProfileService
 from ..runtime.supervisor import Supervisor
 from ..storage.database import connect
 from ..storage.journal import JournalRepo
 from ..storage.ledger import MIGRATIONS, Ledger
 from ..storage.migrate import migrate
+from ..storage.notifications import NotificationRepo
 from ..storage.profiles import ProfileRepo
 from ..storage.runtime_state import StateRepo
 from ..strategy.base import Deps
@@ -79,10 +82,21 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
 
     sup = Supervisor(repo, ledger, journal, state, market, stream, clock, bus, access, catalog, BINANCE_STANDARD,
                      deps)
-    iv = Interventions(con, journal, state, clock, sup.runners.get)
+    iv = Interventions(con, state, clock, sup.runners.get)
     sup.interventions = iv
     service = ProfileService(repo, ledger, journal, catalog, clock, sup.refresh)
-    return Core(repo, ledger, journal, state, service, sup, iv, access, bus, catalog, clock)
+    notes = NotificationRepo(con)
+    notifier = Notifier(bus, notes, repo, journal, clock, [PanelChannel(bus)])
+    return Core(repo, ledger, journal, state, service, sup, iv, access, bus, catalog, clock, notes, notifier)
+
+
+async def _watch_collector(watch: CollectorWatch, clock: Clock) -> None:
+    while True:
+        try:
+            watch.check(clock.time())
+        except Exception:
+            log.exception("Toplayıcının durumu okunamadı.")
+        await asyncio.sleep(60)
 
 
 async def _main(cfg: AppConfig) -> None:
@@ -93,7 +107,11 @@ async def _main(cfg: AppConfig) -> None:
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=20) as client:
         core = assemble(cfg, SystemClock(), BinanceRest(client), BinanceStream(),
                         ClaudeCliClient(Path(sys.executable), _ROOT))
-        tasks = [asyncio.create_task(core.supervisor.run())]
+        # Arka plan görevleri kapanışta iptal edilir, sunucu ise should_exit ile
+        # süren isteklerini bitirip kendisi kapanır.
+        background = [asyncio.create_task(core.supervisor.run()), asyncio.create_task(core.notifier.run()),
+                      asyncio.create_task(_watch_collector(CollectorWatch(cfg.market_db, core.bus), core.clock))]
+        tasks = list(background)
         server = None
         if cfg.core_socket:
             cfg.core_socket.unlink(missing_ok=True)
@@ -104,7 +122,8 @@ async def _main(cfg: AppConfig) -> None:
         await stop.wait()
         if server:
             server.should_exit = True
-        tasks[0].cancel()
+        for t in background:
+            t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
     log.info("Çekirdek durdu.")
 

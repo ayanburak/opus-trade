@@ -48,14 +48,14 @@ class RiskGuard:
         self.daily_loss = daily_loss
         self.halted = False
 
-    def _day_start(self) -> int:
+    def day_start(self) -> int:
         now = self.clock.now().astimezone(DAY_TZ)
         return int(datetime.combine(now.date(), time(0), DAY_TZ).timestamp())
 
     # Açık pozisyonların kâr ve zararı özkaynaktan nakdi ve kilitli marjini
     # düşünce kalan kısımdır, fiyatları broker zaten uygulamıştır.
     def day_pnl(self, state: AccountState) -> float:
-        realized = sum(t.net for t in self.ledger.trades(state.account_id, since=self._day_start()))
+        realized = sum(t.net for t in self.ledger.trades(state.account_id, since=self.day_start()))
         return realized + state.equity - state.cash - sum(p.margin for p in state.positions)
 
     def breached(self, state: AccountState) -> bool:

@@ -12,74 +12,10 @@ description: api.control ve runtime.interventions için entegrasyon testleri.
 
 import asyncio
 
-import httpx
-
-from opus_trade.app.core import assemble
-from opus_trade.api.control import create_app
-from opus_trade.config import AppConfig
 from opus_trade.domain.models import Side
 from opus_trade.domain.trading import OpenPosition
-from opus_trade.market.models import Candle
-from opus_trade.market.stream import MarketStream
-from opus_trade.strategy.base import STRATEGIES, Decision, Strategy
-from tests.fakes import FakeClock, FakeMarket
-
-T = 1_795_000_020
-SOL = "SOLUSDT"
-RULE = {"strategy": "liquidation_reversal", "params": {}, "symbols": [SOL], "balance": 100,
-        "triggers": [{"type": "liquidation_wave", "min_usd": {SOL: 100000}}]}
-ECHO = {"strategy": "echo", "params": {}, "symbols": [SOL], "balance": 100}
-
-
-# Yönetici mesajı alabilen bir strateji. Her bağlamı kaydeder, kendisine
-# verilen kararları sırayla döndürür.
-class Echo(Strategy):
-    accepts_messages = True
-    corrects = True
-    seen: list = []
-    script: list = []
-
-    async def decide(self, ctx):
-        Echo.seen.append(ctx)
-        return Echo.script.pop(0) if Echo.script else Decision()
-
-
-if "echo" not in STRATEGIES.entries:
-    STRATEGIES.register("echo", "Test", "", (), lambda deps: Echo())
-
-
-class NullStream(MarketStream):
-    async def watch(self, symbols):
-        pass
-
-    async def run(self, listener):
-        await asyncio.Event().wait()
-
-
-class Api:
-    def __init__(self, path):
-        self.clock = FakeClock(T)
-        self.core = assemble(AppConfig(path), self.clock, FakeMarket(), NullStream(), None)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(create_app(self.core)), base_url="http://core")
-        Echo.seen, Echo.script = [], []
-
-    async def call(self, method, url, ok=True, **kw):
-        r = await self.client.request(method, url, **kw)
-        assert (r.status_code == 200) == ok, r.text
-        return r.json()
-
-    async def running(self, config):
-        p = await self.call("POST", "/profiles", json={"name": "Test", "short": "T", "config": config})
-        await self.call("POST", f"/profiles/{p['id']}/start")
-        r = self.core.supervisor.runners[p["id"]]
-        r.on_candle(Candle(SOL, T // 60 * 60, 100, 100, 100, 100, 1, 1, 1, 1), False)
-        return p["id"], r
-
-    async def step(self, r, seconds=0):
-        self.clock.t += seconds
-        r.tick(self.clock.t)
-        await r.wait_idle()
-
+from opus_trade.strategy.base import Decision
+from tests.integration.harness import ECHO, RULE, SOL, T, Api, Echo
 
 def run(test):
     def wrapper(tmp_path):
@@ -105,12 +41,12 @@ async def test_profile_lifecycle_routes(api):
 
 @run
 async def test_rule_strategy_takes_only_firm_actions(api):
-    """Kural stratejisi yönetici mesajı okuyamaz, ona teklif ya da soru gitmez. Kesin işlem ise uygulanır."""
+    """Kural stratejisi yönetici mesajı okuyamaz, ona metin gitmez. Grafikten gelen işlem ise uygulanır."""
     pid, r = await api.running(RULE)
     await api.call("POST", f"/profiles/{pid}/interventions", ok=False,
-                   json={"kind": "question", "params": {"text": "Neden?"}})
+                   json={"kind": "message", "weight": "firm", "params": {"text": "Neden?"}})
     iv = await api.call("POST", f"/profiles/{pid}/interventions",
-                        json={"kind": "command", "weight": "firm",
+                        json={"kind": "command",
                               "params": {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}})
     assert "#1 SOLUSDT long açıldı" in iv["result"]
     acc = await api.call("GET", f"/profiles/{pid}/account")
@@ -138,14 +74,54 @@ async def test_withdrawn_message_is_never_shown(api):
     """Gösterilmeden geri çekilen müdahale stratejiye hiç gitmez. Gösterilmiş olan ise artık geri çekilemez."""
     pid, r = await api.running(ECHO)
     await api.step(r)
-    first = await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "info", "params": {"text": "A"}})
-    second = await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "info", "params": {"text": "B"}})
+    msg = {"kind": "message", "weight": "offer"}
+    first = await api.call("POST", f"/profiles/{pid}/interventions", json={**msg, "params": {"text": "A"}})
+    second = await api.call("POST", f"/profiles/{pid}/interventions", json={**msg, "params": {"text": "B"}})
     await api.call("POST", f"/profiles/{pid}/interventions/{first['id']}/withdraw")
     r.wake("admin")
     await api.step(r, 1)
     items = Echo.seen[-1].admin["items"]
-    assert len(items) == 1 and "bilgi veriyor: B" in items[0]
+    assert len(items) == 1 and "teklifi: B" in items[0]
     await api.call("POST", f"/profiles/{pid}/interventions/{second['id']}/withdraw", ok=False)
+
+
+@run
+async def test_offer_and_firm_message_reach_strategy_differently(api):
+    """Teklif ile kesin talimat aynı metinle gelse de stratejiye farklı söylenir. Karışırsa Opus teklife uyar ya da talimatı tartar."""
+    pid, r = await api.running(ECHO)
+    await api.step(r)
+    for weight in ("offer", "firm"):
+        await api.call("POST", f"/profiles/{pid}/interventions",
+                       json={"kind": "message", "weight": weight, "params": {"text": "SOL'u kapat."}})
+    await api.call("POST", f"/profiles/{pid}/interventions", ok=False,
+                   json={"kind": "message", "params": {"text": "Ağırlıksız."}})
+    r.wake("admin")
+    await api.step(r, 1)
+    offer, firm = Echo.seen[-1].admin["items"]
+    assert "teklifi: SOL'u kapat. Değerlendir" in offer and "kesin talimatı: SOL'u kapat. Buna uy" in firm
+
+
+@run
+async def test_look_now_wakes_strategy_at_once(api):
+    """Şimdi bak düğmesi call_now beklemeden stratejiyi çağırır. Çağırmazsa düğme hiçbir şey yapmamış olur."""
+    pid, r = await api.running(ECHO)
+    await api.step(r)
+    before = len(Echo.seen)
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "look_now"})
+    await api.step(r, 1)
+    assert len(Echo.seen) == before + 1 and "duruma bakmanı" in Echo.seen[-1].admin["items"][0]
+
+
+@run
+async def test_account_command_has_no_offer(api):
+    """Hesap işlemi her zaman kesindir. Teklif olarak gönderilen işlem sessizce uygulanmamalı, reddedilmeli."""
+    pid, _ = await api.running(ECHO)
+    spec = {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}
+    await api.call("POST", f"/profiles/{pid}/interventions", ok=False,
+                   json={"kind": "command", "weight": "offer", "params": spec})
+    iv = await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": spec})
+    assert iv["weight"] == "firm"
+    assert (await api.call("GET", f"/profiles/{pid}/account"))["state"]["positions"][0]["symbol"] == SOL
 
 
 @run
@@ -153,7 +129,7 @@ async def test_stop_with_close_all_closes_positions_and_records_it(api):
     """Durdururken kapatma istenirse pozisyonlar kapanır ve bu bir kesin müdahale olarak kayda geçer."""
     pid, r = await api.running(RULE)
     await api.call("POST", f"/profiles/{pid}/interventions", json={
-        "kind": "command", "weight": "firm",
+        "kind": "command",
         "params": {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}})
     await api.call("POST", f"/profiles/{pid}/stop", json={"close_all": True})
     acc = await api.call("GET", f"/profiles/{pid}/account")

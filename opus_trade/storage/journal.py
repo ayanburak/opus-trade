@@ -69,6 +69,15 @@ class JournalRepo:
         return [{**dict(r), "wakes": json.loads(r["wakes"]), "results": json.loads(r["results"]),
                  "record": json.loads(r["record"])} for r in rows]
 
+    def get(self, journal_id: int) -> dict:
+        r = self.con.execute("SELECT * FROM journal WHERE id = ?", (journal_id,)).fetchone()
+        return {**dict(r), "wakes": json.loads(r["wakes"]), "results": json.loads(r["results"]),
+                "record": json.loads(r["record"])}
+
+    def profile_of(self, journal_id: int) -> int | None:
+        r = self.con.execute("SELECT profile_id FROM journal WHERE id = ?", (journal_id,)).fetchone()
+        return r[0] if r else None
+
     def tool_calls(self, journal_id: int) -> list[dict]:
         return [dict(r) for r in self.con.execute("SELECT * FROM tool_calls WHERE journal_id = ? ORDER BY seq",
                                                  (journal_id,))]

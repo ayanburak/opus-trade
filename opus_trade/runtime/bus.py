@@ -24,8 +24,10 @@ class EventBus:
         self._queues: set[asyncio.Queue] = set()
         self.dropped = 0
 
-    def subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue(maxsize=self._maxsize)
+    # Kaybetmemesi gereken bir dinleyici, örneğin bildirimler, sınırsız kuyruk
+    # ister. Süreç içindedir ve olayları geldiği hızda tüketir.
+    def subscribe(self, unbounded: bool = False) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=0 if unbounded else self._maxsize)
         self._queues.add(q)
         return q
 

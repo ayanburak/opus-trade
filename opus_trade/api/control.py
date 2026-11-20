@@ -5,7 +5,7 @@ importable: Core, create_app
 Çekirdeğin kontrol API'si. create_app() bir Core alır ve FastAPI uygulamasını
 kurar. Admin paneli bütün işlerini bu uçlardan yapar: profiller ve sürümler,
 kayıt defterleri, hesap, günlük, işlemler, özkaynak, müdahaleler, model
-erişimi, sistem olayları ve canlı akış. Uygulama yalnızca çekirdeğin Unix
+erişimi, bildirimler, sistem olayları ve canlı akış. Uygulama yalnızca çekirdeğin Unix
 soketinde dinler, dışarıya hiç açılmaz.
 
 description: Admin panelinin kullandığı kontrol uçları.
@@ -36,6 +36,7 @@ from ..domain.errors import RuleError
 from ..domain.profile import ProfileConfig
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
+from ..storage.notifications import NotificationRepo
 from ..storage.profiles import ProfileRepo
 from ..storage.runtime_state import StateRepo
 from ..strategy.base import STRATEGIES
@@ -43,6 +44,7 @@ from ..triggers.base import TRIGGERS
 from ..runtime.bus import EventBus
 from ..runtime.interventions import Interventions
 from ..runtime.model_access import ModelAccess
+from ..runtime.notifications import Notifier, settings_from, DEFAULT_SETTINGS
 from ..runtime.profiles import ProfileService
 from ..runtime.supervisor import Supervisor
 
@@ -62,6 +64,12 @@ class Core:
     bus: EventBus
     catalog: Catalog
     clock: Clock
+    notifications: NotificationRepo
+    notifier: Notifier
+
+
+# Grafiğin seçebildiği mum aralıkları.
+INTERVALS = ("1m", "5m", "15m", "1h", "4h", "1d")
 
 
 def _plain(x: Any) -> Any:
@@ -146,7 +154,7 @@ def create_app(core: Core) -> FastAPI:
     async def stop(pid: int, close_all: bool = Body(False, embed=True)):
         profile(pid)
         if close_all:
-            await core.interventions.add(pid, "command", {"type": "close_all"}, "firm", "Durdururken kapatıldı.")
+            await core.interventions.add(pid, "command", {"type": "close_all"}, note="Durdururken kapatıldı.")
         return _plain(core.service.move(pid, "stop"))
 
     @app.post("/profiles/{pid}/clone")
@@ -190,10 +198,24 @@ def create_app(core: Core) -> FastAPI:
         profile(pid)
         return core.journal.entries(pid, min(limit, 500), before)
 
+    # Kayıt başka bir profilinse bulunamamış sayılır. Herkese açık API bu uca
+    # yayındaki profilin kimliğiyle gelir, başka profilin araçlarını açmamalı.
     @app.get("/profiles/{pid}/journal/{jid}/tools")
     async def tools(pid: int, jid: int):
         profile(pid)
+        if core.journal.profile_of(jid) != pid:
+            raise HTTPException(404, "Kayıt bulunamadı.")
         return core.journal.tool_calls(jid)
+
+    # --- Piyasa ---
+
+    @app.get("/candles")
+    async def candles(symbol: str, interval: str = "15m", limit: int = 300):
+        if symbol not in core.catalog.symbols:
+            raise ValueError(f"Bilinmeyen parite: {symbol}")
+        if interval not in INTERVALS:
+            raise ValueError(f"Bilinmeyen aralık: {interval}")
+        return _plain(await core.supervisor.market.candles(symbol, interval, min(limit, 1000)))
 
     # --- Müdahaleler ---
 
@@ -213,7 +235,51 @@ def create_app(core: Core) -> FastAPI:
         profile(pid)
         return core.interventions.withdraw(pid, iid)
 
+    # --- Bildirimler ---
+
+    # opus-web çekirdeğe ulaşamadığı süreyi çekirdek geri gelince bu uçla
+    # kalıcı bildirim olarak yazar.
+    @app.post("/notifications")
+    async def notify(level: str = Body(...), kind: str = Body(...), title: str = Body(...), body: str = Body(""),
+                     profile_id: int | None = Body(None)):
+        if profile_id is not None:
+            profile(profile_id)
+        return await core.notifier.push(level, kind, profile_id, title, body)
+
+    @app.get("/notifications")
+    async def notifications(profile_id: int | None = None, unread: bool = False, before: int | None = None,
+                            limit: int = 100):
+        return core.notifications.list(profile_id, unread, before, min(limit, 500))
+
+    @app.get("/notifications/counts")
+    async def notification_counts():
+        return core.notifications.counts()
+
+    # Okundu yapılınca sayılar akışla bütün açık panellere gider, böylece
+    # başka bir cihazdaki baloncuk da hemen söner.
+    @app.post("/notifications/read")
+    async def read(ids: list[int] | None = Body(None), profile_id: int | None = Body(None),
+                   all: bool = Body(False)):
+        changed = core.notifications.mark_read(core.clock.time(), ids, profile_id, all)
+        counts = core.notifications.counts()
+        core.bus.publish({"notification_counts": counts})
+        return {"changed": changed, "counts": counts}
+
+    @app.get("/notifications/settings")
+    async def notification_settings():
+        return core.state.setting("notification_settings", DEFAULT_SETTINGS)
+
+    @app.post("/notifications/settings")
+    async def save_notification_settings(settings: dict = Body(..., embed=True)):
+        clean = settings_from(settings)
+        core.state.set_setting("notification_settings", clean)
+        return clean
+
     # --- Sistem ---
+
+    @app.get("/health")
+    async def health():
+        return {"ok": True, "time": core.clock.time()}
 
     @app.get("/system")
     async def system():

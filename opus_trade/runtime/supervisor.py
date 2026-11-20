@@ -7,7 +7,8 @@ profilin çalıştırıcısını veritabanındaki son haline göre kurar, deği�
 ya da kaldırır, program yeniden başlamadan. run() canlı akışı ve saniyelik
 zamanlayıcıyı çalıştırır. Akıştan gelen mumları ve likidasyonları ilgili
 çalıştırıcılara dağıtır, bağlantı her kurulduğunda kopukken kaçan dakikaları
-işletir.
+işletir. check_stream() iki dakikadan uzun mum gelmezse akışın koptuğunu olay
+yoluna yayar.
 
 description: Profillerin çalıştırıcılarını kuran ve canlı veriyi onlara dağıtan yönetici.
 """
@@ -52,6 +53,9 @@ from .runner import FUNDING_EVERY_S, ProfileRunner
 
 log = logging.getLogger(__name__)
 
+# Akışın kopmuş sayılması için mumsuz geçen en uzun süre, saniye.
+STREAM_SILENCE_S = 120
+
 
 class Supervisor(StreamListener):
     """Profillerin çalıştırıcıları.
@@ -94,6 +98,8 @@ class Supervisor(StreamListener):
         self._locks: dict[int, asyncio.Lock] = {}
         self._failing: set[int] = set()
         self._background: set[asyncio.Task] = set()
+        self.last_candle = clock.time()
+        self.stream_down = False
 
     # --- Kurulum ---
 
@@ -137,6 +143,8 @@ class Supervisor(StreamListener):
             if isinstance(r.broker, PaperBroker) and isinstance(old.broker, PaperBroker):
                 r.broker.prices = dict(old.broker.prices)
         self.runners[profile_id] = r
+        if old and old.version.id != r.version.id:
+            self.bus.publish({"profile": profile_id, "version": r.version.number})
         r.start(old.profile.state if old else None)
         self._watch()
 
@@ -175,6 +183,11 @@ class Supervisor(StreamListener):
                 log.exception("[%s] Kopukken geçen dakikalar işlenemedi.", r.profile.short)
 
     async def on_candle(self, candle: Candle, closed: bool) -> None:
+        now = self.clock.time()
+        if self.stream_down:
+            self.stream_down = False
+            self.bus.publish({"stream": "up", "silent_s": now - self.last_candle})
+        self.last_candle = now
         for pid, r in list(self.runners.items()):
             self._guard(pid, lambda r=r: r.on_candle(candle, closed))
 
@@ -184,14 +197,17 @@ class Supervisor(StreamListener):
 
     # --- Döngüler ---
 
+    # Dinlenen bir parite varken STREAM_SILENCE_S boyunca hiç mum gelmezse akış
+    # kopmuş sayılır ve bu bir kez yayılır. Mum gelince akışın döndüğü yayılır.
+    def check_stream(self, now: int) -> None:
+        if self.runners and not self.stream_down and now - self.last_candle > STREAM_SILENCE_S:
+            self.stream_down = True
+            self.bus.publish({"stream": "down", "since": self.last_candle})
+
     async def _ticker(self) -> None:
         while True:
             now = self.clock.time()
-            if self.interventions:
-                try:
-                    self.interventions.tick(now)
-                except Exception:
-                    log.exception("Planlı yönetici çağrıları işlenemedi.")
+            self.check_stream(now)
             for pid, r in list(self.runners.items()):
                 self._guard(pid, lambda r=r: r.tick(now))
             await asyncio.sleep(1)
@@ -213,6 +229,7 @@ class Supervisor(StreamListener):
             except Exception:
                 log.exception("[%s] Profil kurulamadı.", p.short)
         await self.stream.watch({s for r in self.runners.values() for s in r.symbols})
+        self.last_candle = self.clock.time()
         tasks = [asyncio.create_task(self._ticker()), asyncio.create_task(self._funding())]
         try:
             await self.stream.run(self)

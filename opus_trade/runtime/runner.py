@@ -261,6 +261,7 @@ class ProfileRunner:
             self._last_minute = now // 60
             st = self.broker.state()
             self.ledger.record_equity(st.account_id, now, st.cash, st.equity, sum(p.margin for p in st.positions))
+            self._check_daily_loss(st)
         if self.running and self.next_wake is not None and now >= self.next_wake:
             self.next_wake = None
             self.wake("timer")
@@ -270,6 +271,17 @@ class ProfileRunner:
             return
         self.busy = True
         self._task = asyncio.create_task(self._process())
+
+    # Günlük zarar sınırı aşılınca o gün bir kez yayılır. Gün ayarlarda
+    # saklanır, böylece yeniden başlatma aynı gün ikinci kez yaymaz.
+    def _check_daily_loss(self, st) -> None:
+        guard = self.gate.guard
+        if guard is None or not guard.breached(st):
+            return
+        key, day = f"loss_notified:{self.pid}", guard.day_start()
+        if self.state.setting(key) != day:
+            self.state.set_setting(key, day)
+            self.bus.publish({"profile": self.pid, "daily_loss": guard.daily_loss})
 
     async def _process(self) -> None:
         try:
@@ -342,6 +354,7 @@ class ProfileRunner:
             self.journal.add(self.pid, self.version.id, now, stored, [], record, text, None)
             self.state.system_event(self.pid, now, "decide_error", "Karar alınamadı.",
                                     {"error": text, "limit": limited})
+            self.bus.publish({"profile": self.pid, "decide_error": text, "limit": limited})
             log.warning("[%s] Karar alınamadı: %s", self.profile.short, text)
             return
         self.state.drop_wakes(ids)

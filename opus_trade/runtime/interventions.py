@@ -1,24 +1,29 @@
 """
 file: interventions.py
-importable: KINDS, command_from, limit_from, describe_command, Interventions
+importable: KINDS, command_from, limit_from, Interventions
 
-Yöneticinin profillere müdahaleleri. Interventions.add() bir müdahaleyi
-doğrular, kesinse o anda uygular ve kaydeder. withdraw() stratejiye henüz
-gösterilmemiş bir müdahaleyi geri çeker. restrictions() bir profilin
-yürürlükteki kesin kısıtlarını kapıya, feed() stratejiye gidecek satırları
-çalıştırıcıya verir. tick() zamanı gelen planlı çağrıları uyandırır.
-command_from() ve limit_from() panelden gelen JSON'u komuta ve sınıra çevirir.
+Yöneticinin profillere müdahaleleri. Opus'a giden müdahale bir metindir,
+teklif ya da kesin. Yanında Şimdi bak, grafikten gelen kesin hesap işlemleri,
+alarm ve panelin ana kartında görünmeyen kısıtlar durur.
+
+Interventions.add() bir müdahaleyi doğrular, kesinse o anda uygular ve
+kaydeder. withdraw() stratejiye henüz gösterilmemiş bir müdahaleyi geri çeker.
+restriction_source() bir profilin yürürlükteki kesin kısıtlarını kapıya,
+feed() stratejiye gidecek satırları çalıştırıcıya verir. command_from() ve
+limit_from() panelden gelen JSON'u komuta ve sınıra çevirir.
 
 description: Yönetici müdahalelerinin doğrulanması, uygulanması, saklanması ve anlatımı.
 """
 
-# NOTE: Ağırlık iki türlüdür. Teklif stratejiye değerlendirmesi için gider ve
-# hiçbir şey uygulanmaz. Kesin bir hesap işlemi o anda admin olarak kapıdan
-# geçer, kesin bir kısıtı kapı uygular. Kesin bir işlem reddedilirse müdahale
-# kaydedilmez, hata yöneticiye döner.
+# NOTE: Ağırlık yalnızca mesajda ve kısıtta seçilir. Teklif stratejiye
+# değerlendirmesi için gider, kesin mesaja uyması beklenir. Hesap işlemi her
+# zaman kesindir, o anda admin olarak kapıdan geçer. Kesin bir kısıtı kapı
+# uygular. Kesin bir işlem reddedilirse müdahale kaydedilmez, hata yöneticiye
+# döner. Haber, soru, araştırma, planlı çağrı gibi ayrı türler yoktur,
+# yönetici hepsini mesajın içinde söyler.
 #
-# NOTE: Mesajlar, teklifler ve not defteri yalnızca yönetici mesajı okuyabilen
-# bir stratejiye yapılabilir. Kural stratejisine yalnızca kesin işlem, alarm ve
+# NOTE: Mesaj ve teklif yalnızca yönetici mesajı okuyabilen bir stratejiye
+# yapılabilir. Kural stratejisine yalnızca Şimdi bak, hesap işlemi, alarm ve
 # kesin kısıt uygulanır.
 #
 # NOTE: Bir müdahale stratejiye başarılı bir kararın bağlamında gösterilince
@@ -35,17 +40,15 @@ from ..domain.errors import RuleError
 from ..domain.models import Side, TpLevel
 from ..domain.trading import (Actor, AddToPosition, CancelOrder, CloseAll, ClosePosition, Command, OpenPosition,
                               PlaceOrder, Ref, UpdateProtection)
-from ..storage.journal import JournalRepo
 from ..storage.runtime_state import StateRepo
 from .gate import Restriction, RestrictionSource
 from .limits import Limit, MaxLeverage, MaxMargin, MaxNotional, NoOpen, SideOnly
 from .runner import describe
 
-# Tür ve ağırlık isteyip istemediği. Mesaj türleri yalnızca LLM stratejisinedir.
-KINDS = {"look_now": False, "look_symbol": False, "call_at": False, "news": False, "research": False,
-         "info": False, "question": False, "command": True, "alert": False, "restrict": True,
-         "unrestrict": False, "notebook": True}
-_MESSAGES = {"look_now", "look_symbol", "call_at", "news", "research", "info", "question", "notebook"}
+# Tür ve ağırlık isteyip istemediği. Hesap işleminin ağırlığı seçilmez, her
+# zaman kesin kaydedilir.
+KINDS = {"message": True, "look_now": False, "command": False, "alert": False, "restrict": True,
+         "unrestrict": False}
 _WEIGHTS = ("offer", "firm")
 
 
@@ -125,45 +128,6 @@ def limit_from(spec: dict) -> Limit:
     raise ValueError(f"Bilinmeyen kısıt: {kind}")
 
 
-def _protection(cmd) -> str:
-    parts = []
-    if cmd.tp_levels:
-        parts.append("TP " + ", ".join(f"{k.price:g} yüzde {k.pct:g}" for k in cmd.tp_levels))
-    elif cmd.tp_levels == () and isinstance(cmd, UpdateProtection):
-        parts.append("TP kaldırılsın")
-    if cmd.sl is not None:
-        parts.append(f"SL {cmd.sl:g}" if cmd.sl else "SL kaldırılsın")
-    if cmd.trail_pct is not None:
-        parts.append(f"iz süren stop yüzde {cmd.trail_pct:g}" if cmd.trail_pct else "iz süren stop kaldırılsın")
-    return ", ".join(parts)
-
-
-# Yöneticinin teklifleri stratejiye uygulanmadan, bu cümleyle gider. Anlatım
-# eylem alanlarının adlarını değil işin kendisini söyler.
-def describe_command(cmd: Command) -> str:
-    match cmd:
-        case OpenPosition():
-            extra = _protection(cmd)
-            return f"{cmd.symbol} {cmd.side} {cmd.leverage:g}x {cmd.margin:g} dolar marjinle pozisyon aç" + \
-                (f", {extra}." if extra else ".")
-        case PlaceOrder():
-            extra = _protection(cmd)
-            kind = ", taker" if cmd.taker else ""
-            return (f"{cmd.symbol} {cmd.side} {cmd.trigger:g} tetiğiyle {cmd.leverage:g}x {cmd.margin:g} dolar "
-                    f"marjinli emir ver{kind}" + (f", {extra}." if extra else "."))
-        case CancelOrder():
-            return f"#{cmd.ref.number} {cmd.ref.symbol} {cmd.ref.side} emrini iptal et."
-        case AddToPosition():
-            return f"#{cmd.ref.number} {cmd.ref.symbol} {cmd.ref.side} pozisyonuna {cmd.leverage:g}x {cmd.margin:g} " \
-                   f"dolar marjinle ekleme yap."
-        case ClosePosition():
-            part = "tamamını" if cmd.pct >= 100 else f"yüzde {cmd.pct:g} kadarını"
-            return f"#{cmd.ref.number} {cmd.ref.symbol} {cmd.ref.side} pozisyonunun {part} kapat."
-        case UpdateProtection():
-            return f"#{cmd.ref.number} {cmd.ref.symbol} {cmd.ref.side} pozisyonunda {_protection(cmd) or 'korumayı değiştir'}."
-    return "Bütün pozisyonları kapat ve bütün bekleyen emirleri iptal et."
-
-
 def _row(r: sqlite3.Row) -> dict:
     return {**dict(r), "params": json.loads(r["params"])}
 
@@ -182,16 +146,13 @@ class Interventions:
 
     Args:
         con: Çekirdek veritabanı.
-        journal: Not defterine kesin ek için hafıza deposu.
         state: Alarmların deposu.
         clock: Saat.
         runner: Profil kimliğinden çalıştırıcıyı veren fonksiyon, çalıştırıcı yoksa None.
     """
 
-    def __init__(self, con: sqlite3.Connection, journal: JournalRepo, state: StateRepo, clock: Clock,
-                 runner) -> None:
+    def __init__(self, con: sqlite3.Connection, state: StateRepo, clock: Clock, runner) -> None:
         self.con = con
-        self.journal = journal
         self.state = state
         self.clock = clock
         self.runner = runner
@@ -226,18 +187,9 @@ class Interventions:
         r = self.runner(pid)
         if r is None:
             raise ValueError("Profil taslak ya da arşivlenmiş, müdahale yapılamaz.")
-        if (kind in _MESSAGES or weight == "offer") and not r.strategy.accepts_messages:
-            raise ValueError("Bu profilin stratejisi yönetici mesajı almaz, yalnızca kesin işlem yapılabilir.")
-        if kind == "look_symbol":
-            return {"symbol": _text(params, "symbol")}
-        if kind == "call_at":
-            at = int(params.get("at") or 0)
-            if at <= now:
-                raise ValueError("Çağrı zamanı ileride olmalı.")
-            return {"at": at}
-        if kind == "news":
-            return {"text": _text(params, "text"), "url": str(params.get("url") or "").strip()}
-        if kind in ("research", "info", "question", "notebook"):
+        if (kind == "message" or weight == "offer") and not r.strategy.accepts_messages:
+            raise ValueError("Bu profilin stratejisi yönetici mesajı almaz, yalnızca grafikten işlem yapılabilir.")
+        if kind == "message":
             return {"text": _text(params, "text")}
         if kind == "command":
             command_from(params)
@@ -269,8 +221,9 @@ class Interventions:
         now = self.clock.time()
         params = self._validate(pid, kind, params, weight, now)
         r = self.runner(pid)
-        result, due, ends, delivered = None, None, None, None
-        if kind == "command" and weight == "firm":
+        result, ends, delivered = None, None, None
+        if kind == "command":
+            weight = "firm"
             result = describe(await r.gate.submit(command_from(params), Actor.ADMIN, now))
         elif kind == "alert":
             if params["symbol"] not in r.prices:
@@ -279,16 +232,9 @@ class Interventions:
                              str(Actor.ADMIN), now)
             self.state.add_alert(pid, a)
             result = f"alarm #{a.number} kuruldu."
-        elif kind == "notebook" and weight == "firm":
-            mem = self.journal.memory(pid)
-            current = mem.get("notebook", "")
-            mem["notebook"] = (current + "\n\n" if current else "") + "Yöneticinin notu: " + params["text"]
-            self.journal.set_memory(pid, mem)
         elif kind == "unrestrict":
             with self.con:
                 self.con.execute("UPDATE interventions SET removed_at = ? WHERE id = ?", (now, params["id"]))
-        elif kind == "call_at":
-            due = params["at"]
         elif kind == "restrict":
             ends = params["until"]
         # Mesaj alamayan stratejide müdahale anlatılmaz, kaydedildiği an teslim sayılır.
@@ -296,11 +242,12 @@ class Interventions:
             delivered = now
         with self.con:
             cur = self.con.execute(
-                "INSERT INTO interventions (profile_id, created_at, kind, weight, params, note, call_now, due_at, "
-                "ends_at, delivered_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (pid, now, kind, weight, json.dumps(params, ensure_ascii=False), note.strip(), int(call_now), due,
-                 ends, delivered, result))
-        if call_now and r.strategy.accepts_messages:
+                "INSERT INTO interventions (profile_id, created_at, kind, weight, params, note, call_now, ends_at, "
+                "delivered_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (pid, now, kind, weight, json.dumps(params, ensure_ascii=False), note.strip(), int(call_now or
+                 kind == "look_now"), ends, delivered, result))
+        # Şimdi bak kendisi bir çağrıdır, call_now beklemeden uyandırır.
+        if (call_now or kind == "look_now") and r.strategy.accepts_messages:
             r.wake("admin")
         return self.get(cur.lastrowid)
 
@@ -321,41 +268,22 @@ class Interventions:
             self.con.execute("UPDATE interventions SET withdrawn_at = ? WHERE id = ?", (self.clock.time(), iid))
         return self.get(iid)
 
-    # Zamanı gelen planlı çağrılar bir kez uyandırır, fired_at ikinci kez
-    # uyandırmayı önler. Teslim ayrıca karar başarılı olunca işaretlenir.
-    def tick(self, now: int) -> None:
-        due = self.con.execute("SELECT id, profile_id FROM interventions WHERE kind = 'call_at' AND fired_at IS NULL "
-                               "AND withdrawn_at IS NULL AND due_at <= ?", (now,)).fetchall()
-        for iid, pid in due:
-            with self.con:
-                self.con.execute("UPDATE interventions SET fired_at = ? WHERE id = ?", (now, iid))
-            r = self.runner(pid)
-            if r:
-                r.wake("admin")
-
     # --- Stratejiye anlatım ---
 
+    # Mesaja cevap gerekip gerekmediğini yönetici metnin içinde söyler, bu
+    # yüzden cevap alanı her mesajda hatırlatılır.
     def _body(self, r: dict) -> str:
         k, c, w = r["kind"], r["params"], r["weight"]
+        if k == "message":
+            if w == "firm":
+                return (f"Yöneticinin kesin talimatı: {c['text']} Buna uy. Cevap gerekiyorsa yoneticiye_cevap "
+                        f"alanına yaz.")
+            return (f"Yöneticinin teklifi: {c['text']} Değerlendir, mantıklı bulursan uygula. Cevap gerekiyorsa "
+                    f"yoneticiye_cevap alanına yaz.")
         if k == "look_now":
             return "Yönetici duruma bakmanı istiyor."
-        if k == "look_symbol":
-            return f"Yönetici {c['symbol']} paritesine bakmanı istiyor."
-        if k == "call_at":
-            return "Yönetici seni bu saate çağırmıştı."
-        if k == "news":
-            link = f" Kaynak: {c['url']}" if c.get("url") else ""
-            return f"Yönetici bir haber verdi: {c['text']}.{link} Habere bak, değerlendirmeni yoneticiye_cevap alanına yaz."
-        if k == "research":
-            return f"Yönetici şu konuyu araştırmanı istiyor: {c['text']}. Bulduklarını yoneticiye_cevap alanına yaz."
-        if k == "info":
-            return f"Yönetici bilgi veriyor: {c['text']}"
-        if k == "question":
-            return f"Yönetici soruyor: {c['text']} Cevabını yoneticiye_cevap alanına yaz."
         if k == "command":
-            if w == "firm":
-                return f"Yöneticinin kesin kararı uygulandı: {r['result']}"
-            return f"Yöneticinin teklifi: {describe_command(command_from(c))} Değerlendir, mantıklı bulursan uygula."
+            return f"Yöneticinin kesin kararı uygulandı: {r['result']}"
         if k == "alert":
             return f"Yönetici {c['symbol']} {c['price']:g} seviyesine alarm kurdu. Not: {c['note'] or 'yok'}"
         if k == "restrict":
@@ -364,18 +292,14 @@ class Interventions:
             if w == "firm":
                 return f"Yönetici #{r['id']} numaralı kesin bir kısıt koydu: {text}{until}. Bu kısıtı aşan eylemlerin reddedilir."
             return f"Yöneticinin #{r['id']} numaralı kısıt teklifi: {text}{until}. Değerlendir, mantıklı bulursan uy."
-        if k == "unrestrict":
-            return f"Yönetici #{c['id']} numaralı kısıtı kaldırdı."
-        if w == "firm":
-            return f"Yönetici not defterine şunu ekledi: {c['text']}"
-        return f"Yönetici not defterine şunu eklemeni öneriyor: {c['text']}"
+        return f"Yönetici #{c['id']} numaralı kısıtı kaldırdı."
 
     def feed(self, pid: int) -> tuple[dict[str, list[str]], list[int]]:
         """Stratejiye gidecek yönetici bölümünü ve gösterilecek müdahalelerin kimliklerini döndürür."""
         now = self.clock.time()
         rows = [_row(r) for r in self.con.execute(
             "SELECT * FROM interventions WHERE profile_id = ? AND delivered_at IS NULL AND withdrawn_at IS NULL "
-            "AND (due_at IS NULL OR due_at <= ?) ORDER BY id", (pid, now))]
+            "ORDER BY id", (pid,))]
         items = []
         for r in rows:
             note = f" Yöneticinin açıklaması: {r['note']}" if r["note"] else ""
