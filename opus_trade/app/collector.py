@@ -83,6 +83,9 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    # httpx her isteği INFO seviyesinde yazar. Toplayıcı günde on binlerce
+    # istek attığı için bu satırlar asıl uyarıları günlükte boğardı.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     store = _store(AppConfig.from_env())
     if args.cmd == "run":
         asyncio.run(_run(store))
