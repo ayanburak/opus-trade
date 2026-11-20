@@ -139,6 +139,15 @@ def test_order_coming_to_price_is_maker_and_breakout_is_taker(broker):
     assert entries == [95, pytest.approx(105 * 1.0002)]
 
 
+def test_taker_order_fills_with_slippage_even_when_price_comes_to_it(broker):
+    """Taker girilen emir tetiğe değdiği an piyasa emri gibi dolar, kaymayı ve taker komisyonunu öder."""
+    run(broker, PlaceOrder(SOL, LONG, trigger=95, leverage=10, margin=10, taker=True))
+    broker.on_price(SOL, 100, 94.9, 95, T + 60)
+    p = broker.state().positions[0]
+    assert p.entry_price == pytest.approx(95 * 1.0002)
+    assert p.fee == pytest.approx(p.qty * p.entry_price * FEES.taker)
+
+
 def test_order_that_cannot_open_at_trigger_fails_and_leaves_the_book(broker):
     """Tetik anında nakit yetmiyorsa emir başarısız olur ve bekleyenlerden çıkar, sonsuza kadar tekrar denenmez."""
     run(broker, PlaceOrder(SOL, LONG, trigger=95, leverage=10, margin=60))

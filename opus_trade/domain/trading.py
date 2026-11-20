@@ -186,6 +186,10 @@ class AccountEvent:
 
 # --- Komutlar ---
 
+# PlaceOrder'da taker True ise emir tetiğe değince, tetik hangi tarafta olursa
+# olsun, piyasa emri gibi kaymayla ve taker komisyonuyla dolar. False ise
+# lehe gelen tetik limit emri gibi maker, kırılım tetiği taker sayılır.
+
 @dataclass(frozen=True)
 class OpenPosition:
     symbol: str
@@ -229,6 +233,7 @@ class PlaceOrder:
     sl: float | None = None
     trail_pct: float | None = None
     valid_min: int | None = None
+    taker: bool = False
 
 
 @dataclass(frozen=True)

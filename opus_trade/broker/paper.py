@@ -274,7 +274,7 @@ class PaperBroker(Broker, PriceDriven):
         return self.ledger.insert_order(Order(
             id=0, account_id=self.account_id, number=self.ledger.free_number(self.account_id), symbol=cmd.symbol,
             side=cmd.side, trigger=cmd.trigger, below=cmd.trigger < price,
-            maker=rules.order_is_maker(cmd.side, cmd.trigger, price), leverage=cmd.leverage, margin=cmd.margin,
+            maker=rules.order_is_maker(cmd.side, cmd.trigger, price) and not cmd.taker, leverage=cmd.leverage, margin=cmd.margin,
             tp_levels=tuple(levels), sl=cmd.sl, trail_pct=cmd.trail_pct,
             expires_at=now + cmd.valid_min * 60 if cmd.valid_min else None, created_at=now))
 
