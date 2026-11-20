@@ -1,6 +1,6 @@
 """
 file: analysis.py
-importable: levels, volume_profile, correlation
+importable: Level, levels, VolumeProfile, volume_profile, correlation
 
 Mum listelerinden fiyat yapısı çıkaran hesaplar. levels() tepe ve dipleri
 bulup birbirine yakın olanları destek ve direnç seviyelerinde toplar.
@@ -8,98 +8,112 @@ volume_profile() hacmin hangi fiyat aralıklarında yoğunlaştığını hesapla
 correlation() birden çok paritenin getirileri arasındaki korelasyonu verir.
 Mumlar eskiden yeniye sıralı olmalıdır.
 
-description: Destek ve direnç, hacim profili ve korelasyon hesaplarının yapıldığı modül.
+description: Destek ve direnç, hacim profili ve korelasyon hesapları.
 """
 
 # NOTE: Bu hesaplar yorum yapmaz, yalnızca ölçer. Bir seviyenin önemli olup
-# olmadığına ya da korelasyonun ne anlama geldiğine Opus karar verir.
-#
-# NOTE: Hesaplar indicators.py gibi saf Python'dur. En büyük girdi bin beş
-# yüz mum ve birkaç paritedir, numpy gerekmez.
+# olmadığına strateji karar verir.
 
 import math
+from dataclasses import dataclass
 
-from .indicators import series
+from .indicators import atr
+from .models import Candle
 
 # --- Destek ve direnç ---
 
 
-# Bir mumun yükseği, iki yanındaki window kadar mumun hepsinden büyükse
-# tepe, düşüğü hepsinden küçükse dip sayılır. Son window mum henüz iki
-# yanı da görülmediği için değerlendirilmez.
-def _pivots(candles: list[dict], window: int) -> list[tuple[int, float]]:
+@dataclass(frozen=True)
+class Level:
+    """Bir destek ya da direnç seviyesi.
+
+    Args:
+        price: Seviyedeki uçların ortalaması.
+        touches: Seviyeye düşen tepe ve dip sayısı.
+        first: İlk ucun zamanı.
+        last: Son ucun zamanı.
+    """
+
+    price: float
+    touches: int
+    first: int
+    last: int
+
+
+# Bir mumun yükseği iki yanındaki window kadar mumun hepsinden büyükse tepe,
+# düşüğü hepsinden küçükse dip sayılır. Son window mumun sağ yanı henüz
+# görülmediği için değerlendirilmez.
+def _pivots(candles: list[Candle], window: int) -> list[tuple[int, float]]:
     found = []
     for i in range(window, len(candles) - window):
         around = candles[i - window:i] + candles[i + 1:i + window + 1]
-        if candles[i]["h"] > max(m["h"] for m in around):
-            found.append((candles[i]["t"], candles[i]["h"]))
-        if candles[i]["l"] < min(m["l"] for m in around):
-            found.append((candles[i]["t"], candles[i]["l"]))
+        if candles[i].high > max(m.high for m in around):
+            found.append((candles[i].time, candles[i].high))
+        if candles[i].low < min(m.low for m in around):
+            found.append((candles[i].time, candles[i].low))
     return found
 
 
-def levels(candles: list[dict], window: int = 5) -> list[dict]:
-    """Tepe ve dipleri ATR'nin yarısından yakın olanları birleştirerek seviyelere toplar.
+# Uçlar fiyata göre sıralanır ve grubun ortalamasına yarım ATR'den yakınsa
+# o gruba katılır. Komşu uçla değil ortalamayla karşılaştırmak, birbirine
+# zincirleme yakın uçların çok geniş tek bir seviyeye yayılmasını önler.
+def levels(candles: list[Candle], window: int = 5) -> list[Level]:
+    """Tepe ve dipleri seviyelere toplar, fiyata göre sıralı döndürür.
 
     Args:
-        candles: Eskiden yeniye mumlar, en az elli mum önerilir.
+        candles: Eskiden yeniye mumlar, ATR için en az on beş, anlamlı sonuç için elli kadar.
         window: Bir tepenin ya da dibin iki yanında kaç mumdan uç olması gerektiği.
-
-    Returns:
-        Fiyata göre sıralı seviyeler. Her seviye price, touches, first ve last
-        anahtarlarını taşır. price seviyedeki uçların ortalaması, touches uç
-        sayısı, first ve last ilk ve son ucun zamanıdır.
     """
-    atr = next(v for v in reversed(series("atr", candles)["atr14"]) if v is not None)
-    tolerance = atr / 2
+    known = [v for v in atr(candles) if v is not None]
+    if not known:
+        return []
+    tolerance = known[-1] / 2
     groups: list[list[tuple[int, float]]] = []
-    # Uçlar fiyata göre sıralanır ve grubun ortalamasına yakın olan gruba
-    # katılır. Ortalamayla karşılaştırmak, birbirine zincirleme yakın uçların
-    # çok geniş tek bir seviyeye yayılmasını önler.
     for t, price in sorted(_pivots(candles, window), key=lambda x: x[1]):
         if groups and price - sum(p for _, p in groups[-1]) / len(groups[-1]) <= tolerance:
             groups[-1].append((t, price))
         else:
             groups.append([(t, price)])
-    return [
-        {"price": sum(p for _, p in g) / len(g), "touches": len(g),
-         "first": min(t for t, _ in g), "last": max(t for t, _ in g)}
-        for g in groups
-    ]
+    return [Level(price=sum(p for _, p in g) / len(g), touches=len(g),
+                  first=min(t for t, _ in g), last=max(t for t, _ in g)) for g in groups]
 
 
 # --- Hacim profili ---
 
-def volume_profile(candles: list[dict], buckets: int = 24) -> dict:
-    """Mumların hacmini fiyat kademelerine dağıtır.
-
-    Her mumun hacmi o mumun düşüğü ile yükseği arasındaki kademelere eşit
-    paylaştırılır. Mumun içinde fiyatın nerede ne kadar kaldığı bilinmediği
-    için bu bir yaklaşıktır.
+@dataclass(frozen=True)
+class VolumeProfile:
+    """Hacmin fiyat kademelerine dağılımı.
 
     Args:
-        candles: Eskiden yeniye mumlar.
-        buckets: Fiyat aralığının bölüneceği kademe sayısı.
-
-    Returns:
-        rows, poc, value_low ve value_high anahtarlı sözlük. rows her kademenin
-        low, high ve volume değeridir. poc en çok hacmin olduğu kademenin
-        ortası, value_low ve value_high hacmin yüzde yetmişinin toplandığı
-        aralığın sınırlarıdır.
+        rows: Her kademenin alt sınırı, üst sınırı ve hacmi.
+        poc: En çok hacmin olduğu kademenin ortası.
+        value_low: Hacmin yüzde yetmişinin toplandığı aralığın alt sınırı.
+        value_high: O aralığın üst sınırı.
     """
-    low, high = min(m["l"] for m in candles), max(m["h"] for m in candles)
+
+    rows: list[tuple[float, float, float]]
+    poc: float
+    value_low: float
+    value_high: float
+
+
+# Her mumun hacmi düşüğü ile yükseği arasındaki kademelere eşit paylaştırılır.
+# Mumun içinde fiyatın nerede ne kadar kaldığı bilinmediği için bu bir
+# yaklaşıktır.
+def volume_profile(candles: list[Candle], buckets: int = 24) -> VolumeProfile:
+    low, high = min(m.low for m in candles), max(m.high for m in candles)
     step = (high - low) / buckets or 1
     vols = [0.0] * buckets
     for m in candles:
-        a = min(int((m["l"] - low) / step), buckets - 1)
-        b = min(int((m["h"] - low) / step), buckets - 1)
-        share = m["v"] / (b - a + 1)
+        a = min(int((m.low - low) / step), buckets - 1)
+        b = min(int((m.high - low) / step), buckets - 1)
+        share = m.volume / (b - a + 1)
         for i in range(a, b + 1):
             vols[i] += share
 
-    # Değer alanı en yoğun kademeden başlayıp her adımda iki yanındaki
-    # kademelerden daha yoğun olanı ekleyerek toplam hacmin yüzde yetmişine
-    # ulaşana kadar genişletilir.
+    # Değer alanı en yoğun kademeden başlar ve her adımda iki yanındaki
+    # kademelerden yoğun olanı ekleyerek toplam hacmin yüzde yetmişine
+    # ulaşana kadar genişler.
     top = max(range(buckets), key=vols.__getitem__)
     lo = hi = top
     total, covered = sum(vols), vols[top]
@@ -112,41 +126,14 @@ def volume_profile(candles: list[dict], buckets: int = 24) -> dict:
         else:
             lo -= 1
             covered += vols[lo]
-    return {
-        "rows": [{"low": low + i * step, "high": low + (i + 1) * step, "volume": v} for i, v in enumerate(vols)],
-        "poc": low + (top + 0.5) * step, "value_low": low + lo * step, "value_high": low + (hi + 1) * step,
-    }
+    return VolumeProfile(rows=[(low + i * step, low + (i + 1) * step, v) for i, v in enumerate(vols)],
+                         poc=low + (top + 0.5) * step, value_low=low + lo * step, value_high=low + (hi + 1) * step)
 
 
 # --- Korelasyon ---
 
-def _returns(candles: list[dict]) -> dict[int, float]:
-    return {m["t"]: math.log(m["c"] / p["c"]) for p, m in zip(candles, candles[1:])}
-
-
-def correlation(by_symbol: dict[str, list[dict]]) -> dict[tuple[str, str], tuple[float, int]]:
-    """Paritelerin logaritmik getirileri arasındaki Pearson korelasyonunu hesaplar.
-
-    Getiriler mum zamanına göre eşleştirilir, yalnızca iki paritede de olan
-    mumlar kullanılır. Böylece farklı saatlerde işlem gören varlıklar da
-    karşılaştırılabilir.
-
-    Args:
-        by_symbol: Sembolden mum listesine sözlük.
-
-    Returns:
-        Sembol çiftinden korelasyon ve kullanılan ortak mum sayısına sözlük.
-    """
-    returns = {s: _returns(c) for s, c in by_symbol.items()}
-    names = list(returns)
-    out = {}
-    for i, a in enumerate(names):
-        for b in names[i + 1:]:
-            common = sorted(returns[a].keys() & returns[b].keys())
-            x = [returns[a][t] for t in common]
-            y = [returns[b][t] for t in common]
-            out[(a, b)] = (_pearson(x, y), len(common))
-    return out
+def _returns(candles: list[Candle]) -> dict[int, float]:
+    return {m.time: math.log(m.close / p.close) for p, m in zip(candles, candles[1:])}
 
 
 def _pearson(x: list[float], y: list[float]) -> float:
@@ -158,3 +145,25 @@ def _pearson(x: list[float], y: list[float]) -> float:
     vx = sum((a - mx) ** 2 for a in x)
     vy = sum((b - my) ** 2 for b in y)
     return cov / math.sqrt(vx * vy) if vx and vy else float("nan")
+
+
+# Getiriler mum zamanına göre eşleştirilir ve yalnızca iki paritede de olan
+# mumlar kullanılır. Böylece altın gibi hafta sonu işlem görmeyen bir varlık
+# da kripto paritelerle karşılaştırılabilir.
+def correlation(by_symbol: dict[str, list[Candle]]) -> dict[tuple[str, str], tuple[float, int]]:
+    """Paritelerin logaritmik getirileri arasındaki Pearson korelasyonunu hesaplar.
+
+    Args:
+        by_symbol: Sembolden mum listesine sözlük.
+
+    Returns:
+        Sembol çiftinden korelasyon ve kullanılan ortak mum sayısına sözlük. Ortak mum üçten azsa korelasyon nan.
+    """
+    returns = {s: _returns(c) for s, c in by_symbol.items()}
+    names = list(returns)
+    out = {}
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            common = sorted(returns[a].keys() & returns[b].keys())
+            out[(a, b)] = (_pearson([returns[a][t] for t in common], [returns[b][t] for t in common]), len(common))
+    return out
