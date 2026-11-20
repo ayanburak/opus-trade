@@ -14,7 +14,8 @@ description: Opus'un ihtiyaç duyduğu piyasa ve geçmiş verisini kendisinin se
 # NOTE: Veritabanları salt okunur açılır, Opus bu araçlarla hesabı
 # değiştiremez. Hangi dosyaların okunacağını LLM stratejisi ortam
 # değişkenleriyle bildirir: OPUS_MARKET_DB toplayıcının deposu, OPUS_CORE_DB
-# çekirdeğin deposu, OPUS_ACCOUNT profilin hesap kimliği.
+# çekirdeğin deposu, OPUS_ACCOUNT profilin hesap kimliği, OPUS_PROFILE profilin
+# kimliği.
 #
 # NOTE: Araç çıktıları JSON yerine sıkı metin olarak döner. Aynı bilgi bu
 # biçimde daha az token tutar ve Opus için okuması aynı derecede kolaydır.
@@ -23,9 +24,9 @@ description: Opus'un ihtiyaç duyduğu piyasa ve geçmiş verisini kendisinin se
 # görür. Bu yüzden araç fonksiyonlarının adları, parametreleri ve
 # docstring'leri kodun geri kalanından farklı olarak Türkçedir.
 #
-# TODO: gecmis_kararlarim aracı çalıştırıcının karar günlüğü kurulunca eklenir.
 
 import asyncio
+import json
 import math
 import os
 import sqlite3
@@ -447,6 +448,35 @@ def _trades(limit: int):
     finally:
         con.close()
     return list(reversed(found))[:limit]
+
+
+@server.tool()
+def gecmis_kararlarim(adet: int = 20, atla: int = 0, analiz_dahil: bool = False) -> str:
+    """Kendi geçmiş kararlarını yeniden eskiye getirir.
+
+    Args:
+        adet: Bir ile yüz arası.
+        atla: En yeni kaç kararın atlanacağı. Daha eski kararlara sayfa sayfa ulaşmak için.
+        analiz_dahil: True ise her kararın tam analiz metni de gelir.
+    """
+    con = sqlite3.connect(f"file:{os.environ['OPUS_CORE_DB']}?mode=ro", uri=True)
+    try:
+        rows = con.execute("SELECT time, results, record FROM journal WHERE profile_id = ? AND error IS NULL "
+                           "ORDER BY id DESC LIMIT ? OFFSET ?",
+                           (int(os.environ["OPUS_PROFILE"]), _clamp(adet, 1, 100), max(0, atla))).fetchall()
+    finally:
+        con.close()
+    parts = []
+    for t, results, record in rows:
+        k = json.loads(record).get("decision")
+        if not k:
+            continue
+        done = "; ".join(x["message"] for x in json.loads(results)) or "eylem yok"
+        text = f"{_clock(t)}, görüş {k['gorus']}, güven {k['guven']}\n  özet: {k['ozet']}\n  sonuç: {done}"
+        if analiz_dahil:
+            text += f"\n  analiz: {k['analiz']}"
+        parts.append(text)
+    return "\n\n".join(parts) or "Kayıtlı karar yok."
 
 
 @server.tool()

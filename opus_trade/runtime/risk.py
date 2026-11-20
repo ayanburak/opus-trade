@@ -21,14 +21,13 @@ description: Hesabın günlük zarar sınırı, acil durdurması ve sabit risk s
 # iştir.
 
 from datetime import datetime, time
-from zoneinfo import ZoneInfo
 
-from ..domain.clock import Clock
+from ..domain.clock import HOME_TZ, Clock
 from ..domain.trading import AccountState, Command, RISKY
 from ..storage.ledger import Ledger
 from .limits import Limit, breach
 
-DAY_TZ = ZoneInfo("Europe/Istanbul")
+DAY_TZ = HOME_TZ
 
 
 class RiskGuard:

@@ -29,7 +29,7 @@ def test_tool_list_is_complete():
     names = {t.name for t in asyncio.run(tools.server.list_tools())}
     assert names == {"mumlar", "gostergeler_hesapla", "emir_defteri", "fonlama_gecmisi", "acik_pozisyon_gecmisi",
                      "long_short_oranlari", "gosterge", "seviyeler", "hacim_profili", "korelasyon", "likidasyonlar",
-                     "ny_acilisi", "acilis_gecmisi", "gecmis_islemlerim", "cikis_karnesi"}
+                     "ny_acilisi", "acilis_gecmisi", "gecmis_kararlarim", "gecmis_islemlerim", "cikis_karnesi"}
 
 
 def test_liquidations_tool_reads_the_collector_store(tmp_path, monkeypatch):

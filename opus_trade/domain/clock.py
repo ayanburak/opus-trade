@@ -1,6 +1,6 @@
 """
 file: clock.py
-importable: Clock, SystemClock
+importable: Clock, SystemClock, HOME_TZ
 
 Clock zamanın tek kaynağıdır. Saate ihtiyaç duyan her parça onu yapıcısından
 alır ve time modülünü doğrudan çağırmaz. now() saat dilimi UTC olan bir an,
@@ -17,6 +17,11 @@ description: Programın ve testlerin aynı arayüzle kullandığı saat.
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+# Kullanıcıya ve Opus'a gösterilen saatlerin ve günlük zarar sınırının
+# gününün dilimi. Sunucunun saati UTC'dir, bu dilim ondan bağımsızdır.
+HOME_TZ = ZoneInfo("Europe/Istanbul")
 
 
 class Clock(ABC):

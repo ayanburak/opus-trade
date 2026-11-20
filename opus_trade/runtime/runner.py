@@ -107,14 +107,16 @@ class ProfileRunner:
         history: Stratejiye verilen son karar sayısı.
         retry_s: Hatalı bir karardan sonra yeniden denemeye kadar geçen süre.
         max_corrections: Arka arkaya en fazla düzeltme çağrısı.
-        admin: Yönetici bölümünün satırlarını veren fonksiyon.
+        feed: Yönetici bölümünü ve gösterilecek müdahalelerin kimliklerini veren fonksiyon.
+        delivered: Başarılı bir karardan sonra gösterilen müdahalelerin kimlikleriyle çağrılır.
     """
 
     def __init__(self, profile: Profile, version: Version, strategy: Strategy, broker: Broker, gate: Gate,
                  triggers: list[Trigger], alerts: PriceAlerts, ledger: Ledger, journal: JournalRepo,
                  state: StateRepo, market: MarketData, clock: Clock, bus: EventBus, access: ModelAccess,
                  lock: asyncio.Lock, history: int = 8, retry_s: int = 600, max_corrections: int = 2,
-                 admin: Callable[[], dict] | None = None) -> None:
+                 feed: Callable[[], tuple[dict, list[int]]] | None = None,
+                 delivered: Callable[[list[int]], None] | None = None) -> None:
         self.profile = profile
         self.version = version
         self.strategy = strategy
@@ -133,7 +135,8 @@ class ProfileRunner:
         self.history = history
         self.retry_s = retry_s
         self.max_corrections = max_corrections
-        self.admin = admin or (lambda: {})
+        self.feed = feed or (lambda: ({}, []))
+        self.delivered = delivered or (lambda ids: None)
         self.prices: dict[str, float] = {}
         self.busy = False
         self.retry_at = 0
@@ -286,13 +289,13 @@ class ProfileRunner:
 
     # --- Karar ---
 
-    def _context(self, wakes: list[Wake], now: int) -> Context:
+    def _context(self, wakes: list[Wake], now: int, admin: dict) -> Context:
         trades = self.ledger.trades(self.broker.account_id)
         nets = [t.net for t in trades]
         return Context(now=now, wakes=wakes, state=self.broker.state(), prices=dict(self.prices),
                        symbols=self.symbols, market=self.market, memory=self.journal.memory(self.pid),
                        history=self.journal.recent(self.pid, self.history),
-                       admin=self.admin() if self.strategy.accepts_messages else {},
+                       admin=admin,
                        alerts=self.alerts.alerts,
                        stats={"count": len(nets), "wins": sum(1 for n in nets if n > 0), "net": sum(nets),
                               "fee": sum(t.fee for t in trades)},
@@ -328,8 +331,9 @@ class ProfileRunner:
         now = self.clock.time()
         stored = [{"kind": w.kind, "time": w.time, "data": wake_codec.encode(w.data) if w.kind != "correction"
                    else None} for w in wakes]
+        admin, shown = self.feed() if self.strategy.accepts_messages else ({}, [])
         try:
-            d = await self.strategy.decide(self._context(wakes, now))
+            d = await self.strategy.decide(self._context(wakes, now, admin))
         except Exception as e:
             text = str(e) or type(e).__name__
             limited = self.access.report_error(text)
@@ -341,6 +345,7 @@ class ProfileRunner:
             log.warning("[%s] Karar alınamadı: %s", self.profile.short, text)
             return
         self.state.drop_wakes(ids)
+        self.delivered(shown)
         results = await self._apply(d, now)
         if d.memory:
             self.journal.set_memory(self.pid, d.memory)

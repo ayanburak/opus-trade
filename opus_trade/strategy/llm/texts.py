@@ -19,12 +19,12 @@ description: Opus'a giden metinlerin biçim ve cümle yardımcıları.
 # sürümü de artırılır.
 
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
+from ...domain.clock import HOME_TZ
 from ...domain.trading import AccountEvent, EventKind
 from ...triggers.base import Fire
 
-TZ = ZoneInfo("Europe/Istanbul")
+TZ = HOME_TZ
 TZ_LABEL = "Türkiye saati, UTC+3"
 MONTHS = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım",
           "Aralık")

@@ -69,6 +69,9 @@ class Supervisor(StreamListener):
         catalog: Parite kuralları.
         fees: Kâğıt hesapların komisyon oranları.
         deps: Bir profil için strateji bağımlılıklarını kuran fonksiyon.
+
+    interventions kurulumdan sonra verilir, çünkü müdahaleler de çalıştırıcılara
+    Supervisor üzerinden ulaşır.
     """
 
     def __init__(self, repo: ProfileRepo, ledger: Ledger, journal: JournalRepo, state: StateRepo,
@@ -87,8 +90,10 @@ class Supervisor(StreamListener):
         self.fees = fees
         self.deps = deps
         self.runners: dict[int, ProfileRunner] = {}
+        self.interventions = None
         self._locks: dict[int, asyncio.Lock] = {}
         self._failing: set[int] = set()
+        self._background: set[asyncio.Task] = set()
 
     # --- Kurulum ---
 
@@ -106,7 +111,8 @@ class Supervisor(StreamListener):
         if "max_notional" in cfg.risk:
             limits.append(MaxNotional(cfg.risk["max_notional"]))
         guard = RiskGuard(self.ledger, self.clock, limits, cfg.risk.get("daily_loss"))
-        gate = Gate(broker, self.bus, guard)
+        iv = self.interventions
+        gate = Gate(broker, self.bus, guard, iv.restriction_source(p.id) if iv else None)
         triggers = []
         for t in cfg.triggers:
             spec = dict(t)
@@ -115,7 +121,8 @@ class Supervisor(StreamListener):
         alerts.load(self.state.alerts(p.id))
         lock = self._locks.setdefault(p.id, asyncio.Lock())
         return ProfileRunner(p, v, strategy, broker, gate, triggers, alerts, self.ledger, self.journal, self.state,
-                             self.market, self.clock, self.bus, self.access, lock)
+                             self.market, self.clock, self.bus, self.access, lock,
+                             feed=(lambda: iv.feed(p.id)) if iv else None, delivered=iv.delivered if iv else None)
 
     def refresh(self, profile_id: int) -> None:
         """Bir profilin çalıştırıcısını son haline göre kurar, değiştirir ya da kaldırır."""
@@ -133,13 +140,18 @@ class Supervisor(StreamListener):
         r.start(old.profile.state if old else None)
         self._watch()
 
-    # Akışın dinlediği pariteler çalışan bütün çalıştırıcıların paritelerinin birleşimidir.
+    # Akışın dinlediği pariteler çalışan bütün çalıştırıcıların paritelerinin
+    # birleşimidir. asyncio görevlere yalnızca zayıf referans tutar, referansı
+    # saklanmayan bir görev çalışmadan çöpe gidebilir, bu yüzden görev bitene
+    # kadar _background'da durur. Döngü yokken, örneğin testlerde, abonelik atlanır.
     def _watch(self) -> None:
         symbols = {s for r in self.runners.values() for s in r.symbols}
         try:
-            asyncio.get_running_loop().create_task(self.stream.watch(symbols))
+            task = asyncio.get_running_loop().create_task(self.stream.watch(symbols))
         except RuntimeError:
-            pass
+            return
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     # --- Akış ---
 
@@ -175,6 +187,11 @@ class Supervisor(StreamListener):
     async def _ticker(self) -> None:
         while True:
             now = self.clock.time()
+            if self.interventions:
+                try:
+                    self.interventions.tick(now)
+                except Exception:
+                    log.exception("Planlı yönetici çağrıları işlenemedi.")
             for pid, r in list(self.runners.items()):
                 self._guard(pid, lambda r=r: r.tick(now))
             await asyncio.sleep(1)
