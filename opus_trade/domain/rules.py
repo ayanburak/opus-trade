@@ -2,7 +2,7 @@
 file: rules.py
 importable: TOLERANCE, slipped, round_qty, min_notional, liq_price, unrealized_pnl, funding_payment,
             order_is_maker, check_leverage, check_sl, check_trail, trail_level, trailed_sl,
-            check_tp_levels, split_tp, size
+            check_tp_levels, split_tp, size, close_fill
 
 Binance USDⓈ-M vadelinin izole marjinli hesap kuralları, saf fonksiyonlar
 olarak. Hiçbiri durum tutmaz, veritabanına ya da ağa dokunmaz. Kâğıt broker
@@ -244,3 +244,27 @@ def size(spec: SymbolSpec, leverage: float, margin: float, entry: float, fee_rat
             f"büyüklük {qty * entry:.2f} dolar oluyor. {leverage:g}x kaldıraçla en az "
             f"{smallest / leverage:.2f} dolar marjin gerekir.")
     return Sizing(qty, qty * entry / leverage, qty * entry * fee_rate)
+
+
+# --- Kapanış ---
+
+# Maker kapanış, yani TP kademesi, tam seviyesinden ve kaymasız gerçekleşir.
+# Diğer kapanışlar kayma yer: long'un kapanışı satıştır, short'unki alış.
+def close_fill(spec: SymbolSpec, side: Side, entry: float, qty: float, price: float, maker: bool,
+               fee_rate: float) -> tuple[float, float, float]:
+    """Bir kapanışın gerçekleşen fiyatını, fiyat kârını ve kapanış komisyonunu döndürür.
+
+    Args:
+        spec: Paritenin kuralları.
+        side: Pozisyonun yönü.
+        entry: Pozisyonun ortalama giriş fiyatı.
+        qty: Kapanan miktar.
+        price: Kapanış seviyesi ya da piyasa fiyatı.
+        maker: Kapanış maker ise True.
+        fee_rate: Kapanışın komisyon oranı.
+
+    Returns:
+        Gerçekleşen fiyat, fonlama hariç fiyat kârı ve komisyon.
+    """
+    exit_ = price if maker else slipped(spec, price, buy=side is Side.SHORT)
+    return exit_, (exit_ - entry) * qty * side.sign, qty * exit_ * fee_rate

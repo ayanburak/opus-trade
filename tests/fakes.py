@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from opus_trade.domain.clock import Clock
 from opus_trade.market.models import LongShortRatio, OpenInterest, Premium, TakerVolume
-from opus_trade.market.source import MarketData, MarketDataError, RatioKind
+from opus_trade.market.source import MarketData, MarketDataError
 
 
 class FakeClock(Clock):
