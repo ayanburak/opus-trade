@@ -27,6 +27,7 @@ description: Opus'un ihtiyaç duyduğu piyasa ve geçmiş verisini kendisinin se
 
 import asyncio
 import json
+import logging
 import math
 import os
 import sqlite3
@@ -45,6 +46,9 @@ from ..strategy.llm.cards import indicator_summary, LABELS
 from ..strategy.llm.texts import REASONS, local
 
 server = MCPServer("piyasa")
+
+# httpx her isteği INFO seviyesinde yazar, araç sunucusunun çıktısını boğmasın.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _INTERVALS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
 _PERIODS = ("5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d")

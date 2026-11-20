@@ -11,11 +11,13 @@ description: runtime.profiles, runtime.runner ve runtime.supervisor için birim 
 """
 
 import asyncio
+from datetime import datetime
 
 import pytest
 
 from opus_trade import plugins
 from opus_trade.domain.catalog import Catalog
+from opus_trade.domain.clock import HOME_TZ
 from opus_trade.domain.fees import BINANCE_STANDARD
 from opus_trade.domain.models import Side, TpLevel
 from opus_trade.domain.profile import ProfileConfig, State
@@ -193,13 +195,16 @@ def test_model_closed_holds_wakes_and_releases_them_together(tmp_path):
 
 
 def test_failed_decision_keeps_wakes_and_waits_before_retrying(tmp_path):
-    """Hata veren karar uyandırmaları kaybetmez ama her saniye yeniden denenip limiti eritmez."""
+    """Hata veren karar uyandırmaları kaybetmez ama her saniye yeniden denenip limiti eritmez. Limit hatasındaki
+    yenilenme saati panele öneri olarak geçer."""
     w = World(tmp_path)
-    Scripted.fail = ["You've hit your limit"]
+    Scripted.fail = ["You've hit your 5-hour limit · resets 6:40am (Europe/Istanbul)"]
     p, r = w.running()
     go(w.step(r))
     go(w.step(r, 1))
-    assert len(Scripted.seen) == 1 and w.access.warning() is not None
+    assert len(Scripted.seen) == 1
+    suggested = datetime.fromtimestamp(w.access.warning()["suggested_until"], HOME_TZ)
+    assert (suggested.hour, suggested.minute) == (6, 40) and suggested.timestamp() > T
     go(w.step(r, 600))
     assert len(Scripted.seen) == 2 and Scripted.seen[1].wakes[0].kind == "start"
 
