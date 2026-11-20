@@ -20,6 +20,11 @@ description: Herkese açık siteyi ve admin panelini sunan servisin kuruluş nok
 # Böylece public kod admin kodunu hiç anmaz ve public depo kendi başına
 # yalnızca herkese açık siteyle çalışır.
 #
+# TODO: Kapanışta açık canlı akışlar SHUTDOWN_S sonunda kesilir ve uvicorn
+# her biri için günlüğe ERROR ve iz yazar. İşlevsel bir sorun değil ama her
+# yayında günlükte sahte hata görünür. Akışlar kapanış sinyalini dinleyip
+# kendileri bitmeli.
+#
 # NOTE: Giriş kontrolü bu serviste değildir. Admin soketine nginx yalnızca
 # admin merkezinin yetki kontrolünden geçen isteği aktarır.
 
@@ -54,9 +59,16 @@ def load_factory(spec: str) -> Callable:
         raise SystemExit(f"Admin uygulaması yüklenemedi: {e}") from None
 
 
+# Canlı akış bağlantıları hiç kendiliğinden bitmez. Kapanışta en fazla
+# SHUTDOWN_S beklenir, yoksa açık bir panel sekmesi servisin durmasını
+# systemd'nin zaman aşımına kadar uzatırdı.
+SHUTDOWN_S = 5
+
+
 def _server(app, sock) -> uvicorn.Server:
     sock.unlink(missing_ok=True)
-    server = uvicorn.Server(uvicorn.Config(app, uds=str(sock), log_level="warning"))
+    server = uvicorn.Server(uvicorn.Config(app, uds=str(sock), log_level="warning",
+                                           timeout_graceful_shutdown=SHUTDOWN_S))
     server.install_signal_handlers = lambda: None
     return server
 

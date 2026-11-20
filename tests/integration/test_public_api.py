@@ -171,7 +171,8 @@ async def test_candles_only_for_profile_symbols(api):
 
 @run
 async def test_hub_filters_events_and_limits_clients(api):
-    """Akışta yalnızca yayındaki profilin olayları gider. Bildirim, başka profil ve yöneticinin alarmı gitmez. Sınır doluysa 503 döner."""
+    """Akışta yalnızca yayındaki profilin olayları ve paritelerinin mumları gider. Bildirim, başka profil ve yöneticinin
+    alarmı gitmez. Sınır doluysa 503 döner."""
     pid, _ = await api.running(ECHO)
     other, _ = await api.running(ECHO)
     await publish(api, pid)
@@ -192,11 +193,14 @@ async def test_hub_filters_events_and_limits_clients(api):
                  {"profile": pid, "fire": {"kind": "alert", "data": {"actor": "admin"}}},
                  {"profile": pid, "decide_error": "ornek@posta.com", "limit": False},
                  {"profile": other, "journal": 1},
+                 {"candle": {"symbol": "BTCUSDT", "close": 1}, "closed": False},
                  {"profile": pid, "journal": 7},
+                 {"candle": {"symbol": SOL, "close": 2}, "closed": True},
                  {"account_event": {"account_id": accounts[pid], "kind": "opened"}}):
         upstream.put_nowait(item)
-    got = [await asyncio.wait_for(q.get(), 1) for _ in range(2)]
-    assert got == [{"profile": pid, "journal": 7}, {"account_event": {"account_id": accounts[pid], "kind": "opened"}}]
+    got = [await asyncio.wait_for(q.get(), 1) for _ in range(3)]
+    assert got == [{"profile": pid, "journal": 7}, {"candle": {"symbol": SOL, "close": 2}, "closed": True},
+                   {"account_event": {"account_id": accounts[pid], "kind": "opened"}}]
     assert q.empty()
     hub.leave(q)
     assert hub._task is None

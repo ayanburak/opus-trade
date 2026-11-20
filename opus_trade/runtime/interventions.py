@@ -100,6 +100,8 @@ def command_from(spec: dict) -> Command:
                 return CloseAll()
     except KeyError as k:
         raise ValueError(f"{k.args[0]} alanı eksik.") from None
+    except TypeError:
+        raise ValueError("Komutun alanlarından biri yanlış biçimde, örneğin tp_levels price ve pct taşıyan bir liste olmalı.") from None
     raise ValueError(f"Bilinmeyen komut: {spec.get('type')}")
 
 
@@ -194,9 +196,15 @@ class Interventions:
         if kind == "command":
             command_from(params)
             return params
+        # Alarmda cancel bir numaradır. Yalnız verilirse o alarm kalkar, fiyatla
+        # birlikte verilirse alarm taşınır: eskisi kalkar, yenisi kurulur.
         if kind == "alert":
-            return {"symbol": _text(params, "symbol"), "price": float(params.get("price") or 0),
-                    "note": str(params.get("note") or "")}
+            cancel = int(params["cancel"]) if params.get("cancel") is not None else None
+            price = float(params.get("price") or 0)
+            if cancel is not None and not price:
+                return {"cancel": cancel}
+            return {"symbol": _text(params, "symbol"), "price": price, "note": str(params.get("note") or ""),
+                    "cancel": cancel}
         if kind == "restrict":
             limit_from(params.get("limit") or {})
             until = params.get("until")
@@ -226,12 +234,23 @@ class Interventions:
             weight = "firm"
             result = describe(await r.gate.submit(command_from(params), Actor.ADMIN, now))
         elif kind == "alert":
-            if params["symbol"] not in r.prices:
+            old = params.get("cancel")
+            if old is not None and old not in {a.number for a in r.alerts.alerts}:
+                raise ValueError(f"#{old} numaralı alarm yok.")
+            if "price" in params and params["symbol"] not in r.prices:
                 raise RuleError(f"{params['symbol']} fiyatı henüz gelmedi.")
-            a = r.alerts.add(params["symbol"], params["price"], r.prices[params["symbol"]], params["note"],
-                             str(Actor.ADMIN), now)
-            self.state.add_alert(pid, a)
-            result = f"alarm #{a.number} kuruldu."
+            # Yeni seviye önce denenir, geçersizse eski alarm yerinde kalır.
+            a = None
+            if "price" in params:
+                a = r.alerts.add(params["symbol"], params["price"], r.prices[params["symbol"]], params["note"],
+                                 str(Actor.ADMIN), now)
+            if old is not None:
+                r.alerts.cancel(old)
+                self.state.resolve_alert(pid, old, "cancelled", now)
+            if a is not None:
+                self.state.add_alert(pid, a)
+            result = (f"alarm #{old} kaldırıldı." if a is None else f"alarm #{a.number} kuruldu."
+                      if old is None else f"alarm #{old} kaldırıldı, yerine alarm #{a.number} kuruldu.")
         elif kind == "unrestrict":
             with self.con:
                 self.con.execute("UPDATE interventions SET removed_at = ? WHERE id = ?", (now, params["id"]))
@@ -285,7 +304,10 @@ class Interventions:
         if k == "command":
             return f"Yöneticinin kesin kararı uygulandı: {r['result']}"
         if k == "alert":
-            return f"Yönetici {c['symbol']} {c['price']:g} seviyesine alarm kurdu. Not: {c['note'] or 'yok'}"
+            if "price" not in c:
+                return f"Yönetici #{c['cancel']} numaralı alarmı kaldırdı."
+            moved = f"#{c['cancel']} numaralı alarmı kaldırıp " if c.get("cancel") is not None else ""
+            return f"Yönetici {moved}{c['symbol']} {c['price']:g} seviyesine alarm kurdu. Not: {c['note'] or 'yok'}"
         if k == "restrict":
             text = limit_from(c["limit"]).text()
             until = f", {_clock(c['until'])} saatine kadar" if c.get("until") else ", kaldırılana kadar"

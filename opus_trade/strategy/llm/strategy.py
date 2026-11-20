@@ -120,4 +120,5 @@ STRATEGIES.register(
      Param("step_limit", "int", "Araç adımı sınırı", default=25, low=1, high=100),
      Param("timeout_s", "int", "Çağrı süresi sınırı, saniye", default=600, low=60, high=3600)),
     _build,
+    LLMStrategy,
 )

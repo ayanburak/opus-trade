@@ -14,3 +14,9 @@ archive/
 
 # Büyük değişikliklerden önce alınan elle yedekler.
 .yedek/
+
+# Herkese açık sayfanın bağımlılıkları ve derlenmiş hali. Derleme yayında
+# yerelde yapılır, depoya girmez.
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo

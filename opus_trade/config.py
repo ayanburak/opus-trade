@@ -15,6 +15,9 @@ description: Ortam değişkenlerinden okunan program ayarları.
 # benzeyen bir yere yazdırabilirdi. Sunucuda ayrı bir durum klasörü, yerel
 # denemelerde geçici bir klasör verilir. OPUS_CORE_SOCKET çekirdeğin kontrol
 # API'sinin Unix soketidir, verilmezse çekirdek API açmadan çalışır.
+# OPUS_COLLECTOR_SOCKET toplayıcının soketidir, verilmezse toplayıcı uç
+# açmadan yalnızca veri toplar. opus-web'deki admin paneli aynı değişkenle
+# bu sokete bağlanır.
 
 import os
 from dataclasses import dataclass
@@ -25,6 +28,7 @@ from pathlib import Path
 class AppConfig:
     state_dir: Path
     core_socket: Path | None = None
+    collector_socket: Path | None = None
 
     @property
     def market_db(self) -> Path:
@@ -53,8 +57,9 @@ class AppConfig:
         state = env.get("OPUS_STATE")
         if not state:
             raise SystemExit("OPUS_STATE verilmedi. Verinin yazılacağı klasör bu değişkenle verilir.")
-        sock = env.get("OPUS_CORE_SOCKET")
-        return cls(state_dir=Path(state), core_socket=Path(sock) if sock else None)
+        sock, coll = env.get("OPUS_CORE_SOCKET"), env.get("OPUS_COLLECTOR_SOCKET")
+        return cls(state_dir=Path(state), core_socket=Path(sock) if sock else None,
+                   collector_socket=Path(coll) if coll else None)
 
 
 # opus-web veriye hiç dokunmaz, OPUS_STATE istemez. Her şeyi çekirdeğin

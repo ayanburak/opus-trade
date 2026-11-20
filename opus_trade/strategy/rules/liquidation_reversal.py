@@ -112,4 +112,5 @@ STRATEGIES.register(
      Param("sl_range", "float", "SL'nin dalga ucundan uzaklığı, aralığın oranı", default=0.5, low=0, high=5),
      Param("hold_min", "int", "En uzun tutma süresi, dakika", default=60, low=1, high=10080)),
     lambda deps, **p: LiquidationReversal(**p),
+    LiquidationReversal,
 )

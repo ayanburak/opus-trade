@@ -1,10 +1,11 @@
 """
 file: base.py
-importable: Broker, PriceDriven
+importable: Broker, PriceDriven, Preview
 
 Broker bir hesabın soyut sınıfıdır. state() hesabın o anki halini döndürür,
 execute() bir komutu uygular ve olan değişiklikleri AccountEvent olarak
-döndürür, kurala aykırı komutta RuleError fırlatır. Kapı, strateji ve admin
+döndürür, kurala aykırı komutta RuleError fırlatır. preview() bir giriş
+komutunu hesaba dokunmadan aynı kurallardan geçirir ve tahmini sonucunu verir. Kapı, strateji ve admin
 paneli yalnızca bunu bilir, hesabın kâğıt mı canlı mı olduğunu bilmez.
 
 PriceDriven fiyat ve fonlamayla kendi kendine işleyen hesaplar içindir:
@@ -19,8 +20,22 @@ description: Broker ve fiyatla işleyen hesap için soyut sınıflar.
 # atar. Kâğıt broker'ın beklediği bir şey yoktur ama aynı imzayı taşır.
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
-from ..domain.trading import AccountEvent, AccountState, Actor, Command
+from ..domain.trading import AccountEvent, AccountState, Actor, Command, OpenPosition, PlaceOrder
+
+
+@dataclass(frozen=True)
+class Preview:
+    """Bir girişin tahmini. Emirde giriş tetik fiyatıdır, nakit bugünkü nakittir."""
+
+    entry: float
+    qty: float
+    notional: float
+    margin: float
+    fee: float
+    liq_price: float
+    cash_after: float
 
 
 class Broker(ABC):
@@ -36,6 +51,14 @@ class Broker(ABC):
 
         Raises:
             RuleError: Komut hesap kurallarına aykırıysa ya da gösterdiği kayıt artık yoksa.
+        """
+
+    @abstractmethod
+    def preview(self, cmd: OpenPosition | PlaceOrder) -> Preview:
+        """Giriş komutunu uygulamadan execute() ile aynı kurallardan geçirir ve tahmini sonucunu döndürür.
+
+        Raises:
+            RuleError: Komut hesap kurallarına aykırıysa.
         """
 
 

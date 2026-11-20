@@ -1,6 +1,6 @@
 """
 file: client.py
-importable: LLMRequest, LLMResult, LLMError, LLMClient, ClaudeCliClient, RESEARCHER
+importable: LLMRequest, LLMResult, LLMError, LLMClient, ClaudeCliClient, BUILTIN_TOOLS, RESEARCHER
 
 LLMClient bir istemi modele gönderip şemaya uyan kararı döndüren parçanın
 soyut sınıfıdır. ClaudeCliClient onu Burak'ın Claude aboneliğinden claude
@@ -35,6 +35,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+# Opus'un piyasa araçları dışında kullanabildiği yerleşik araçlar. Agent
+# araştırmacıyı çağırmak içindir. Kontrol API'si de listeyi buradan okur.
+BUILTIN_TOOLS = ("WebSearch", "WebFetch", "Agent")
 
 # Ajanın adı Opus'a görünür, Agent aracını bu adla çağırır.
 RESEARCHER = {
@@ -171,8 +175,8 @@ class ClaudeCliClient(LLMClient):
             "--strict-mcp-config",
             "--mcp-config", json.dumps({"mcpServers": servers}),
             "--agents", json.dumps(RESEARCHER, ensure_ascii=False),
-            "--tools", "WebSearch,WebFetch,Agent",
-            "--allowedTools", "WebSearch,WebFetch,Agent,mcp__piyasa",
+            "--tools", ",".join(BUILTIN_TOOLS),
+            "--allowedTools", ",".join((*BUILTIN_TOOLS, "mcp__piyasa")),
             "--permission-mode", "dontAsk",
             "--max-turns", str(req.max_turns),
             "--system-prompt", req.system,

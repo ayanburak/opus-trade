@@ -87,7 +87,8 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
     service = ProfileService(repo, ledger, journal, catalog, clock, sup.refresh)
     notes = NotificationRepo(con)
     notifier = Notifier(bus, notes, repo, journal, clock, [PanelChannel(bus)])
-    return Core(repo, ledger, journal, state, service, sup, iv, access, bus, catalog, clock, notes, notifier)
+    return Core(repo, ledger, journal, state, service, sup, iv, access, bus, catalog, clock, notes, notifier,
+                CollectorWatch(cfg.market_db, bus))
 
 
 async def _watch_collector(watch: CollectorWatch, clock: Clock) -> None:
@@ -110,12 +111,15 @@ async def _main(cfg: AppConfig) -> None:
         # Arka plan görevleri kapanışta iptal edilir, sunucu ise should_exit ile
         # süren isteklerini bitirip kendisi kapanır.
         background = [asyncio.create_task(core.supervisor.run()), asyncio.create_task(core.notifier.run()),
-                      asyncio.create_task(_watch_collector(CollectorWatch(cfg.market_db, core.bus), core.clock))]
+                      asyncio.create_task(_watch_collector(core.collector, core.clock))]
         tasks = list(background)
         server = None
         if cfg.core_socket:
             cfg.core_socket.unlink(missing_ok=True)
-            server = uvicorn.Server(uvicorn.Config(create_app(core), uds=str(cfg.core_socket), log_level="warning"))
+            # opus-web'in canlı akış bağlantısı kendiliğinden bitmez, kapanış onu
+            # en fazla beş saniye bekler.
+            server = uvicorn.Server(uvicorn.Config(create_app(core), uds=str(cfg.core_socket), log_level="warning",
+                                                   timeout_graceful_shutdown=5))
             server.install_signal_handlers = lambda: None
             tasks.append(asyncio.create_task(server.serve()))
         log.info("Çekirdek başladı, %d profil kuruldu.", len(core.supervisor.runners))

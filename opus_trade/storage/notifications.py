@@ -5,7 +5,8 @@ importable: LEVELS, NotificationRepo
 NotificationRepo bildirimleri saklar. add() yeni bir bildirimi yazar ve
 satırını döndürür, list() profile ve okunmamışlara göre süzer, counts()
 okunmamış kritik ve önemli bildirimleri profil başına sayar, mark_read()
-tek tek, profile göre ya da hepsini birden okundu yapar.
+tek tek, profile göre ya da hepsini birden okundu yapar. system() profile ait
+olmayan, sistemin kendi bildirimlerini verir.
 
 description: Bildirimlerin ve okundu bilgisinin deposu.
 """
@@ -46,6 +47,11 @@ class NotificationRepo:
             sql += " AND id < ?"
             args.append(before)
         rows = self.con.execute(sql + " ORDER BY id DESC LIMIT ?", (*args, limit))
+        return [dict(r) for r in rows]
+
+    def system(self, limit: int = 200) -> list[dict]:
+        rows = self.con.execute("SELECT * FROM notifications WHERE profile_id IS NULL ORDER BY id DESC LIMIT ?",
+                                (limit,))
         return [dict(r) for r in rows]
 
     # Profil kimliği JSON'da anahtar olacağı için metne çevrilir. Sistemin

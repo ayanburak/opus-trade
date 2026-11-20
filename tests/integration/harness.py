@@ -47,7 +47,7 @@ class Echo(Strategy):
 
 
 if "echo" not in STRATEGIES.entries:
-    STRATEGIES.register("echo", "Test", "", (), lambda deps: Echo())
+    STRATEGIES.register("echo", "Test", "", (), lambda deps: Echo(), Echo)
 
 
 class NullStream(MarketStream):

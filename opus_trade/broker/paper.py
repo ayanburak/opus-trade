@@ -42,7 +42,7 @@ from ..domain.trading import (AccountEvent, AccountState, Actor, AddToPosition, 
                               Command, EventKind, OpenPosition, Order, PlaceOrder, Position, Ref, Trade,
                               UpdateProtection)
 from ..storage.ledger import Ledger
-from .base import Broker, PriceDriven
+from .base import Broker, PriceDriven, Preview
 
 # Bir emir tetiğinin güncel fiyattan en az bu oranda uzak olması gerekir. Daha
 # yakın bir tetik ilk fiyatta dolardı ve aslında bir piyasa emridir.
@@ -166,8 +166,10 @@ class PaperBroker(Broker, PriceDriven):
 
     # Emirden açılan pozisyon emrin numarasını ve tetik fiyatını alır, maker
     # emir kaymasız ve maker komisyonuyla dolar.
-    def _open(self, symbol: str, side: Side, leverage: float, margin: float, price: float, now: int,
-              tp_levels, sl, trail_pct, maker: bool = False, order: Order | None = None) -> Position:
+    # Girişin bütün kuralları burada denetlenir. Hem gerçek giriş hem önizleme
+    # bunu kullanır, panelin gördüğü tahminle hesabın yaptığı ayrışamaz.
+    def _plan(self, symbol: str, side: Side, leverage: float, margin: float, price: float, maker: bool,
+              tp_levels, sl, trail_pct):
         spec = self.catalog.get(symbol)
         rules.check_leverage(spec, leverage)
         entry = price if maker else rules.slipped(spec, price, buy=side is Side.LONG)
@@ -176,6 +178,23 @@ class PaperBroker(Broker, PriceDriven):
         rules.check_sl(side, entry, sl)
         rules.check_trail(trail_pct)
         levels = rules.split_tp(spec, rules.check_tp_levels(side, entry, list(tp_levels)), s.qty)
+        return spec, entry, cash, s, levels
+
+    def preview(self, cmd: OpenPosition | PlaceOrder) -> Preview:
+        if isinstance(cmd, PlaceOrder):
+            price = cmd.trigger
+            maker = rules.order_is_maker(cmd.side, cmd.trigger, self._price(cmd.symbol)) and not cmd.taker
+        else:
+            price, maker = self._price(cmd.symbol), False
+        spec, entry, cash, s, _ = self._plan(cmd.symbol, cmd.side, cmd.leverage, cmd.margin, price, maker,
+                                             cmd.tp_levels, cmd.sl, cmd.trail_pct)
+        return Preview(entry, s.qty, s.qty * entry, s.margin, s.fee,
+                       rules.liq_price(spec, cmd.side, entry, s.qty, s.margin), cash - s.margin - s.fee)
+
+    def _open(self, symbol: str, side: Side, leverage: float, margin: float, price: float, now: int,
+              tp_levels, sl, trail_pct, maker: bool = False, order: Order | None = None) -> Position:
+        spec, entry, cash, s, levels = self._plan(symbol, side, leverage, margin, price, maker, tp_levels, sl,
+                                                  trail_pct)
         self.ledger.set_cash(self.account_id, cash - s.margin - s.fee)
         return self.ledger.insert_position(
             self.account_id, number=order.number if order else self.ledger.free_number(self.account_id),

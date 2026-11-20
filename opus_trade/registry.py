@@ -19,6 +19,10 @@ description: Eklenebilir parçaların kayıt defteri ve parametre şeması.
 # NOTE: Param.kind değerleri formun hangi alanla çizileceğini de söyler: int,
 # float, text, choice, symbols ve symbol_map. symbol_map her parite için bir
 # sayı taşır, örneğin likidasyon dalgasının parite başına eşiği.
+#
+# NOTE: cls kaydın kurduğu sınıftır, verilmesi isteğe bağlıdır. Kontrol API'si
+# stratejinin yetenek bayraklarını, örneğin accepts_messages, parçayı kurmadan
+# buradan okur. Bayrağın tek kaynağı yine sınıfın kendisidir.
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Generic, TypeVar
@@ -109,6 +113,7 @@ class Entry(Generic[T]):
     description: str
     params: tuple[Param, ...]
     build: Callable[..., T]
+    cls: type | None = None
 
 
 @dataclass
@@ -119,10 +124,10 @@ class Registry(Generic[T]):
     entries: dict[str, Entry[T]] = field(default_factory=dict)
 
     def register(self, key: str, name: str, description: str, params: tuple[Param, ...],
-                 build: Callable[..., T]) -> None:
+                 build: Callable[..., T], cls: type | None = None) -> None:
         if key in self.entries:
             raise ValueError(f"{self.kind} {key} zaten kayıtlı.")
-        self.entries[key] = Entry(key, name, description, params, build)
+        self.entries[key] = Entry(key, name, description, params, build, cls)
 
     def get(self, key: str) -> Entry[T]:
         try:

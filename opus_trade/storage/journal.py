@@ -5,7 +5,8 @@ importable: JournalRepo
 JournalRepo bir profilin karar günlüğünü, araç çağrılarını ve strateji
 hafızasını saklar. add() bir uyanmanın kaydını araçlarıyla birlikte yazar,
 recent() son kararların stratejiye giden kısa halini, entries() günlüğün
-satırlarını döndürür.
+satırlarını döndürür. usage_rows() tüketim hesabı için bütün profillerin
+çağrılarını yalnızca gereken alanlarıyla verir.
 
 description: Karar günlüğünün ve strateji hafızasının SQLite deposu.
 """
@@ -81,3 +82,16 @@ class JournalRepo:
     def tool_calls(self, journal_id: int) -> list[dict]:
         return [dict(r) for r in self.con.execute("SELECT * FROM tool_calls WHERE journal_id = ? ORDER BY seq",
                                                  (journal_id,))]
+
+    # Kayıt alanında Opus'a giden metin ve ham cevap da durur, büyüktür.
+    # Yalnızca gereken alanlar SQLite'ın içinde çıkarılır, kayıt Python'a
+    # hiç taşınmaz.
+    def usage_rows(self, since: int) -> list[tuple]:
+        """since anından sonraki günlük satırlarını (profile_id, time, error, usage, cost_usd, duration_s) olarak döndürür.
+
+        usage claude komutunun usage sözlüğünün JSON metnidir, çağrı yoksa None. error hata varsa 1'dir.
+        """
+        return [tuple(r) for r in self.con.execute(
+            "SELECT profile_id, time, error IS NOT NULL, json_extract(record, '$.usage.usage'), "
+            "json_extract(record, '$.cost_usd'), json_extract(record, '$.duration_s') FROM journal WHERE time >= ?",
+            (since,))]

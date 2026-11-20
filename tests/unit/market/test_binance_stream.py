@@ -114,3 +114,33 @@ def test_silent_connection_is_replaced():
         return rec
 
     assert asyncio.run(main()).connects >= 2
+
+
+def test_watch_during_connect_is_not_lost():
+    """Bağlantı kurulurken eklenen parite kaybolmamalı. Kaybolursa yeni profilin TP, SL ve emirleri yeniden başlatmaya kadar işlemez."""
+    async def main():
+        seen = {"paths": [], "received": []}
+
+        async def slow(connection, request):
+            await asyncio.sleep(0.3)
+
+        async def handler(ws):
+            seen["paths"].append(ws.request.path)
+            async for msg in ws:
+                seen["received"].append(json.loads(msg))
+
+        server = await websockets.serve(handler, "127.0.0.1", 0, process_request=slow)
+        stream, rec = BinanceStream(url=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"), Recorder()
+        task = asyncio.create_task(stream.run(rec))
+        await asyncio.sleep(0.1)
+        await stream.watch({"ETHUSDT"})
+        await _until(lambda: rec.connects == 1)
+        await asyncio.sleep(0.2)
+        task.cancel()
+        server.close()
+        return seen
+
+    seen = asyncio.run(main())
+    asked = "ethusdt@kline_1m" in seen["paths"][0] or any(
+        m["method"] == "SUBSCRIBE" and "ethusdt@kline_1m" in m["params"] for m in seen["received"])
+    assert asked, seen

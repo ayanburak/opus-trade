@@ -31,6 +31,12 @@ class EventBus:
         self._queues.add(q)
         return q
 
+    # Sistem sayfası kaç dinleyici olduğunu gösterir. Bildirici de bir
+    # dinleyicidir, her açık panel sekmesi ve herkese açık akış birer tane.
+    @property
+    def listeners(self) -> int:
+        return len(self._queues)
+
     def unsubscribe(self, q: asyncio.Queue) -> None:
         self._queues.discard(q)
 

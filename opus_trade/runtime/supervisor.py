@@ -99,6 +99,7 @@ class Supervisor(StreamListener):
         self._failing: set[int] = set()
         self._background: set[asyncio.Task] = set()
         self.last_candle = clock.time()
+        self._candle_sent: dict[str, int] = {}
         self.stream_down = False
 
     # --- Kurulum ---
@@ -182,12 +183,18 @@ class Supervisor(StreamListener):
             except Exception:
                 log.exception("[%s] Kopukken geçen dakikalar işlenemedi.", r.profile.short)
 
+    # Panelin grafiği canlı fiyatı akıştaki candle olayından alır. Binance
+    # dakikalık mumu saniyede birkaç kez günceller, akışa parite başına en
+    # fazla saniyede bir güncelleme gider. Kapanan mum her zaman gider.
     async def on_candle(self, candle: Candle, closed: bool) -> None:
         now = self.clock.time()
         if self.stream_down:
             self.stream_down = False
             self.bus.publish({"stream": "up", "silent_s": now - self.last_candle})
         self.last_candle = now
+        if closed or self._candle_sent.get(candle.symbol) != now:
+            self._candle_sent[candle.symbol] = now
+            self.bus.publish({"candle": candle, "closed": closed})
         for pid, r in list(self.runners.items()):
             self._guard(pid, lambda r=r: r.on_candle(candle, closed))
 

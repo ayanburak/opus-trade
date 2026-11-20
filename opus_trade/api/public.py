@@ -7,7 +7,8 @@ istemci alır ve yalnızca yayındaki profilin verisini veren FastAPI
 uygulamasını kurar. opus-web bu uygulamayı /api altında sunar.
 
 Hub çekirdeğin canlı akışına tek bir bağlantı açar ve gelen olayları süzüp
-bağlı ziyaretçilere dağıtır. Ziyaretçi sayısı sınırlıdır, sınır doluysa yeni
+bağlı ziyaretçilere dağıtır. Mum güncellemeleri yalnızca yayındaki profilin
+paritelerinden geçer. Ziyaretçi sayısı sınırlıdır, sınır doluysa yeni
 bağlantı 503 alır. public_entry() bir günlük kaydını, public_event() bir canlı
 olayı herkese açık hale getirir, gösterilmeyecekse public_event() None döner.
 
@@ -81,8 +82,10 @@ def public_entry(e: dict) -> dict:
             "error": "Karar alınamadı." if e["error"] else None}
 
 
-def public_event(item: dict, pid: int, account_id: int | None) -> dict | None:
+def public_event(item: dict, pid: int, account_id: int | None, symbols: frozenset[str] = frozenset()) -> dict | None:
     """Kontrol akışından gelen bir olayı herkese açık hale getirir ya da gösterilmeyecekse None döndürür."""
+    if "candle" in item:
+        return item if item["candle"].get("symbol") in symbols else None
     if "account_event" in item:
         return item if account_id is not None and item["account_event"].get("account_id") == account_id else None
     if item.get("profile") != pid:
@@ -104,13 +107,13 @@ class Hub:
 
     Args:
         source: Çekirdeğin olaylarını sırayla veren akış fonksiyonu, koparsa Hub yeniden açar.
-        published: Yayındaki profili ve hesabını veren fonksiyon, yayında profil yoksa None.
+        published: Yayındaki profilin kimliğini, hesabını ve paritelerini veren fonksiyon, yayında profil yoksa None.
         max_clients: Aynı anda en fazla ziyaretçi.
         retry_s: Akış koparsa yeniden bağlanmadan önce beklenen süre.
     """
 
     def __init__(self, source: Callable[[], AsyncIterator[dict]],
-                 published: Callable[[], Awaitable[tuple[int, int | None] | None]], max_clients: int = 50,
+                 published: Callable[[], Awaitable[tuple[int, int | None, frozenset[str]] | None]], max_clients: int = 50,
                  retry_s: float = 3) -> None:
         self.source = source
         self.published = published
@@ -189,11 +192,19 @@ def create_public_app(core: httpx.AsyncClient, max_clients: int = 50,
             raise HTTPException(404, "Yayında bir profil yok.")
         return found
 
-    async def cached() -> tuple[int, int | None] | None:
+    async def profile_view() -> dict:
+        p = await published()
+        detail = await call(f"/profiles/{p['id']}")
+        versions = {v["id"]: v for v in detail["versions"]}
+        current = versions.get(p.get("version_id"))
+        return {**{k: p.get(k) for k in _PROFILE_KEYS},
+                "symbols": current["config"]["symbols"] if current else [], "account_id": p.get("account_id")}
+
+    async def cached() -> tuple[int, int | None, frozenset[str]] | None:
         if time.monotonic() - cache["at"] > 5:
             try:
-                p = await published()
-                cache["value"] = (p["id"], p.get("account_id"))
+                p = await profile_view()
+                cache["value"] = (p["id"], p["account_id"], frozenset(p["symbols"]))
             except HTTPException:
                 cache["value"] = None
             cache["at"] = time.monotonic()
@@ -210,12 +221,10 @@ def create_public_app(core: httpx.AsyncClient, max_clients: int = 50,
 
     @app.get("/profile")
     async def profile():
-        p = await published()
-        detail = await call(f"/profiles/{p['id']}")
-        versions = {v["id"]: v for v in detail["versions"]}
-        current = versions.get(p.get("version_id"))
-        return {**{k: p.get(k) for k in _PROFILE_KEYS},
-                "symbols": current["config"]["symbols"] if current else []}
+        view = await profile_view()
+        view.pop("account_id")
+        return view
+
 
     @app.get("/account")
     async def account():

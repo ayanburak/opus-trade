@@ -5,7 +5,8 @@ importable: Core, create_app
 Çekirdeğin kontrol API'si. create_app() bir Core alır ve FastAPI uygulamasını
 kurar. Admin paneli bütün işlerini bu uçlardan yapar: profiller ve sürümler,
 kayıt defterleri, hesap, günlük, işlemler, özkaynak, müdahaleler, model
-erişimi, bildirimler, sistem olayları ve canlı akış. Uygulama yalnızca çekirdeğin Unix
+erişimi, bildirimler, sistemin durumu ve olayları, abonelik tüketimi ve
+canlı akış. Uygulama yalnızca çekirdeğin Unix
 soketinde dinler, dışarıya hiç açılmaz.
 
 description: Admin panelinin kullandığı kontrol uçları.
@@ -24,16 +25,20 @@ description: Admin panelinin kullandığı kontrol uçları.
 
 import asyncio
 import json
+from datetime import datetime, time
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ..domain import rules
 from ..domain.catalog import Catalog
+from ..domain.models import Side
 from ..domain.clock import Clock
 from ..domain.errors import RuleError
 from ..domain.profile import ProfileConfig
+from ..domain.trading import Actor, OpenPosition, PlaceOrder
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
 from ..storage.notifications import NotificationRepo
@@ -42,11 +47,14 @@ from ..storage.runtime_state import StateRepo
 from ..strategy.base import STRATEGIES
 from ..triggers.base import TRIGGERS
 from ..runtime.bus import EventBus
-from ..runtime.interventions import Interventions
+from ..runtime.interventions import Interventions, command_from
+from ..runtime.health import CollectorWatch
 from ..runtime.model_access import ModelAccess
+from ..runtime.risk import DAY_TZ
 from ..runtime.notifications import Notifier, settings_from, DEFAULT_SETTINGS
 from ..runtime.profiles import ProfileService
 from ..runtime.supervisor import Supervisor
+from ..runtime.usage import summarize
 
 
 @dataclass
@@ -66,7 +74,14 @@ class Core:
     clock: Clock
     notifications: NotificationRepo
     notifier: Notifier
+    collector: CollectorWatch
 
+
+# Genel bakıştaki küçük özkaynak eğrisinin en fazla nokta sayısı.
+CURVE_POINTS = 60
+
+# Tüketim raporunun en fazla gün sayısı.
+USAGE_DAYS = 60
 
 # Grafiğin seçebildiği mum aralıkları.
 INTERVALS = ("1m", "5m", "15m", "1h", "4h", "1d")
@@ -82,8 +97,11 @@ def _plain(x: Any) -> Any:
     return x
 
 
+# Strateji kaydında accepts_messages da gelir, panel Opus'a yaz kartını yalnızca
+# mesaj okuyabilen stratejide gösterir. Tetikleyicilerde bu bayrak yoktur, False döner.
 def _registry(reg) -> list[dict]:
-    return [{"key": e.key, "name": e.name, "description": e.description, "params": _plain(list(e.params))}
+    return [{"key": e.key, "name": e.name, "description": e.description, "params": _plain(list(e.params)),
+             "accepts_messages": bool(getattr(e.cls, "accepts_messages", False))}
             for e in reg.entries.values()]
 
 
@@ -121,12 +139,76 @@ def create_app(core: Core) -> FastAPI:
                 "positions": len(st.positions) if st else 0, "orders": len(st.orders) if st else 0,
                 "busy": bool(r and r.busy), "next_wake": r.next_wake if r else None}
 
+    # --- Genel bakış ---
+
+    # Eğri son yedi günün özkaynağından eşit aralıklı noktalarla seyreltilir,
+    # son nokta her zaman girer. Bugün Türkiye saatiyle gece yarısından beri
+    # demektir, sonuç kapanan işlemlerin neti ile açık pozisyonların kâr ve
+    # zararıdır. Düzeltme çağrısı günlükteki uyandırmalardan sayılır.
+    def day_start() -> int:
+        now = datetime.fromtimestamp(core.clock.time(), DAY_TZ)
+        return int(datetime.combine(now.date(), time(0), DAY_TZ).timestamp())
+
+    def curve(account_id: int) -> list[dict]:
+        rows = core.ledger.con.execute("SELECT time, equity FROM equity WHERE account_id = ? AND time >= ? ORDER BY time",
+                                       (account_id, core.clock.time() - 7 * 86400)).fetchall()
+        step = max(1, len(rows) // CURVE_POINTS)
+        points = rows[::step]
+        if rows and points[-1] is not rows[-1]:
+            points.append(rows[-1])
+        return [{"time": t, "equity": e} for t, e in points]
+
+    def today(p, since: int) -> dict:
+        calls, errors, corrections = core.journal.con.execute(
+            "SELECT COUNT(*), COUNT(error), SUM(wakes LIKE '%\"correction\"%') FROM journal "
+            "WHERE profile_id = ? AND time >= ?", (p.id, since)).fetchone()
+        r = core.supervisor.runners.get(p.id)
+        realized = sum(t.net for t in core.ledger.trades(p.account_id, since=since)) if p.account_id else 0.0
+        st = r.broker.state() if r else None
+        open_pnl = st.equity - st.cash - sum(x.margin for x in st.positions) if st else 0.0
+        risk = sum(x.margin for x in st.positions) + sum(o.margin for o in st.orders) if st else 0.0
+        return {"pnl": realized + open_pnl, "calls": calls, "errors": errors, "corrections": corrections or 0,
+                "risk": risk}
+
+    @app.get("/overview")
+    async def overview():
+        since = day_start()
+        out = []
+        for p in core.repo.all():
+            last = core.journal.entries(p.id, limit=1)
+            out.append({**summary(p), "curve": curve(p.account_id) if p.account_id else [], "today": today(p, since),
+                        "last": {"time": last[0]["time"], "summary": last[0]["record"].get("summary"),
+                                 "error": last[0]["error"] is not None} if last else None})
+        return {"profiles": out, "model_closed_until": core.access.until(), "model_warning": core.access.warning(),
+                "collector": {"last_seen": core.collector.last_seen(), "down": core.collector.down},
+                "stream_down": core.supervisor.stream_down}
+
     # --- Kayıt defterleri ---
 
     @app.get("/registry")
     async def registry():
         return {"strategies": _registry(STRATEGIES), "triggers": _registry(TRIGGERS),
                 "symbols": [_plain(core.catalog.get(s)) for s in core.catalog.symbols]}
+
+    # LLM stratejisinin Opus'a açtığı araçlar ve karar şemasındaki eylemler.
+    # Piyasa araçları araç sunucusunun kendi listesinden, araştırmacı istemcinin
+    # ayarından, eylemler ACTIONS'tan okunur, panel hiçbir listeyi elle tutmaz.
+    # Araç sunucusu ağır bir modüldür, yalnızca bu uç çağrılınca yüklenir.
+    @app.get("/registry/llm")
+    async def llm_registry():
+        from ..strategy.llm.actions import ACTIONS
+        from ..strategy.llm.client import BUILTIN_TOOLS, RESEARCHER
+        from ..tools.market import server
+
+        tools = []
+        for t in await server.list_tools():
+            props, required = t.input_schema.get("properties", {}), set(t.input_schema.get("required", []))
+            tools.append({"name": t.name, "description": t.description or "",
+                          "params": [{"name": k, "type": v.get("type") or "any", "default": v.get("default"),
+                                      "required": k in required} for k, v in props.items()]})
+        return {"server": server.name, "tools": tools, "builtin": list(BUILTIN_TOOLS),
+                "agents": [{"name": k, **v} for k, v in RESEARCHER.items()],
+                "actions": [{"type": t, "description": d, "required": r, "optional": o} for t, d, r, o in ACTIONS]}
 
     # --- Profiller ---
 
@@ -138,10 +220,32 @@ def create_app(core: Core) -> FastAPI:
     async def create(name: str = Body(...), short: str = Body(...), config: dict = Body(...)):
         return _plain(core.service.create(name, short, ProfileConfig.from_dict(config)))
 
+    # Sürümün sonucu, yürürlükte kaldığı aralıktaki karar ve işlem sayısıyla
+    # net kâr ve zarardır. Aralık sürümün created_at'inden bir sonrakinin
+    # created_at'ine kadardır, işlem çıkış zamanıyla aralığa atanır. Yalnızca
+    # şimdiki hesap sayılır, sıfırlamadan önceki kararlar ve işlemler girmez.
+    def results(p, versions) -> dict[int, dict]:
+        since = core.ledger.con.execute("SELECT created_at FROM accounts WHERE id = ?",
+                                        (p.account_id,)).fetchone()[0] if p.account_id else 0
+        decisions = dict(core.journal.con.execute(
+            "SELECT version_id, COUNT(*) FROM journal WHERE profile_id = ? AND time >= ? GROUP BY version_id",
+            (p.id, since)).fetchall())
+        trades = core.ledger.trades(p.account_id) if p.account_id else ()
+        out = {}
+        for i, v in enumerate(versions):
+            end = versions[i + 1].created_at if i + 1 < len(versions) else None
+            mine = [t for t in trades if t.exit_time >= v.created_at and (end is None or t.exit_time < end)]
+            out[v.id] = {"decisions": decisions.get(v.id, 0), "trades": len(mine),
+                         "wins": sum(t.net > 0 for t in mine), "net": sum(t.net for t in mine)}
+        return out
+
     @app.get("/profiles/{pid}")
     async def detail(pid: int):
         p = profile(pid)
-        return {**summary(p), "versions": _plain(core.repo.versions(pid)), "memory": core.journal.memory(pid)}
+        versions = core.repo.versions(pid)
+        res = results(p, versions)
+        return {**summary(p), "versions": [{**_plain(v), "result": res[v.id]} for v in versions],
+                "memory": core.journal.memory(pid)}
 
     @app.post("/profiles/{pid}/config")
     async def config(pid: int, config: dict = Body(...), note: str = Body("")):
@@ -177,14 +281,22 @@ def create_app(core: Core) -> FastAPI:
     @app.get("/profiles/{pid}/account")
     async def account(pid: int):
         r = runner(pid)
-        return {"state": _plain(r.broker.state()), "prices": r.prices, "alerts": _plain(r.alerts.alerts),
+        st = _plain(r.broker.state())
+        # Pozisyonun açık kârı son fiyatla burada hesaplanır, panel hesap
+        # kuralı taşımaz. Fiyat henüz gelmediyse None'dır.
+        for x in st["positions"]:
+            price = r.prices.get(x["symbol"])
+            x["open_pnl"] = (rules.unrealized_pnl(Side(x["side"]), x["entry_price"], x["qty"], price)
+                             if price is not None else None)
+        return {"state": st, "prices": r.prices, "alerts": _plain(r.alerts.alerts),
                 "triggers": [t.snapshot() for t in r.triggers if t.snapshot() is not None],
                 "restrictions": core.interventions.active(pid, core.clock.time())}
 
     @app.get("/profiles/{pid}/trades")
     async def trades(pid: int):
         p = profile(pid)
-        return _plain(list(reversed(core.ledger.trades(p.account_id)))) if p.account_id else []
+        # net bir property'dir, asdict onu almaz. Panel neti kendisi hesaplamasın diye eklenir.
+        return [{**_plain(t), "net": t.net} for t in reversed(core.ledger.trades(p.account_id))] if p.account_id else []
 
     @app.get("/profiles/{pid}/equity")
     async def equity(pid: int, since: int = 0):
@@ -229,6 +341,15 @@ def create_app(core: Core) -> FastAPI:
                         note: str = Body(""), call_now: bool = Body(False)):
         runner(pid)
         return await core.interventions.add(pid, kind, params, weight, note, call_now)
+
+    # Onay kartı göndermeden önce girişin tahminini buradan alır. Komut bir
+    # yönetici komutu gibi kapıdan geçer, reddedilecekse nedeni 400 ile döner.
+    @app.post("/profiles/{pid}/preview")
+    async def preview(pid: int, params: dict = Body(..., embed=True)):
+        cmd = command_from(params)
+        if not isinstance(cmd, (OpenPosition, PlaceOrder)):
+            raise ValueError("Önizleme yalnızca pozisyon açma ve emir için yapılır.")
+        return _plain(runner(pid).gate.preview(cmd, Actor.ADMIN, core.clock.time()))
 
     @app.post("/profiles/{pid}/interventions/{iid}/withdraw")
     async def withdraw(pid: int, iid: int):
@@ -281,10 +402,37 @@ def create_app(core: Core) -> FastAPI:
     async def health():
         return {"ok": True, "time": core.clock.time()}
 
+    def _detail(e: dict) -> dict:
+        return {**e, "detail": json.loads(e["detail"]) if e["detail"] else None}
+
+    # Sistem olayları iki kaynaktan gelir. system_events profillerin karar
+    # hatalarını tutar, onlar errors'ta ayrı durur. Akış, toplayıcı ve çekirdek
+    # kesintileri profilsiz bildirim olarak yazılır. events ikisini, karar
+    # hataları dışında, zamana göre tek listede verir.
     @app.get("/system")
     async def system():
-        return {"model_closed_until": core.access.until(), "model_warning": core.access.warning(),
-                "dropped_events": core.bus.dropped, "events": core.state.system_events(limit=200)}
+        rows = [_detail(e) for e in core.state.system_events(limit=300)]
+        errors = [e for e in rows if e["kind"] == "decide_error"][:100]
+        events = [{"time": e["time"], "kind": e["kind"], "level": "info", "title": e["message"],
+                   "body": json.dumps(e["detail"], ensure_ascii=False) if e["detail"] else "",
+                   "profile_id": e["profile_id"]} for e in rows if e["kind"] != "decide_error"]
+        events += [{k: n[k] for k in ("time", "kind", "level", "title", "body", "profile_id")}
+                   for n in core.notifications.system(limit=200)]
+        events.sort(key=lambda e: e["time"], reverse=True)
+        sup = core.supervisor
+        return {"time": core.clock.time(), "model_closed_until": core.access.until(),
+                "model_warning": core.access.warning(),
+                "stream": {"active": bool(sup.runners), "down": sup.stream_down, "last_candle": sup.last_candle},
+                "collector": {"last_seen": core.collector.last_seen(), "down": core.collector.down},
+                "listeners": core.bus.listeners, "dropped_events": core.bus.dropped,
+                "errors": errors, "events": events[:200]}
+
+    @app.get("/usage")
+    async def usage(days: int = 14):
+        days = max(1, min(days, USAGE_DAYS))
+        now = core.clock.time()
+        rows = core.journal.usage_rows(now - days * 86400 - 86400)
+        return summarize(rows, now, days)
 
     @app.post("/system/model")
     async def model(until: int | None = Body(None, embed=True)):

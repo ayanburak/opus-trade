@@ -65,37 +65,46 @@ def _kline_stream(symbol: str) -> str:
     return f"{symbol.lower()}@kline_1m"
 
 
-# İstenen parite kümesi _symbols'ta durur. Bağlantı yokken watch() yalnızca
-# kümeyi değiştirir, bir sonraki bağlantı adresini ondan kurar. Bağlantı
-# varken fark ayrıca abonelik mesajıyla gönderilir.
+# İstenen parite kümesi _symbols'ta, açık bağlantının dinlediği küme
+# _subscribed'da durur. Bağlantı adresi açılırken o anki istenen kümeden
+# kurulur. Bağlantı kurulurken watch() çağrılırsa küme değişir ama gönderecek
+# bağlantı henüz yoktur, bu yüzden bağlantı açılınca _sync() farkı abonelik
+# mesajıyla tamamlar. Yoksa yeni paritenin mumları hiç gelmezdi.
 class BinanceStream(MarketStream):
     def __init__(self, url: str = STREAM_URL, silence_s: float = SILENCE_S) -> None:
         self._url = url
         self._silence = silence_s
         self._symbols: set[str] = set()
+        self._subscribed: set[str] = set()
         self._ws = None
         self._next_id = 0
 
     async def watch(self, symbols: set[str]) -> None:
-        added, removed = symbols - self._symbols, self._symbols - symbols
         self._symbols = set(symbols)
+        await self._sync()
+
+    async def _sync(self) -> None:
         if self._ws is None:
             return
+        added, removed = self._symbols - self._subscribed, self._subscribed - self._symbols
+        self._subscribed = set(self._symbols)
         for method, items in (("SUBSCRIBE", added), ("UNSUBSCRIBE", removed)):
             if items:
                 self._next_id += 1
                 await self._ws.send(json.dumps({"method": method, "params": sorted(map(_kline_stream, items)),
                                                 "id": self._next_id}))
 
-    def _address(self) -> str:
-        return f"{self._url}?streams=" + "/".join([_LIQUIDATIONS] + sorted(map(_kline_stream, self._symbols)))
+    def _address(self, symbols: set[str]) -> str:
+        return f"{self._url}?streams=" + "/".join([_LIQUIDATIONS] + sorted(map(_kline_stream, symbols)))
 
     async def run(self, listener: StreamListener) -> None:
         wait = 1
         while True:
             try:
-                async with websockets.connect(self._address(), ping_interval=20) as ws:
-                    self._ws = ws
+                asked = set(self._symbols)
+                async with websockets.connect(self._address(asked), ping_interval=20) as ws:
+                    self._ws, self._subscribed = ws, asked
+                    await self._sync()
                     log.info("Binance canlı akışına bağlanıldı.")
                     await listener.on_connect()
                     while True:

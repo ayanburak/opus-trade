@@ -61,7 +61,12 @@ class FakeMarket(MarketData):
         self._record("taker_volume", symbol, start, end)
         return [TakerVolume(t, symbol, 1.0, 5.0, 5.0) for t in _points(start, end)]
 
+    # Tek parite istenince fail kümesi Binance'in tanımadığı pariteler gibi davranır.
     async def premium(self, symbol=None):
+        if symbol is not None:
+            self.calls.append(("premium", symbol, None, None))
+            if symbol in self.fail:
+                raise MarketDataError(f"Binance /fapi/v1/premiumIndex 400 döndürdü: Invalid symbol {symbol}")
         return list(self.premiums)
 
     # Yalnızca kapalı süre işlenirken istenen dakikalık mumlar verilir.

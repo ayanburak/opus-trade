@@ -1,6 +1,6 @@
 """
 file: sources.py
-importable: Source, LiquidationSource, PremiumSource, StatsSource, HISTORY_S, STATS_PERIOD
+importable: Source, LiquidationSource, PremiumSource, StatsSource, HISTORY_S, STATS_PERIOD, STATS_PERIOD_S, STATS_SERIES
 
 Toplayıcının veri kaynakları. Her kaynak bir Source'tur ve run() ile iptal
 edilene kadar çalışır. LiquidationSource canlı akıştan bütün piyasanın
@@ -33,7 +33,7 @@ from .store import CollectorStore
 log = logging.getLogger(__name__)
 
 STATS_PERIOD = "5m"
-_PERIOD_S = 300
+STATS_PERIOD_S = 300
 
 # Binance istatistikleri otuz gün geriye verir, daha eski bir başlangıç 400
 # hatası alır. Bir günlük pay saat farkı ve istek süresi içindir.
@@ -132,7 +132,7 @@ class PremiumSource(Source):
 
 # Her tür kendi tablosuna yazılır. long_short tablosunda tür ayrıca kind
 # sütununda durur, last_time() bu yüzden türü de alır.
-_KINDS = (
+STATS_SERIES = (
     ("open_interest", None),
     ("long_short", RatioKind.ACCOUNTS),
     ("long_short", RatioKind.TOP_ACCOUNTS),
@@ -159,7 +159,7 @@ class StatsSource(Source):
 
     async def _one(self, table: str, kind: RatioKind | None, symbol: str, now: int) -> None:
         last = self._store.last_time(table, symbol, kind)
-        start = max(last + _PERIOD_S if last is not None else 0, now - HISTORY_S)
+        start = max(last + STATS_PERIOD_S if last is not None else 0, now - HISTORY_S)
         if start >= now:
             return
         m, s = self._market, self._store
@@ -173,7 +173,7 @@ class StatsSource(Source):
     async def collect(self) -> None:
         now = self._clock.time()
         for symbol in self._store.symbols():
-            for table, kind in _KINDS:
+            for table, kind in STATS_SERIES:
                 try:
                     await self._one(table, kind, symbol, now)
                 except MarketDataError as e:
@@ -183,4 +183,4 @@ class StatsSource(Source):
         while True:
             await self.collect()
             now = self._clock.time()
-            await asyncio.sleep(_PERIOD_S - now % _PERIOD_S + self._DELAY)
+            await asyncio.sleep(STATS_PERIOD_S - now % STATS_PERIOD_S + self._DELAY)

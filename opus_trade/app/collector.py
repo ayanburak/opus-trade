@@ -7,13 +7,12 @@ market.db'yi açar, eksik taşımaları uygular ve verilen komutu çalıştırı
 
     python -m opus_trade.app.collector run
     python -m opus_trade.app.collector symbols
-    python -m opus_trade.app.collector add SYMBOL
-    python -m opus_trade.app.collector remove SYMBOL
     python -m opus_trade.app.collector import-liquidations ESKI_MARKET_DB
 
 run SIGTERM ya da Ctrl+C gelene kadar çalışır, kapanırken tamponları yazar.
-Parite komutları izlenen pariteleri değiştirir, çalışan servis değişikliği
-bir sonraki turda görür.
+OPUS_COLLECTOR_SOCKET verilmişse run aynı süreçte toplayıcının uçlarını o
+sokette açar. İzlenen pariteler yalnızca bu uçlardan, admin panelinin Veri
+sayfasından değişir. symbols yalnızca listeyi yazar.
 
 description: Veri toplayıcının kuruluş noktası ve komut satırı.
 """
@@ -21,8 +20,6 @@ description: Veri toplayıcının kuruluş noktası ve komut satırı.
 # NOTE: Parçalar yalnızca burada seçilip birbirine bağlanır. Toplayıcının
 # kaynakları hangi borsanın kullanıldığını bilmez, BinanceRest ve
 # BinanceStream burada verilir.
-#
-# TODO: Parite komutları admin paneline taşınınca burada yalnızca run kalır.
 
 import argparse
 import asyncio
@@ -31,7 +28,9 @@ import signal
 from pathlib import Path
 
 import httpx
+import uvicorn
 
+from ..collector.api import create_collector_app
 from ..collector.service import import_legacy_liquidations, run_sources
 from ..collector.sources import LiquidationSource, PremiumSource, StatsSource
 from ..collector.store import MIGRATIONS, CollectorStore
@@ -57,7 +56,7 @@ def _store(cfg: AppConfig) -> CollectorStore:
     return CollectorStore(con)
 
 
-async def _run(store: CollectorStore) -> None:
+async def _run(store: CollectorStore, cfg: AppConfig) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -67,8 +66,21 @@ async def _run(store: CollectorStore) -> None:
         rest = BinanceRest(client, min_interval_s=_REQUEST_GAP_S)
         sources = [LiquidationSource(BinanceStream(), store, clock), PremiumSource(rest, store, clock),
                    StatsSource(rest, store, clock)]
+        tasks = [asyncio.create_task(run_sources(sources, stop))]
+        server = None
+        if cfg.collector_socket:
+            cfg.collector_socket.unlink(missing_ok=True)
+            app = create_collector_app(store, cfg.market_db, rest, clock)
+            # İndirme süren bir istektir, kapanış onu en fazla beş saniye bekler.
+            server = uvicorn.Server(uvicorn.Config(app, uds=str(cfg.collector_socket), log_level="warning",
+                                                   timeout_graceful_shutdown=5))
+            server.install_signal_handlers = lambda: None
+            tasks.append(asyncio.create_task(server.serve()))
         log.info("Toplayıcı başladı, %d parite izleniyor.", len(store.symbols()))
-        await run_sources(sources, stop)
+        await stop.wait()
+        if server:
+            server.should_exit = True
+        await asyncio.gather(*tasks, return_exceptions=True)
     log.info("Toplayıcı durdu.")
 
 
@@ -77,8 +89,6 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("run")
     sub.add_parser("symbols")
-    for name in ("add", "remove"):
-        sub.add_parser(name).add_argument("symbol")
     sub.add_parser("import-liquidations").add_argument("path", type=Path)
     args = parser.parse_args()
 
@@ -86,15 +96,12 @@ def main() -> None:
     # httpx her isteği INFO seviyesinde yazar. Toplayıcı günde on binlerce
     # istek attığı için bu satırlar asıl uyarıları günlükte boğardı.
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    store = _store(AppConfig.from_env())
+    cfg = AppConfig.from_env()
+    store = _store(cfg)
     if args.cmd == "run":
-        asyncio.run(_run(store))
+        asyncio.run(_run(store, cfg))
     elif args.cmd == "symbols":
         print("\n".join(store.symbols()))
-    elif args.cmd == "add":
-        store.add_symbol(args.symbol.upper(), SystemClock().time())
-    elif args.cmd == "remove":
-        store.remove_symbol(args.symbol.upper())
     else:
         print(f"{import_legacy_liquidations(store, args.path)} yeni likidasyon aktarıldı.")
 
