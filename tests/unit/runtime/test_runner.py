@@ -43,11 +43,14 @@ SOL = "SOLUSDT"
 
 
 # Kararları sırayla verilen listeden döndürür, her bağlamı kaydeder. fail
-# doluysa decide hata fırlatır. Düzeltme ve model yetenekleri ayarlanabilir.
+# doluysa decide hata fırlatır. hold verilmişse karar o olay kurulana kadar
+# bekler, düşünme süren bir çağrıyı taklit eder. Düzeltme ve model
+# yetenekleri ayarlanabilir.
 class Scripted(Strategy):
     script: list = []
     seen: list = []
     fail: list = []
+    hold: asyncio.Event | None = None
 
     def __init__(self, corrects: bool = True, uses_model: bool = False):
         self.corrects = corrects
@@ -55,6 +58,8 @@ class Scripted(Strategy):
 
     async def decide(self, ctx):
         Scripted.seen.append(ctx)
+        if Scripted.hold:
+            await Scripted.hold.wait()
         if Scripted.fail:
             raise RuntimeError(Scripted.fail.pop(0))
         return Scripted.script.pop(0) if Scripted.script else Decision()
@@ -88,7 +93,7 @@ class World:
                               EventBus(), self.access, Catalog(), BINANCE_STANDARD,
                               lambda p: Deps(self.clock, Catalog()))
         self.service = ProfileService(self.repo, self.ledger, self.journal, Catalog(), self.clock, self.sup.refresh)
-        Scripted.script, Scripted.seen, Scripted.fail = [], [], []
+        Scripted.script, Scripted.seen, Scripted.fail, Scripted.hold = [], [], [], None
 
     def config(self, **params) -> ProfileConfig:
         return ProfileConfig("scripted", params, (SOL,), 100.0)
@@ -254,3 +259,42 @@ def test_missed_minutes_are_replayed_after_a_gap(tmp_path):
     assert r.broker.state().positions == ()
     kinds = [x.kind for x in Scripted.seen[-1].wakes]
     assert "account" in kinds and "restart" in kinds
+
+
+def test_version_change_while_deciding_waits_for_the_decision(tmp_path):
+    """Opus düşünürken sürüm değişirse süren karar canlı fiyatla biter, seçtiği sonraki çağrı saati yeni sürüme geçer
+    ve strateji fazladan çağrılmaz. Yeni sürüm karar bitince yürürlüğe girer. Bozulursa işlem eski fiyatla açılır ya
+    da Opus boşuna bir kez daha çağrılıp limit harcanır."""
+    w = World(tmp_path)
+
+    async def scenario():
+        Scripted.hold = asyncio.Event()
+        Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10)], ["aç"], wait_s=600)]
+        p, r = w.running()
+        r.tick(w.clock.t)
+        await asyncio.sleep(0)
+        assert r.busy
+        w.service.update_config(p.id, w.config(corrects=0), "yeni sürüm")
+        await w.sup.on_candle(Candle(SOL, T // 60 * 60, 120, 120, 120, 120, 1, 1, 1, 1), False)
+        r.wake("admin")
+        for _ in range(3):
+            w.clock.t += 1
+            for x in list(w.sup.runners.values()):
+                x.tick(w.clock.t)
+        Scripted.hold.set()
+        Scripted.hold = None
+        await r.wait_idle()
+        r.tick(w.clock.t)
+        assert not r.busy and len(Scripted.seen) == 1
+        for _ in range(3):
+            await asyncio.sleep(0)
+        new = w.sup.runners[p.id]
+        assert new.version.id == w.repo.get(p.id).version_id and new.version.config.params["corrects"] == 0
+        assert new.broker.state().positions[0].entry_price > 110
+        assert new.next_wake == T + 600
+        w.clock.t += 1
+        new.tick(w.clock.t)
+        await new.wait_idle()
+        assert len(Scripted.seen) == 2 and [x.kind for x in Scripted.seen[1].wakes] == ["admin"]
+
+    go(scenario())

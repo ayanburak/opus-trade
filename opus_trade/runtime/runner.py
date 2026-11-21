@@ -139,6 +139,7 @@ class ProfileRunner:
         self.delivered = delivered or (lambda ids: None)
         self.prices: dict[str, float] = {}
         self.busy = False
+        self.retiring = False
         self.retry_at = 0
         self.next_wake = self._last_next_wake()
         self._last_minute = 0
@@ -265,7 +266,7 @@ class ProfileRunner:
         if self.running and self.next_wake is not None and now >= self.next_wake:
             self.next_wake = None
             self.wake("timer")
-        if not self.running or self.busy or now < self.retry_at or not self.state.wakes(self.pid):
+        if not self.running or self.busy or self.retiring or now < self.retry_at or not self.state.wakes(self.pid):
             return
         if self.strategy.uses_model and self.access.closed():
             return

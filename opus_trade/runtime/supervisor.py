@@ -17,9 +17,13 @@ description: Profillerin çalıştırıcılarını kuran ve canlı veriyi onlara
 # kurulur. Duraklatılmış ya da durdurulmuş bir profilin açık pozisyonları da
 # fiyatla işlemeye devam etmelidir.
 #
-# NOTE: Bir profil yeni sürüme geçince eski çalıştırıcı bırakılır, yenisi aynı
-# karar kilidiyle kurulur. Eski çalıştırıcının süren bir kararı varsa yenisi
-# kilit açılana kadar bekler. Son fiyatlar yeni çalıştırıcıya aktarılır.
+# NOTE: Bir profil yeni sürüme ya da duruma geçince eski çalıştırıcı bırakılır,
+# yenisi kurulur ve son fiyatlar ona aktarılır. Eski çalıştırıcının süren bir
+# kararı varsa değişiklik o karar bitince uygulanır: eski çalıştırıcı o sırada
+# canlı fiyat almaya devam eder ama yeni karar başlatmaz, gelen uyandırmalar
+# veritabanında bekler. Yeni çalıştırıcı kararın seçtiği sonraki çağrı
+# saatini günlükten okur. Bekleme sırasında gelen başka değişiklikler tek
+# seferde, profilin son haline göre uygulanır.
 #
 # NOTE: Bir çalıştırıcının hatası akışa ve diğer profillere sızmaz. Hata ilk
 # seferinde tam izle yazılır, profil düzelince bu da yazılır.
@@ -98,6 +102,7 @@ class Supervisor(StreamListener):
         self._locks: dict[int, asyncio.Lock] = {}
         self._failing: set[int] = set()
         self._background: set[asyncio.Task] = set()
+        self._deferred: set[int] = set()
         self.last_candle = clock.time()
         self._candle_sent: dict[str, int] = {}
         self.stream_down = False
@@ -132,7 +137,28 @@ class Supervisor(StreamListener):
                              feed=(lambda: iv.feed(p.id)) if iv else None, delivered=iv.delivered if iv else None)
 
     def refresh(self, profile_id: int) -> None:
-        """Bir profilin çalıştırıcısını son haline göre kurar, değiştirir ya da kaldırır."""
+        """Bir profilin çalıştırıcısını son haline göre kurar, değiştirir ya da kaldırır. Süren bir karar varsa
+        değişiklik karar bitince uygulanır."""
+        old = self.runners.get(profile_id)
+        if old and old.busy:
+            old.retiring = True
+            if profile_id not in self._deferred:
+                self._deferred.add(profile_id)
+                task = asyncio.get_running_loop().create_task(self._refresh_after(profile_id, old))
+                self._background.add(task)
+                task.add_done_callback(self._background.discard)
+            return
+        self._replace(profile_id)
+
+    async def _refresh_after(self, profile_id: int, old: ProfileRunner) -> None:
+        await old.wait_idle()
+        self._deferred.discard(profile_id)
+        try:
+            self._replace(profile_id)
+        except Exception:
+            log.exception("[%s] Profil yeniden kurulamadı.", old.profile.short)
+
+    def _replace(self, profile_id: int) -> None:
         p = self.repo.get(profile_id)
         old = self.runners.pop(profile_id, None)
         if p.state in (State.DRAFT, State.ARCHIVED) or p.account_id is None:
