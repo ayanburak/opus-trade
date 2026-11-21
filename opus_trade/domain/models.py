@@ -1,19 +1,16 @@
 """
 file: models.py
-importable: Side, Bracket, SymbolSpec, TpLevel, Sizing
+importable: Side, Bracket, SymbolSpec
 
 Hesap kurallarının üzerinde çalıştığı küçük veri tipleri. Side bir pozisyonun
-ya da emrin yönüdür. SymbolSpec bir paritenin Binance'teki işlem kurallarıdır,
-Bracket onun kaldıraç ve bakım marjı kademelerinden biridir.
-TpLevel bir kâr alma kademesidir. Sizing bir işlemin büyüklük hesabının
-sonucudur. Hepsi değişmezdir.
+yönüdür. SymbolSpec bir paritenin Binance'teki işlem kurallarıdır, Bracket onun
+kaldıraç ve bakım marjı kademelerinden biridir. Hepsi değişmezdir.
 
 description: Hesap kurallarının ortak veri tipleri.
 """
 
-# NOTE: Pozisyon, emir, alarm ve komut tipleri burada değil, onları kullanan
-# kâğıt broker yazılırken eklenecek. Kullanıcısı olmayan bir model şimdiden
-# tasarlanırsa broker'ın gerçek ihtiyacına göre sonradan değişmek zorunda kalır.
+# NOTE: Pozisyon, emir, komut ve olay tipleri trading.py'dedir. Burada yalnızca
+# kuralların kendisinin ihtiyaç duyduğu tipler durur.
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -55,11 +52,13 @@ class SymbolSpec:
         qty_step: Miktar adımı. Miktar her zaman bunun katıdır.
         min_notional: Binance'in en küçük işlem büyüklüğü, dolar.
         max_market_qty: Tek bir piyasa emrinin en büyük miktarı.
+        max_qty: Tek bir limit ya da tetikli emrin en büyük miktarı.
         price_up: Alış limitinin mark fiyatına oranı en fazla bu kadar olabilir, örneğin 1.03.
         price_down: Satış limitinin mark fiyatına oranı en az bu kadar olabilir, örneğin 0.97.
         max_orders: Paritede aynı anda açık olabilecek emir sayısı.
         brackets: Kaldıraç ve bakım marjı kademeleri, küçükten büyüğe.
         slippage: Taker işlemlerde fiyatın aleyhe kayma oranı.
+        liq_fee: Likidasyonda büyüklükten alınan ücretin oranı.
         note: Paritenin ne olduğunu anlatan kısa ad, yoksa boş.
     """
 
@@ -69,29 +68,11 @@ class SymbolSpec:
     qty_step: float
     min_notional: float
     max_market_qty: float
+    max_qty: float
     price_up: float
     price_down: float
     max_orders: int
     brackets: tuple[Bracket, ...]
     slippage: float
+    liq_fee: float
     note: str = ""
-
-
-# qty yalnızca açık bir pozisyondaki kademede doludur. Bekleyen bir emirde
-# miktar henüz belli değildir ve kademe yalnızca yüzde taşır. Açık pozisyonda
-# qty None ise o kademe pozisyonun kalanının tamamını kapatır, yuvarlama
-# yüzünden geride küçük bir kırıntı kalmasın diye.
-@dataclass(frozen=True)
-class TpLevel:
-    price: float
-    pct: float
-    qty: float | None = None
-
-
-@dataclass(frozen=True)
-class Sizing:
-    """Bir işlemin yuvarlanmış miktarı, ona düşen gerçek marjin ve giriş komisyonu."""
-
-    qty: float
-    margin: float
-    fee: float

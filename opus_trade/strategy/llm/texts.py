@@ -1,6 +1,7 @@
 """
 file: texts.py
-importable: TZ, MONTHS, DAYS, price, clock, date_text, usd, levels_text, event_text, fire_text
+importable: TZ, MONTHS, DAYS, ORDER_NAMES, GUARD_NAMES, REASONS, price, clock, date_text, usd, order_name,
+            guard_text, event_text, fire_text
 
 Opus'a giden Türkçe metinlerin ortak yardımcıları. price() bir fiyatı
 paritenin büyüklüğüne göre yeterli basamakla, noktalı ondalıkla yazar ve
@@ -69,32 +70,61 @@ def usd(x: float) -> str:
     return f"{x / 1e3:.0f} bin dolarlık"
 
 
-def levels_text(levels) -> str:
-    if not levels:
-        return "yok"
-    return ", ".join(f"{price(k.price)} yüzde {k.pct:g}" for k in levels)
+# Giriş emirlerinin Opus'a görünen türü, eylemlerdeki tur alanıyla aynı
+# adlar. Kapatan emirler TP, SL ve iz diye anılır. Çalıştırıcının komut
+# sonuçları da bu adları kullanır.
+ORDER_NAMES = {"market": "piyasa", "limit": "limit", "stop": "kırılım", "take_profit": "geri çekilme"}
+GUARD_NAMES = {"take_profit": "TP", "stop": "SL", "trailing_stop": "iz"}
 
 
+# Bir emrin adı, kapatan emirde TP, SL ya da iz, girişte türüyle giriş emri.
+# Türü bilinmeyen eski kayıtlarda yalnızca emir denir.
+def order_name(type_, reduce: bool) -> str:
+    if type_ is None:
+        return "emir"
+    return GUARD_NAMES[str(type_)] + " emri" if reduce else ORDER_NAMES[str(type_)] + " giriş emri"
+
+
+# Bir koruma emri ya da bekleyen girişin koruma isteği. whole miktarsız
+# olanın ne kadarını kapattığıdır: emirde kalanın tamamı, istekte girişin
+# tamamı.
+def guard_text(x, whole: str) -> str:
+    num = f"#{x.number} " if getattr(x, "number", None) else ""
+    level = f"yüzde {x.trail_pct:g}" if x.type == "trailing_stop" else price(x.price)
+    return f"{num}{GUARD_NAMES[str(x.type)]} {level} miktar {whole if x.qty is None else f'{x.qty:g}'}"
+
+
+# Uyandıran olaylar dolum, kapanış, başarısızlık ve süre dolmasıdır. Dolumla
+# birleşen pozisyonun ve kurulan korumaların son hali hesap bölümünde zaten
+# yazdığı için cümle oraya gönderir. Kapatan emrin başarısızlığı dolan girişin
+# kurulamayan korumasıdır, numarası yoktur.
 def event_text(e: AccountEvent) -> str:
     """Broker'ın kendi kuralıyla olan bir olayı Opus'a anlatır."""
-    head = f"#{e.number} {e.symbol} {e.side}"
+    pos = f"{e.symbol} {e.side}"
     match e.kind:
         case EventKind.CLOSED:
             t = e.trade
             why = "fonlama ödemesiyle marjini tükendiği için likide oldu" if e.reason == "funding_liquidation" \
                 else REASONS.get(e.reason or "", e.reason)
-            return (f"{head} pozisyonundan {numbers.qty(t.qty, e.symbol)} {numbers.price(e.price)} seviyesinde {why}, "
+            by = f", kapatan emir #{e.number} {GUARD_NAMES.get(str(e.order_type), '')}".rstrip() if e.number else ""
+            return (f"{pos} pozisyonundan {numbers.qty(t.qty, e.symbol)} {numbers.price(e.price)} seviyesinde {why}{by}, "
                     f"net {numbers.num(t.net, 2, sign=True)} dolar.")
         case EventKind.ORDER_FILLED:
-            return f"{head} emri {numbers.price(e.price)} fiyatından gerçekleşti, pozisyon #{e.number} numarasıyla açıldı."
+            return (f"#{e.number} {pos} {order_name(e.order_type, False)} {numbers.qty(e.qty, e.symbol)}, "
+                    f"{numbers.price(e.price)} fiyatından gerçekleşti. Pozisyonun ve kurulan koruma emirlerinin son "
+                    f"hali hesap bölümünde.")
+        case EventKind.ORDER_FAILED if not e.reduce:
+            return f"#{e.number} {pos} {order_name(e.order_type, False)} tetiklendi ama açılamadı: {e.reason}"
         case EventKind.ORDER_FAILED:
-            return f"{head} emri tetiklendi ama açılamadı: {e.reason}"
+            level = f" {numbers.price(e.price)}" if e.price else ""
+            return f"{pos} pozisyonunun{level} {order_name(e.order_type, True)} kurulamadı: {e.reason}"
         case EventKind.ORDER_EXPIRED:
-            return f"{head} emrinin geçerlilik süresi doldu, emir iptal oldu."
+            return (f"#{e.number} {pos} {order_name(e.order_type, False)} geçerlilik süresi dolduğu için iptal "
+                    f"oldu.")
         case EventKind.FUNDING:
             what = "ödedi" if (e.amount or 0) > 0 else "aldı"
-            return f"{head} pozisyonu fonlama {what}: {numbers.num(abs(e.amount or 0), 4)} dolar."
-    return f"{head}: {e.kind}."
+            return f"{pos} pozisyonu fonlama {what}: {numbers.num(abs(e.amount or 0), 4)} dolar."
+    return f"{pos}: {e.kind}."
 
 
 def fire_text(f: Fire, now: int) -> str:

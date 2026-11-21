@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from opus_trade.domain.models import Side
-from opus_trade.domain.trading import ClosePosition, Ref
+from opus_trade.domain.trading import ClosePosition
 from opus_trade.market.models import Candle
 from opus_trade.runtime.notifications import ChannelError, TelegramChannel
 from opus_trade.strategy.base import Decision
@@ -41,9 +41,13 @@ async def notes(api):
     return list(reversed(await api.call("GET", "/notifications")))
 
 
+# 10x kaldıraçla 1 SOL. Likidasyon 95'in altında kalır, SL'li test likidasyona takılmaz.
 async def open_long(api, pid, sl=None):
-    spec = {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}
-    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {**spec, "sl": sl}})
+    lev = {"type": "leverage", "symbol": SOL, "leverage": 10}
+    spec = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1,
+            "protection": [{"type": "stop", "price": sl}] if sl else []}
+    for params in (lev, spec):
+        await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": params})
 
 
 @run
@@ -103,7 +107,7 @@ async def test_reply_is_important_and_read_state_is_shared(api):
 async def test_correction_is_info_only(api):
     """Düzeltme çağrısı bilgi seviyesindedir, baloncuğa sayılmaz. Sayılsa her reddedilen eylemde ses çalardı."""
     pid, r = await api.running(FLAKY)
-    bad = ClosePosition(Ref(9, SOL, Side.LONG))
+    bad = ClosePosition(SOL, Side.LONG)
     Flaky.script = [Decision([bad], ["kapat 9"])]
     await api.step(r)
     kinds = [(n["level"], n["kind"]) for n in await notes(api)]

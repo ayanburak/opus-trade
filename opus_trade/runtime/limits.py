@@ -11,41 +11,60 @@ risk sınırları da bu tiplerle kurulur.
 description: Riski artıran komutlara konan sınırlar.
 """
 
-# NOTE: Sınırlar yalnızca domain.trading.RISKY içindeki komutlara bakar:
-# pozisyon açma, ekleme ve emir verme. Kapatma, iptal ve koruma değişikliği
-# hiçbir zaman engellenmez, çünkü riski azaltmak her zaman serbest olmalı.
+# NOTE: Sınırlar yalnızca domain.trading.risky'nin riskli saydığı komutlara
+# bakar: giriş emri, limit emrin değiştirilmesi ve kaldıraç ayarı. Kapatma,
+# iptal ve koruma hiçbir zaman engellenmez, çünkü riski azaltmak her zaman
+# serbest olmalı.
+#
+# NOTE: Komutlar miktar taşır. Marjin miktar, fiyat ve paritenin kaldıracından
+# hesaplanır. Piyasa emrinin fiyatı komutta olmadığı için son fiyat price
+# fonksiyonundan alınır.
 #
 # NOTE: Kısıt konmadan önce verilmiş bir bekleyen emir tetiklenince kısıta
 # bakılmaz. Tetiklenme bir komut değil broker'ın kendi kuralıdır. Kısıtın o
 # emri de kapsaması isteniyorsa emir ayrıca iptal edilir.
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..domain import numbers
 from ..domain.models import Side
-from ..domain.trading import RISKY, AccountState, AddToPosition, Command, OpenPosition, PlaceOrder
+from ..domain.trading import AccountState, AmendOrder, Command, PlaceOrder, SetLeverage, risky
 
 
-# Bir komutun paritesi, yönü, kaldıracı ve eklediği marjin. Ekleme komutu
-# pozisyonun var olan marjinini de taşır, pozisyon başına marjin sınırı
-# toplamla karşılaştırılır.
+# Bir komutun paritesi, yönü, kaldıracı ve eklediği marjin. existing aynı
+# yöndeki açık pozisyonun marjinidir, giriş onunla birleşir ve pozisyon başına
+# marjin sınırı toplamla karşılaştırılır. release değişen limit emrin eski
+# ayırdığı tutardır, toplam marjinde iki kez sayılmaz. opens kaldıraç ayarında
+# False'tur, ayar tek başına işlem açmaz. Kaldıraç ayarının yönü yoktur.
 @dataclass(frozen=True)
 class _Ask:
     symbol: str
-    side: Side
+    side: Side | None
     leverage: float
     margin: float
     existing: float
+    release: float = 0.0
+    opens: bool = True
 
 
-def _ask(cmd: Command, state: AccountState) -> _Ask:
+def _ask(cmd: Command, state: AccountState, price: Callable[[str], float]) -> _Ask:
     match cmd:
-        case OpenPosition() | PlaceOrder():
-            return _Ask(cmd.symbol, cmd.side, cmd.leverage, cmd.margin, 0.0)
-        case AddToPosition():
-            pos = state.find(cmd.ref.number)
-            return _Ask(cmd.ref.symbol, cmd.ref.side, cmd.leverage, cmd.margin, pos.margin if pos else 0.0)
+        case SetLeverage():
+            return _Ask(cmd.symbol, None, cmd.leverage, 0.0, 0.0, opens=False)
+        case PlaceOrder():
+            lev = state.leverage(cmd.symbol)
+            at = cmd.price or price(cmd.symbol)
+            pos = state.position(cmd.symbol, cmd.side)
+            return _Ask(cmd.symbol, cmd.side, lev, (cmd.qty or 0) * at / lev, pos.margin if pos else 0.0)
+        case AmendOrder():
+            o = state.order(cmd.ref.number)
+            lev = state.leverage(cmd.ref.symbol)
+            qty = cmd.qty if cmd.qty is not None else (o.qty if o else 0)
+            pos = state.position(cmd.ref.symbol, cmd.ref.side)
+            return _Ask(cmd.ref.symbol, cmd.ref.side, lev, (qty or 0) * cmd.price / lev,
+                        pos.margin if pos else 0.0, release=o.margin if o else 0.0)
     raise TypeError(f"Riskli olmayan komut: {cmd!r}")
 
 
@@ -73,7 +92,7 @@ class NoOpen(Limit):
     symbol: str | None = None
 
     def breaks(self, ask, state) -> bool:
-        return True
+        return ask.opens
 
     def text(self) -> str:
         return f"{_where(self.symbol)}yeni işlem açılmaz"
@@ -102,7 +121,7 @@ class MaxMargin(Limit):
     def breaks(self, ask, state) -> bool:
         if self.total:
             used = sum(p.margin for p in state.positions) + sum(o.margin for o in state.orders)
-            return used + ask.margin > self.value + 1e-9
+            return used - ask.release + ask.margin > self.value + 1e-9
         return ask.existing + ask.margin > self.value + 1e-9
 
     def text(self) -> str:
@@ -130,15 +149,23 @@ class SideOnly(Limit):
     symbol: str | None = None
 
     def breaks(self, ask, state) -> bool:
-        return ask.side is not self.side
+        return ask.side is not None and ask.side is not self.side
 
     def text(self) -> str:
         return f"{_where(self.symbol)}yalnızca {self.side} açılır"
 
 
-def breach(cmd: Command, state: AccountState, limits: list[Limit]) -> Limit | None:
-    """Komutun aştığı ilk sınırı döndürür, aşmıyorsa ya da komut riski artırmıyorsa None."""
-    if not isinstance(cmd, RISKY):
+def breach(cmd: Command, state: AccountState, limits: list[Limit],
+           price: Callable[[str], float]) -> Limit | None:
+    """Komutun aştığı ilk sınırı döndürür, aşmıyorsa ya da komut riski artırmıyorsa None.
+
+    Args:
+        cmd: Denetlenen komut.
+        state: Hesabın o anki hali.
+        limits: Sınırlar.
+        price: Paritenin son fiyatı, piyasa emrinin marjini bununla hesaplanır.
+    """
+    if not risky(cmd):
         return None
-    ask = _ask(cmd, state)
+    ask = _ask(cmd, state, price)
     return next((x for x in limits if x.applies(ask) and x.breaks(ask, state)), None)

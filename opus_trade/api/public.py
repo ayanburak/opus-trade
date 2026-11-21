@@ -64,10 +64,12 @@ def _public_wake(w: dict) -> bool:
     return not _admin_alert(json.loads(w["data"])) if w.get("data") else True
 
 
-# Kapının yönetici kısıtı reddi bu kalıpla başlar, Opus kısıtın numarasını ve
-# içeriğini görür. Dışarıda yalnızca eylemin reddedildiği kalır.
+# Kapının yönetici kısıtı reddi bu kalıbı taşır, Opus kısıtın numarasını ve
+# içeriğini görür. Dışarıda yalnızca eylemin reddedildiği kalır. Kalıp harf
+# büyüklüğüne bakmadan aranır: eski kayıtlarda cümlenin ortasında, yenilerinde
+# başında durur.
 def _public_result(r: dict) -> dict:
-    if not r["ok"] and _RESTRICTION in r["message"]:
+    if not r["ok"] and _RESTRICTION in r["message"].lower():
         return {**r, "message": f"{r['label']} reddedildi."}
     return r
 

@@ -1,6 +1,6 @@
 """
 file: interventions.py
-importable: KINDS, command_from, limit_from, Interventions
+importable: KINDS, command_from, commands_from, limit_from, Interventions
 
 Yöneticinin profillere müdahaleleri. Opus'a giden müdahale bir metindir,
 teklif ya da kesin. Yanında Şimdi bak, grafikten gelen kesin hesap işlemleri,
@@ -10,7 +10,8 @@ Interventions.add() bir müdahaleyi doğrular, kesinse o anda uygular ve
 kaydeder. withdraw() stratejiye henüz gösterilmemiş bir müdahaleyi geri çeker.
 restriction_source() bir profilin yürürlükteki kesin kısıtlarını kapıya,
 feed() stratejiye gidecek satırları çalıştırıcıya verir. command_from() ve
-limit_from() panelden gelen JSON'u komuta ve sınıra çevirir.
+limit_from() panelden gelen JSON'u komuta ve sınıra çevirir, commands_from()
+hesap işleminin tek komutunu ya da zincirini listeye çevirir.
 
 description: Yönetici müdahalelerinin doğrulanması, uygulanması, saklanması ve anlatımı.
 """
@@ -30,6 +31,13 @@ description: Yönetici müdahalelerinin doğrulanması, uygulanması, saklanmas�
 # teslim edilmiş sayılır. Karar hata verirse bir sonraki kararda yine
 # gösterilir. Teslim edilmemiş bir müdahale geri çekilebilir, kesin bir hesap
 # işlemi ise uygulandığı için geri çekilemez.
+#
+# NOTE: Hesap işlemi bir zincir olabilir, Opus'un Decision.chained'i gibi.
+# Panel kaldıracı girişle, yeni korumayı eskisinin iptaliyle tek onayda
+# gönderir. Bir adım reddedilince sonrakiler gönderilmez. İlk adım reddedilirse
+# hiçbir şey olmamıştır, müdahale kaydedilmez. Sonraki bir adım reddedilirse
+# önceki adımlar hesabı değiştirmiştir, müdahale uygulananla ve reddin
+# nedeniyle kaydedilir, Opus öğrensin diye. Yöneticiye yine hata döner.
 
 import json
 import sqlite3
@@ -38,9 +46,9 @@ from datetime import datetime
 from ..domain import numbers
 from ..domain.clock import HOME_TZ, Clock
 from ..domain.errors import RuleError
-from ..domain.models import Side, TpLevel
-from ..domain.trading import (Actor, AddToPosition, CancelOrder, CloseAll, ClosePosition, Command, OpenPosition,
-                              PlaceOrder, Ref, UpdateProtection)
+from ..domain.models import Side
+from ..domain.trading import (Actor, AmendOrder, CancelOrder, CloseAll, ClosePosition, Command, OrderType, PlaceOrder,
+                              Protection, Ref, SetLeverage)
 from ..storage.runtime_state import StateRepo
 from .gate import Restriction, RestrictionSource
 from .limits import Limit, MaxLeverage, MaxMargin, MaxNotional, NoOpen, SideOnly
@@ -64,16 +72,21 @@ def _text(params: dict, key: str) -> str:
     return value
 
 
-def _levels(spec: dict) -> tuple[TpLevel, ...] | None:
-    if spec.get("tp_levels") is None:
-        return None
-    return tuple(TpLevel(float(k["price"]), float(k["pct"])) for k in spec["tp_levels"])
-
-
 def _ref(spec: dict) -> Ref:
     return Ref(int(spec["number"]), str(spec["symbol"]), Side(spec["side"]))
 
 
+def _num(spec: dict, key: str) -> float | None:
+    return None if spec.get(key) is None else float(spec[key])
+
+
+def _protection(spec: dict) -> tuple[Protection, ...]:
+    return tuple(Protection(OrderType(x["type"]), _num(x, "price"), _num(x, "trail_pct"), _num(x, "qty"))
+                 for x in spec.get("protection") or ())
+
+
+# Panelin JSON komutu broker komutlarının aynısıdır, alan adları da. Hesap
+# komutu Binance gibi miktar taşır, marjinden çeviriyi panel yapar.
 def command_from(spec: dict) -> Command:
     """Panelin JSON komutunu bir broker komutuna çevirir.
 
@@ -82,28 +95,43 @@ def command_from(spec: dict) -> Command:
     """
     try:
         match spec.get("type"):
-            case "open":
-                return OpenPosition(spec["symbol"], Side(spec["side"]), float(spec["leverage"]),
-                                    float(spec["margin"]), _levels(spec) or (), spec.get("sl"), spec.get("trail_pct"))
-            case "place_order":
-                return PlaceOrder(spec["symbol"], Side(spec["side"]), float(spec["trigger"]), float(spec["leverage"]),
-                                  float(spec["margin"]), _levels(spec) or (), spec.get("sl"), spec.get("trail_pct"),
-                                  spec.get("valid_min"), bool(spec.get("taker", False)))
+            case "leverage":
+                return SetLeverage(spec["symbol"], int(spec["leverage"]))
+            case "order":
+                return PlaceOrder(spec["symbol"], Side(spec["side"]), OrderType(spec["order_type"]),
+                                  _num(spec, "qty"), _num(spec, "price"), bool(spec.get("reduce", False)),
+                                  _num(spec, "trail_pct"), _protection(spec), spec.get("valid_min"))
+            case "amend":
+                return AmendOrder(_ref(spec), float(spec["price"]), _num(spec, "qty"))
             case "cancel_order":
                 return CancelOrder(_ref(spec))
-            case "add":
-                return AddToPosition(_ref(spec), float(spec["leverage"]), float(spec["margin"]))
             case "close":
-                return ClosePosition(_ref(spec), float(spec.get("pct", 100)))
-            case "protect":
-                return UpdateProtection(_ref(spec), _levels(spec), spec.get("sl"), spec.get("trail_pct"))
+                return ClosePosition(spec["symbol"], Side(spec["side"]), _num(spec, "qty"))
             case "close_all":
                 return CloseAll()
     except KeyError as k:
         raise ValueError(f"{k.args[0]} alanı eksik.") from None
-    except TypeError:
-        raise ValueError("Komutun alanlarından biri yanlış biçimde, örneğin tp_levels price ve pct taşıyan bir liste olmalı.") from None
+    except (TypeError, ValueError):
+        raise ValueError("Komutun alanlarından biri yanlış biçimde, örneğin protection type, price, trail_pct ve "
+                         "qty taşıyan bir liste olmalı.") from None
     raise ValueError(f"Bilinmeyen komut: {spec.get('type')}")
+
+
+def commands_from(spec: dict) -> list[Command]:
+    """Panelin hesap işlemini sırayla uygulanacak komutlara çevirir.
+
+    chain alanı varsa her elemanı command_from() biçiminde bir komuttur, yoksa
+    işlemin kendisi tek bir komuttur.
+
+    Raises:
+        ValueError: Zincir boşsa ya da komutlardan biri geçersizse.
+    """
+    if "chain" not in spec:
+        return [command_from(spec)]
+    chain = spec["chain"]
+    if not isinstance(chain, list) or not chain:
+        raise ValueError("chain boş olmayan bir komut listesi olmalı.")
+    return [command_from(x) for x in chain]
 
 
 def limit_from(spec: dict) -> Limit:
@@ -195,7 +223,7 @@ class Interventions:
         if kind == "message":
             return {"text": _text(params, "text")}
         if kind == "command":
-            command_from(params)
+            commands_from(params)
             return params
         # Alarmda cancel bir numaradır. Yalnız verilirse o alarm kalkar, fiyatla
         # birlikte verilirse alarm taşınır: eskisi kalkar, yenisi kurulur.
@@ -230,10 +258,10 @@ class Interventions:
         now = self.clock.time()
         params = self._validate(pid, kind, params, weight, now)
         r = self.runner(pid)
-        result, ends, delivered = None, None, None
+        result, ends, delivered, error = None, None, None, None
         if kind == "command":
             weight = "firm"
-            result = describe(await r.gate.submit(command_from(params), Actor.ADMIN, now))
+            result, error = await self._apply(r, commands_from(params), now)
         elif kind == "alert":
             old = params.get("cancel")
             if old is not None and old not in {a.number for a in r.alerts.alerts}:
@@ -269,7 +297,26 @@ class Interventions:
         # Şimdi bak kendisi bir çağrıdır, call_now beklemeden uyandırır.
         if (call_now or kind == "look_now") and r.strategy.accepts_messages:
             r.wake("admin")
+        if error:
+            raise RuleError(error)
         return self.get(cur.lastrowid)
+
+    # Zinciri sırayla uygular, uygulananın anlatımını ve varsa yöneticiye
+    # dönecek hatayı verir. İlk adımın reddi olduğu gibi yükselir.
+    @staticmethod
+    async def _apply(r, cmds: list[Command], now: int) -> tuple[str, str | None]:
+        done = []
+        for i, cmd in enumerate(cmds):
+            try:
+                done.append(describe(await r.gate.submit(cmd, Actor.ADMIN, now)))
+            except RuleError as e:
+                if not done:
+                    raise
+                rest = " Sonraki adımlar uygulanmadı." if i < len(cmds) - 1 else ""
+                applied = " ".join(done)
+                return (f"{applied} Zincirin {i + 1}. adımı reddedildi: {e}{rest}",
+                        f"Zincirin {i + 1}. adımı reddedildi: {e}{rest} Önceki adımlar uygulandı: {applied}")
+        return " ".join(done), None
 
     def withdraw(self, pid: int, iid: int) -> dict:
         """Stratejiye henüz gösterilmemiş bir müdahaleyi geri çeker.

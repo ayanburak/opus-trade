@@ -1,40 +1,42 @@
 """
 file: rules.py
-importable: TOLERANCE, slipped, round_qty, to_tick, min_notional, bracket, liq_price, unrealized_pnl,
-            funding_payment, order_is_maker, check_leverage, check_ticks, check_sl, check_trail, trail_level,
-            trailed_sl,
-            check_tp_levels, split_tp, tp_shares, size, close_fill
+importable: TOLERANCE, DEFAULT_LEVERAGE, slipped, round_qty, to_tick, min_notional, bracket, liq_price, liq_fee,
+            unrealized_pnl, funding_payment, is_buy, crosses, merge_entry, qty_for_margin, order_margin, open_loss,
+            check_leverage, check_notional, check_leverage_change, check_qty, check_ticks, check_price_band,
+            check_trigger, check_trail, trail_level, limit_reached, triggered, trigger_fill, close_fill
 
-Binance USDⓈ-M vadelinin izole marjinli hesap kuralları, saf fonksiyonlar
-olarak. Hiçbiri durum tutmaz, veritabanına ya da ağa dokunmaz. Kâğıt broker
-bu kurallarla hesabı simüle eder, canlı broker ise emri Binance'e göndermeden
-önce aynı kurallarla kontrol eder. Kurala aykırı bir girdi RuleError
-fırlatır.
+Binance USDⓈ-M vadelinin hedge modunda izole marjinli hesap kuralları, saf
+fonksiyonlar olarak. Hiçbiri durum tutmaz, veritabanına ya da ağa dokunmaz.
+Kâğıt broker bu kurallarla hesabı simüle eder, canlı broker ise emri
+Binance'e göndermeden önce aynı kurallarla kontrol eder. Kurala aykırı bir
+girdi RuleError fırlatır.
 
-description: Kaldıraç, fiyat adımı, büyüklük, kayma, likidasyon, TP kademesi ve iz süren stop kuralları.
+description: Kaldıraç, miktar, fiyat adımı, tetik, maliyet, kayma, likidasyon, iz ve eşleştirme kuralları.
 """
 
 # NOTE: Kayma aleyhe işler. Alışta fiyat yükselir, satışta düşer. Long giriş ve
-# short çıkış alıştır, short giriş ve long çıkış satıştır. Maker sayılan
-# işlemler kaymasız ve tam seviyesinden gerçekleşir.
+# short çıkış alıştır, short giriş ve long çıkış satıştır, is_buy bunu söyler.
+# Maker sayılan işlemler kaymasız ve tam seviyesinden gerçekleşir.
 #
 # NOTE: Fonksiyonlar fiyatı ve miktarı float olarak alır. Kuruşun altındaki
 # kayan nokta farkları geçerli bir işlemin reddedilmesine yol açmasın diye
 # karşılaştırmalarda TOLERANCE payı kullanılır.
+#
+# NOTE: Komutlar miktar taşır. Eski hesapta nakit birkaç sent eksik kalınca
+# miktar kendiliğinden küçülüyordu. Artık eksik bakiye reddedilir, bakiyenin
+# tamamıyla işlem açmak isteyen tarafın miktarı küçültmesi Opus'un ve panelin
+# katmanının işidir, D aşaması.
 
 import math
 
 from . import numbers
 from .errors import RuleError
-from .models import Bracket, Side, SymbolSpec, TpLevel, Sizing
+from .models import Bracket, Side, SymbolSpec
 
 TOLERANCE = 1e-9
 
-# Nakit bir işleme bu orandan daha az eksik kalıyorsa işlem reddedilmez, miktar
-# nakde sığacak kadar küçültülür. Bakiyenin tamamıyla işlem açmak isteyen biri
-# genelde yuvarlak bir marjin verir ve komisyon yüzünden birkaç sent eksik
-# kalır. Bunu reddetmek anlamsız olurdu.
-_CASH_SLACK = 0.02
+# Hiç ayarlanmamış bir paritenin kaldıracı, Binance'in varsayılanı.
+DEFAULT_LEVERAGE = 20
 
 # İz süren stopun en iyi fiyattan uzaklığı Binance'teki gibi bu aralıktadır,
 # yüzde.
@@ -70,6 +72,45 @@ def min_notional(spec: SymbolSpec, price: float) -> float:
     return max(math.ceil(spec.min_notional / price / step - 1e-9) * step, step) * price
 
 
+# Hedge modunda long'u açan ve short'u kapatan emir alıştır.
+def is_buy(side: Side, reduce: bool) -> bool:
+    return (side is Side.LONG) != reduce
+
+
+# Limit emir fiyatın yanlış tarafındaysa karşı tarafla hemen eşleşir ve taker
+# dolar: alış limiti güncel fiyatın üstünde ya da satış limiti altında.
+def crosses(buy: bool, limit: float, price: float) -> bool:
+    return limit >= price if buy else limit <= price
+
+
+# Aynı yöndeki yeni giriş pozisyonla birleşir, giriş fiyatı miktarla ağırlıklı
+# ortalanır.
+def merge_entry(qty: float, entry: float, add_qty: float, add_price: float) -> float:
+    return (qty * entry + add_qty * add_price) / (qty + add_qty)
+
+
+# Marjinle düşünen taraf, yani Opus ve panel, komutun miktarını bununla bulur.
+# Miktar adıma aşağı yuvarlanır, marjin hiçbir zaman verilenden büyük çıkmaz.
+def qty_for_margin(spec: SymbolSpec, leverage: int, margin: float, price: float) -> float:
+    return round_qty(spec, margin * leverage / price)
+
+
+# --- Marjin ve maliyet ---
+
+def order_margin(qty: float, price: float, leverage: int) -> float:
+    return qty * price / leverage
+
+
+# Binance bir emrin maliyetini başlangıç marjini ile açık zararın toplamı
+# sayar. Açık zarar, emrin fiyatı mark fiyatının aleyhindeyse aradaki farktır:
+# mark'ın üstünde bir alış ya da altında bir satış daha dolarken zararda
+# başlar. Emir verilirken bu toplam kullanılabilir bakiyeden ayrılır.
+def open_loss(buy: bool, qty: float, price: float, mark: float) -> float:
+    return qty * max(0.0, price - mark if buy else mark - price)
+
+
+# --- Likidasyon ve fonlama ---
+
 # Büyüklüğü kapsayan ilk kademe. Tablonun dışına taşan büyüklük son kademede
 # sayılır, kaldıraç kontrolü onu ayrıca reddeder.
 def bracket(spec: SymbolSpec, notional: float) -> Bracket:
@@ -91,6 +132,13 @@ def liq_price(spec: SymbolSpec, side: Side, entry: float, qty: float, margin: fl
     return (entry * qty + margin + b.mm_amount) / (qty * (1 + b.mm_rate))
 
 
+# Binance likidasyonda büyüklüğün bu oranını ücret olarak alır. Ücret
+# pozisyonun kalan marjininden fazla olamaz, izole marjinde kayıp marjinle
+# sınırlıdır. Sınırı ücreti kullanan taraf uygular.
+def liq_fee(spec: SymbolSpec, qty: float, price: float) -> float:
+    return qty * price * spec.liq_fee
+
+
 def unrealized_pnl(side: Side, entry: float, qty: float, price: float) -> float:
     return (price - entry) * qty * side.sign
 
@@ -102,30 +150,82 @@ def funding_payment(side: Side, qty: float, mark: float, rate: float) -> float:
     return qty * mark * rate * side.sign
 
 
-# Fiyatın lehine geldiği emir, yani long için aşağıdaki, short için yukarıdaki
-# tetik bir limit emri gibi maker sayılır. Ters yöndeki kırılım emri stop emri
-# gibi taker sayılır ve kayma yer.
-def order_is_maker(side: Side, trigger: float, price: float) -> bool:
-    return (side is Side.LONG) == (trigger < price)
-
-
 # --- Doğrulama ---
 
-# Binance'te kaldıraç tam sayıdır. Kaldıraç büyüdükçe izin verilen en büyük
-# pozisyon küçülür: verilen kaldıracı taşıyan kademelerin en büyüğü sınırdır.
-def check_leverage(spec: SymbolSpec, leverage: float, notional: float) -> None:
+# Binance'te kaldıraç tam sayıdır, üst sınırı paritenin ilk kademesidir.
+def check_leverage(spec: SymbolSpec, leverage: float) -> None:
     top = spec.brackets[0].max_leverage
     if leverage != int(leverage) or not 1 <= leverage <= top:
         raise RuleError(f"{spec.symbol} için kaldıraç 1 ile {top} arasında bir tam sayı olmalı, "
                         f"{numbers.num(leverage)} verildi.")
+
+
+# Kaldıraç büyüdükçe izin verilen en büyük pozisyon küçülür: verilen kaldıracı
+# taşıyan kademelerin en büyüğü sınırdır. notional pozisyonun işlemden sonraki
+# büyüklüğüdür.
+def check_notional(spec: SymbolSpec, leverage: int, notional: float) -> None:
     cap = max(b.cap for b in spec.brackets if b.max_leverage >= leverage)
     if notional > cap + TOLERANCE:
-        raise RuleError(f"{spec.symbol} için {numbers.num(leverage)}x kaldıraçla pozisyon en fazla {numbers.num(cap)} "
+        raise RuleError(f"{spec.symbol} için {leverage}x kaldıraçla pozisyon en fazla {numbers.num(cap)} "
                         f"dolar olabilir, bu işlemle {numbers.num(notional, 2)} dolar oluyor.")
 
 
-# Fiyat, tetik, TP ve SL Binance'te fiyat adımının katı olmalıdır. Sıfır SL
-# korumayı kaldırmak demektir, kontrol edilmez.
+# Açık pozisyon varken kaldıraç düşürülemez, Binance izole marjinde -4161 ile
+# reddeder. Yükseltme kabul edilir ama paritenin açık büyüklüğü yeni
+# kaldıracın kademe sınırına sığmalıdır. notional paritenin iki yönündeki açık
+# büyüklüğün büyük olanıdır.
+def check_leverage_change(spec: SymbolSpec, old: int, new: float, notional: float) -> None:
+    """Paritenin kaldıracının değişebileceğini doğrular.
+
+    Args:
+        spec: Paritenin kuralları.
+        old: Paritenin bugünkü kaldıracı.
+        new: İstenen kaldıraç.
+        notional: Paritede açık pozisyonun büyüklüğü, yoksa sıfır.
+
+    Raises:
+        RuleError: Kaldıraç geçersizse, açık pozisyonda düşürülüyorsa ya da açık büyüklük yeni kaldıraca sığmıyorsa.
+    """
+    check_leverage(spec, new)
+    if notional <= 0:
+        return
+    if new < old:
+        raise RuleError(f"{spec.symbol} için açık pozisyon varken kaldıraç düşürülemez, bugünkü kaldıraç {old}x.")
+    check_notional(spec, int(new), notional)
+
+
+# Binance miktarı adımın katı, en küçük büyüklüğün üstünde ve emrin türünün
+# sınırının altında ister. Piyasa emrinin sınırı limit ve tetikli emirlerinkinden
+# dardır, tetikli emir de tetiklenince piyasa emri olur ama Binance onu
+# kurulurken limit sınırıyla kontrol eder.
+def check_qty(spec: SymbolSpec, qty: float, price: float, market: bool) -> None:
+    """Bir emrin miktarını doğrular.
+
+    Args:
+        spec: Paritenin kuralları.
+        qty: Emrin miktarı.
+        price: Büyüklüğün hesaplandığı fiyat, emrin fiyatı ya da güncel fiyat.
+        market: Emir anında piyasadan dolacaksa True.
+
+    Raises:
+        RuleError: Miktar sıfırsa, adımın katı değilse, sınırı aşıyorsa ya da büyüklük en küçük sınırın altındaysa.
+    """
+    unit = numbers.qty(spec.qty_step, spec.symbol)
+    if qty <= 0:
+        raise RuleError("Miktar sıfırdan büyük olmalı.")
+    if abs(qty / spec.qty_step - round(qty / spec.qty_step)) > 1e-6:
+        raise RuleError(f"{spec.symbol} için miktar {numbers.num(qty)}, miktar adımı {unit} değerinin katı olmalı.")
+    top = spec.max_market_qty if market else spec.max_qty
+    if qty > top + TOLERANCE:
+        kind = "piyasa emrinin" if market else "emrin"
+        raise RuleError(f"{spec.symbol} için tek {kind} miktarı en fazla {numbers.qty(top, spec.symbol)} olabilir.")
+    smallest = min_notional(spec, price)
+    if qty * price < smallest - TOLERANCE:
+        raise RuleError(f"{spec.symbol} için en küçük işlem büyüklüğü yaklaşık {numbers.num(smallest, 2)} dolar, "
+                        f"bu emirle {numbers.num(qty * price, 2)} dolar oluyor.")
+
+
+# Fiyat ve tetik Binance'te fiyat adımının katı olmalıdır.
 def check_ticks(spec: SymbolSpec, *prices: float | None) -> None:
     for x in prices:
         if x and abs(x / spec.tick - round(x / spec.tick)) > 1e-6:
@@ -133,15 +233,47 @@ def check_ticks(spec: SymbolSpec, *prices: float | None) -> None:
                             f"değerinin katı olmalı.")
 
 
-# ref bir pozisyonda güncel fiyat ya da giriş fiyatı, bir emirde tetik
-# fiyatıdır. SL'nin ref'in zarar tarafında olması gerekir.
-def check_sl(side: Side, ref: float, sl: float | None) -> None:
-    if sl is None:
-        return
-    if side is Side.LONG and sl >= ref:
-        raise RuleError(f"Long için SL {numbers.num(sl)}, referans fiyat {numbers.num(ref)} altında olmalı.")
-    if side is Side.SHORT and sl <= ref:
-        raise RuleError(f"Short için SL {numbers.num(sl)}, referans fiyat {numbers.num(ref)} üstünde olmalı.")
+# Limit fiyatı mark fiyatından fazla uzak olamaz, Binance'in PERCENT_PRICE
+# kuralı. Alış limiti mark × price_up'ı aşamaz, satış limiti mark ×
+# price_down'ın altına inemez.
+def check_price_band(spec: SymbolSpec, buy: bool, price: float, mark: float) -> None:
+    if buy and price > mark * spec.price_up + TOLERANCE:
+        raise RuleError(f"{spec.symbol} için alış limiti en fazla {numbers.price(mark * spec.price_up)} olabilir, "
+                        f"mark fiyatı {numbers.price(mark)}.")
+    if not buy and price < mark * spec.price_down - TOLERANCE:
+        raise RuleError(f"{spec.symbol} için satış limiti en az {numbers.price(mark * spec.price_down)} olabilir, "
+                        f"mark fiyatı {numbers.price(mark)}.")
+
+
+# Stop alışta fiyat tetiğin üstüne çıkınca, satışta altına inince tetiklenir.
+# Take-profit tersidir. Tetik daha kurulurken geçilmişse Binance emri hemen
+# tetiklenirdi diyerek -2021 hatasıyla reddeder. price tetiğin baktığı
+# fiyattır: SL ve izde mark, giriş ve TP'de son fiyat, dolumda kurulacak
+# korumada girişin fiyatı. Mesaj emri Binance'in alış satış diliyle değil
+# kırılım, geri çekilme, SL ve TP diye anar, Opus ve panel böyle düşünür.
+def check_trigger(stop: bool, buy: bool, reduce: bool, trigger: float, price: float, basis: str) -> None:
+    """Tetiğin güncel fiyata göre doğru tarafta olduğunu doğrular.
+
+    Args:
+        stop: Stop emriyse True, take-profit emriyse False.
+        buy: Emir alışsa True.
+        reduce: Emir pozisyonu kapatıyorsa True.
+        trigger: Tetik fiyatı.
+        price: Tetiğin baktığı fiyat.
+        basis: O fiyatın mesajdaki adı, örneğin mark fiyatı ya da son fiyat.
+
+    Raises:
+        RuleError: Tetik fiyatın yanlış tarafındaysa.
+    """
+    above = buy == stop
+    if (trigger <= price) if above else (trigger >= price):
+        if reduce:
+            name = "SL" if stop else "TP"
+        else:
+            name = "Kırılım girişinin" if stop else "Geri çekilme girişinin"
+        where = "üstünde" if above else "altında"
+        raise RuleError(f"{name} tetiği {numbers.price(trigger)}, {basis} {numbers.price(price)} olduğu için bu "
+                        f"fiyatın {where} olmalı, yoksa emir hemen tetiklenirdi.")
 
 
 def check_trail(pct: float | None) -> None:
@@ -152,188 +284,43 @@ def check_trail(pct: float | None) -> None:
 
 # --- İz süren stop ---
 
-# best pozisyonun açılıştan beri gördüğü en iyi fiyattır: long'da en yüksek,
-# short'ta en düşük.
+# side korunan pozisyonun yönüdür. best emrin konduğu andan beri görülen en iyi
+# mark fiyatıdır: long'da en yüksek, short'ta en düşük.
 def trail_level(side: Side, best: float, pct: float) -> float:
     return best * (1 - pct / 100) if side is Side.LONG else best * (1 + pct / 100)
 
 
-# İz sonradan eklenince en iyi fiyat sıfırlanmaz. Fiyat o en iyi noktadan
-# verilen yüzdeden fazla geri döndüyse stop daha kurulurken fiyatın gerisinde
-# kalır ve pozisyon hemen kapanırdı. Bu istek reddedilir, mesaj verilebilecek
-# en küçük yüzdeyi söyler.
-def trailed_sl(side: Side, best: float, pct: float, sl: float | None, price: float) -> float:
-    """İz eklenen bir pozisyonun yeni SL'sini döndürür.
+# --- Kâğıt eşleştirme ---
 
-    Args:
-        side: Pozisyonun yönü.
-        best: Pozisyonun açılıştan beri gördüğü en iyi fiyat.
-        pct: İz süren stopun en iyi fiyattan yüzde uzaklığı.
-        sl: Pozisyonun var olan SL'si, yoksa None.
-        price: Güncel fiyat.
-
-    Returns:
-        İzin seviyesi ile var olan SL'den fiyata yakın olanı.
-
-    Raises:
-        RuleError: İzin seviyesi güncel fiyatı zaten geçmişse.
-    """
-    level = trail_level(side, best, pct)
-    if (level >= price) if side is Side.LONG else (level <= price):
-        least = (1 - price / best) * 100 if side is Side.LONG else (price / best - 1) * 100
-        raise RuleError(
-            f"İz süren stop yüzde {numbers.num(pct)} verildi. Pozisyonun gördüğü en iyi fiyat {numbers.num(best)}, "
-            f"stop {numbers.num(level)} seviyesine düşüyor ve güncel fiyat {numbers.num(price)} bunu zaten geçmiş. "
-            f"Bu pozisyonda iz yüzde {numbers.num(least, 2)} değerinden büyük olmalı.")
-    if sl is None or (level > sl if side is Side.LONG else level < sl):
-        return level
-    return sl
+# Defterdeki limit emir fiyat seviyeyi en az bir tick geçince tam seviyesinden
+# maker dolar. Seviyeye yalnızca dokunan fiyat Binance'te sıradaki emirlere
+# yetmeyebilir, dolduğu varsayılmaz.
+def limit_reached(spec: SymbolSpec, buy: bool, price: float, high: float, low: float) -> bool:
+    return low <= price - spec.tick + TOLERANCE if buy else high >= price + spec.tick - TOLERANCE
 
 
-# --- TP kademeleri ---
-
-# Kademeler fiyata en yakından en uzağa sıralanır. Fiyat ilerledikçe kademeler
-# bu sırayla gerçekleşir, eşleştirici de listenin başına bakar.
-def check_tp_levels(side: Side, ref: float, levels: list[TpLevel]) -> list[TpLevel]:
-    """Kademeleri doğrular ve gerçekleşecekleri sırayla döndürür.
-
-    Args:
-        side: Pozisyonun ya da emrin yönü.
-        ref: Kademelerin kâr tarafında olması gereken fiyat, güncel ya da tetik fiyatı.
-        levels: Fiyat ve yüzde taşıyan kademeler.
-
-    Returns:
-        Fiyata en yakın kademe başta olacak şekilde sıralanmış kademeler.
-
-    Raises:
-        RuleError: Bir kademenin fiyatı ya da yüzdesi geçersizse ya da yüzdelerin toplamı yüzü geçiyorsa.
-    """
-    total = 0.0
-    for k in levels:
-        if k.price <= 0 or k.pct <= 0:
-            raise RuleError("Her TP kademesinin fiyatı ve yüzdesi sıfırdan büyük olmalı.")
-        if (side is Side.LONG and k.price <= ref) or (side is Side.SHORT and k.price >= ref):
-            where = "üstünde" if side is Side.LONG else "altında"
-            raise RuleError(f"{side} için TP {numbers.num(k.price)}, referans fiyat {numbers.num(ref)} {where} olmalı.")
-        total += k.pct
-    if total > 100 + TOLERANCE:
-        raise RuleError(f"TP kademelerinin yüzdeleri toplamı en fazla 100 olabilir, {numbers.num(total)} verildi.")
-    return sorted(levels, key=lambda k: k.price, reverse=side is Side.SHORT)
+# above True ise emir fiyat yükselip seviyeye gelince tetiklenir: alış stopu
+# ve satış take-profit'i. False ise düşüp gelince.
+def triggered(above: bool, level: float, high: float, low: float) -> bool:
+    return high >= level if above else low <= level
 
 
-# Yüzdelerin toplamı yüzse son kademe kalanın tamamıdır ve qty None kalır.
-# Böylece kademelerin yuvarlanmış miktarları toplamı pozisyondan bir adım az
-# çıksa bile pozisyon son kademede tamamen kapanır.
-def split_tp(spec: SymbolSpec, levels: list[TpLevel], qty: float) -> list[TpLevel]:
-    """Yüzdeli kademeleri pozisyonun miktarına göre mutlak miktara çevirir.
-
-    Raises:
-        RuleError: Bir kademenin miktarı tek bir miktar adımından küçük kalıyorsa.
-    """
-    total = sum(k.pct for k in levels)
-    out = []
-    for i, k in enumerate(levels):
-        if i == len(levels) - 1 and total >= 100 - TOLERANCE:
-            out.append(TpLevel(k.price, k.pct, None))
-            continue
-        q = round_qty(spec, qty * k.pct / 100)
-        if q == 0:
-            raise RuleError(f"TP kademesi {numbers.num(k.price)} için yüzde {numbers.num(k.pct)}, en küçük miktar "
-                            f"adımının altında kalıyor. "
-                            f"Kademeyi büyüt ya da kademe sayısını azalt.")
-        out.append(TpLevel(k.price, k.pct, q))
-    return out
-
-
-# Kademenin miktarı kurulurken sabitlenir, Binance'teki yalnızca kapatan emir
-# gibi. Pozisyon kısmen kapanınca, bir kademe dolunca ya da ekleme yapılınca
-# miktar aynı kalır ama pozisyonun başka bir payına denk gelir. Yüzde burada o
-# güne çekilir, panel ve Opus eski yüzdeyi görmesin.
-#
-# Yüzde yukarı yuvarlanır. Panel ya da Opus bu yüzdeyle kademeyi yeniden
-# kurarsa split_tp aşağı yuvarladığı için aynı miktar çıkar, aşağı yuvarlanmış
-# bir yüzde bir adım eksik miktar verirdi. Toplam yine de yüzü geçmez.
-# Pozisyon küçülüp kapsamadığı kademeler düşer, onlar hiç dolamaz.
-def tp_shares(levels: tuple[TpLevel, ...], qty: float) -> tuple[TpLevel, ...]:
-    """Açık pozisyonun kademelerinin yüzdesini pozisyonun bugünkü miktarına göre yeniden yazar.
-
-    Args:
-        levels: Miktarı belli kademeler, son kademe kalanın tamamıysa qty None.
-        qty: Pozisyonun bugünkü miktarı.
-
-    Returns:
-        Fiyatı ve miktarı aynı, yüzdesi güncel kademeler.
-    """
-    out, left, used = [], qty, 0.0
-    for k in levels:
-        if left <= TOLERANCE:
-            break
-        if k.qty is None:
-            out.append(TpLevel(k.price, round(100 - used, 2), None))
-            break
-        take = min(k.qty, left)
-        pct = min(math.ceil(take / qty * 10000 - 1e-6) / 100, round(100 - used, 2))
-        out.append(TpLevel(k.price, pct, k.qty))
-        used += pct
-        left -= take
-    return tuple(out)
-
-
-# --- Büyüklük ---
-
-# Miktar marjin ile kaldıraçtan çıkarılır ve adıma yuvarlanır. Gerçek marjin
-# yuvarlanmış miktardan yeniden hesaplanır, bu yüzden verilen marjinden biraz
-# az olabilir. Nakit yetmiyorsa ama fark _CASH_SLACK'ten küçükse miktar nakde
-# sığacak kadar küçültülür.
-#
-# TODO: Miktar sınırı Binance'in piyasa emri sınırıdır. Limit emrin sınırı daha
-# geniştir, emir türleri ayrılınca ikisi ayrı kontrol edilmeli.
-def size(spec: SymbolSpec, leverage: float, margin: float, entry: float, fee_rate: float, cash: float) -> Sizing:
-    """Bir girişin miktarını, gerçek marjinini ve komisyonunu hesaplar.
-
-    Args:
-        spec: Paritenin kuralları.
-        leverage: Kaldıraç. Sınırı ayrıca check_leverage kontrol eder.
-        margin: Ayrılmak istenen marjin, dolar.
-        entry: Kayma uygulanmış giriş fiyatı.
-        fee_rate: Girişin komisyon oranı.
-        cash: Hesapta kullanılabilir nakit.
-
-    Returns:
-        Yuvarlanmış miktar, ona düşen marjin ve giriş komisyonu.
-
-    Raises:
-        RuleError: Marjin sıfır ya da negatifse, nakit yetmiyorsa, miktar tek emrin sınırını aşıyorsa ya da
-            büyüklük en küçük sınırın altındaysa.
-    """
-    if margin <= 0:
-        raise RuleError("Marjin sıfırdan büyük olmalı.")
-    qty = round_qty(spec, margin * leverage / entry)
-    needed = lambda q: q * entry / leverage + q * entry * fee_rate
-    if needed(qty) > cash + TOLERANCE:
-        most = round_qty(spec, cash / (entry / leverage + entry * fee_rate))
-        if needed(qty) > cash * (1 + _CASH_SLACK) or most <= 0:
-            raise RuleError(f"Yetersiz nakit. Nakit {numbers.num(cash, 2)} dolar, bu işlem için "
-                            f"{numbers.num(needed(qty), 2)} dolar gerekiyor.")
-        qty = most
-    if qty > spec.max_market_qty:
-        raise RuleError(f"{spec.symbol} için tek emrin miktarı en fazla "
-                        f"{numbers.qty(spec.max_market_qty, spec.symbol)} olabilir.")
-    smallest = min_notional(spec, entry)
-    if qty * entry < smallest - TOLERANCE:
-        got = (f"miktar sıfıra yuvarlanıyor, en küçük miktar {numbers.qty(spec.qty_step, spec.symbol)}" if qty == 0
-               else f"büyüklük {numbers.num(qty * entry, 2)} dolar oluyor")
-        raise RuleError(
-            f"{spec.symbol} için en küçük işlem büyüklüğü yaklaşık {numbers.num(smallest, 2)} dolar. Bu marjin ve "
-            f"kaldıraçla {got}. {numbers.num(leverage)}x kaldıraçla en az {numbers.num(smallest / leverage, 2)} "
-            f"dolar marjin gerekir.")
-    return Sizing(qty, qty * entry / leverage, qty * entry * fee_rate)
+# Tetiklenen piyasa emrinin kaymasız dolum fiyatı. Binance'te son fiyat
+# seviyeye vardığı an piyasa emri gider ve o anın fiyatından dolar. Aralık
+# seviyenin ötesinde açıldıysa o an aralığın başıdır, dolum açılıştandır.
+# Değilse fiyat seviyeyi aralığın içinde geçmiştir, dolum seviyedendir.
+# Tetikten sonra olan, örneğin iğnenin geri dönmesi, dolumu değiştirmez.
+# open_ akışta bir önceki son fiyat, kapalı geçen dakikalar işlenirken mumun
+# açılışıdır.
+def trigger_fill(above: bool, level: float, open_: float) -> float:
+    beyond = open_ >= level if above else open_ <= level
+    return open_ if beyond else level
 
 
 # --- Kapanış ---
 
-# Maker kapanış, yani TP kademesi, tam seviyesinden ve kaymasız gerçekleşir.
-# Diğer kapanışlar kayma yer: long'un kapanışı satıştır, short'unki alış.
+# Maker kapanış tam seviyesinden ve kaymasız gerçekleşir. Diğer kapanışlar
+# kayma yer: long'un kapanışı satıştır, short'unki alış.
 def close_fill(spec: SymbolSpec, side: Side, entry: float, qty: float, price: float, maker: bool,
                fee_rate: float) -> tuple[float, float, float]:
     """Bir kapanışın gerçekleşen fiyatını, fiyat kârını ve kapanış komisyonunu döndürür.

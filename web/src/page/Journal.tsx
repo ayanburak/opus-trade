@@ -108,7 +108,7 @@ function TradeRow({ t }: { t: Trade }) {
   return (
     <div className="jevent">
       <span className="mono dim">{dayClock(t.exit_time)}</span>
-      <span>#{t.number} {t.symbol} {t.side} · {REASONS[t.reason] ?? t.reason} · {num(t.exit_price)}</span>
+      <span>{t.symbol} {t.side} · {REASONS[t.reason] ?? t.reason} · {num(t.exit_price)}</span>
       <span className={`mono push ${t.net >= 0 ? "up" : "down"}`}>{signed(t.net)}</span>
     </div>
   );

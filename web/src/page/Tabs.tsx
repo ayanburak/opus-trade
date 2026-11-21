@@ -13,14 +13,14 @@ import { createChart, LineStyle, type UTCTimestamp } from "lightweight-charts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Account } from "../api/types";
 import { chartTime } from "../shared/chart";
-import { dayClock, duration, money, num, signed } from "../shared/format";
-import { REASONS } from "../shared/labels";
-import type { EquityPoint, TpLevel, Trade } from "../shared/types";
+import { dayClock, duration, money, num, qty, signed } from "../shared/format";
+import { REASONS, orderName } from "../shared/labels";
+import type { EquityPoint, Order, Trade } from "../shared/types";
+import { exitText, exitsOf, requestText } from "../shared/orders";
 
 type Tab = "journal" | "positions" | "orders" | "alerts" | "trades" | "equity";
 
-const levels = (ls: TpLevel[]) =>
-  ls.length ? ls.map((l) => (l.pct >= 100 ? num(l.price) : `${num(l.price)} %${num(l.pct, 0)}`)).join(" · ") : "—";
+const exits = (os: Order[]) => (os.length ? os.map((o) => <div key={o.id}>{exitText(o)}</div>) : "—");
 
 const Side = ({ side }: { side: string }) => <span className={`strong ${side === "long" ? "up" : "down"}`}>{side}</span>;
 
@@ -29,42 +29,46 @@ function Positions({ account }: { account: Account }) {
   if (!ps.length) return <div className="empty">Açık pozisyon yok.</div>;
   return (
     <table className="grid" style={{ minWidth: 820 }}>
-      <thead><tr><th>#</th><th>Parite</th><th className="num">Giriş</th><th className="num">Güncel</th><th>TP</th><th>SL</th>
-        <th className="num">Likidasyon</th><th className="num">Açık K/Z</th></tr></thead>
+      <thead><tr><th>Pozisyon</th><th className="num">Miktar</th><th className="num">Giriş</th><th className="num">Güncel</th>
+        <th>TP</th><th>SL ve iz</th><th className="num">Likidasyon</th><th className="num">Açık K/Z</th></tr></thead>
       <tbody>
-        {ps.map((p) => (
-          <tr key={p.id}>
-            <td className="mono">{p.number}</td>
-            <td><Side side={p.side} /> {p.symbol} · {num(p.leverage, 0)}x · {num(p.qty, 4)}</td>
-            <td className="num">{num(p.entry_price)}</td>
-            <td className="num">{num(account.prices[p.symbol])}</td>
-            <td className="mono small">{levels(p.tp_levels)}</td>
-            <td className="mono small">{p.sl == null ? "—" : num(p.sl)}{p.trail_pct ? ` · iz %${num(p.trail_pct, 1)}` : ""}</td>
-            <td className="num dim">{num(p.liq_price)}</td>
-            <td className={`num ${p.open_pnl == null ? "" : p.open_pnl >= 0 ? "up" : "down"}`}>{signed(p.open_pnl)}</td>
-          </tr>
-        ))}
+        {ps.map((p) => {
+          const { tp, stop } = exitsOf(account.state.orders, p);
+          return (
+            <tr key={p.id}>
+              <td className="nowrap">{p.symbol} <Side side={p.side} /> · {account.state.leverages[p.symbol] ?? "—"}x</td>
+              <td className="num">{qty(p.qty)}</td>
+              <td className="num">{num(p.entry_price)}</td>
+              <td className="num">{num(account.prices[p.symbol])}</td>
+              <td className="mono small nowrap">{exits(tp)}</td>
+              <td className="mono small nowrap">{exits(stop)}</td>
+              <td className="num dim">{num(p.liq_price)}</td>
+              <td className={`num ${p.open_pnl == null ? "" : p.open_pnl >= 0 ? "up" : "down"}`}>{signed(p.open_pnl)}</td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
 }
 
+// Kapatan emirler pozisyonun satırında durur, burada yalnızca bekleyen girişler var.
 function Orders({ account }: { account: Account }) {
-  const os = account.state.orders;
-  if (!os.length) return <div className="empty">Bekleyen emir yok.</div>;
+  const os = account.state.orders.filter((o) => !o.reduce);
+  if (!os.length) return <div className="empty">Bekleyen giriş emri yok.</div>;
   return (
-    <table className="grid" style={{ minWidth: 760 }}>
-      <thead><tr><th>#</th><th>Parite</th><th className="num">Tetik</th><th className="num">Marjin</th><th>TP</th><th>SL</th>
-        <th>Süre</th></tr></thead>
+    <table className="grid" style={{ minWidth: 820 }}>
+      <thead><tr><th>#</th><th>Emir</th><th className="num">Fiyat</th><th className="num">Miktar</th><th className="num">Ayrılan</th>
+        <th>Dolunca koruma</th><th>Süre</th></tr></thead>
       <tbody>
         {os.map((o) => (
           <tr key={o.id}>
             <td className="mono">{o.number}</td>
-            <td><Side side={o.side} /> {o.symbol} · {num(o.leverage, 0)}x</td>
-            <td className="num">{num(o.trigger)}</td>
-            <td className="num">{money(o.margin)}</td>
-            <td className="mono small">{levels(o.tp_levels)}</td>
-            <td className="mono small">{o.sl == null ? "—" : num(o.sl)}</td>
+            <td>{o.symbol} <Side side={o.side} /> · {orderName(o)} · {account.state.leverages[o.symbol] ?? "—"}x</td>
+            <td className="num">{num(o.price)}</td>
+            <td className="num">{qty(o.qty)}</td>
+            <td className="num">{o.margin ? money(o.margin) : "—"}</td>
+            <td className="mono small">{requestText(o.protection)}</td>
             <td className="small">{o.expires_at ? `${dayClock(o.expires_at)}'e kadar` : "süresiz"}</td>
           </tr>
         ))}
@@ -99,13 +103,12 @@ function Trades({ trades }: { trades: Trade[] }) {
   if (!trades.length) return <div className="empty">Kapanmış işlem yok.</div>;
   return (
     <table className="grid" style={{ minWidth: 800 }}>
-      <thead><tr><th>#</th><th>Parite</th><th className="num">Giriş</th><th className="num">Çıkış</th><th>Neden</th><th>Süre</th>
+      <thead><tr><th>Pozisyon</th><th className="num">Giriş</th><th className="num">Çıkış</th><th>Neden</th><th>Süre</th>
         <th>Kapanış</th><th className="num">Net</th></tr></thead>
       <tbody>
         {trades.map((t) => (
           <tr key={t.id}>
-            <td className="mono">{t.number}</td>
-            <td><Side side={t.side} /> {t.symbol} · {num(t.leverage, 0)}x</td>
+            <td>{t.symbol} <Side side={t.side} /> · {num(t.leverage, 0)}x · {qty(t.qty)}</td>
             <td className="num">{num(t.entry_price)}</td>
             <td className="num">{num(t.exit_price)}</td>
             <td className="small">{REASONS[t.reason] ?? t.reason}</td>
@@ -158,7 +161,7 @@ export function Tabs({ account, trades, equity, start, journal }: Props) {
   const tab = picked === "journal" && !journal ? "positions" : picked;
   const tabs: [Tab, string, number | null][] = [
     ...(journal ? [["journal", "Günlük", null] as [Tab, string, null]] : []),
-    ["positions", "Pozisyonlar", account.state.positions.length], ["orders", "Bekleyen emirler", account.state.orders.length],
+    ["positions", "Pozisyonlar", account.state.positions.length], ["orders", "Bekleyen emirler", account.state.orders.filter((o) => !o.reduce).length],
     ["alerts", "Alarmlar", account.alerts.length], ["trades", "Geçmiş işlemler", trades.length], ["equity", "Özkaynak eğrisi", null],
   ];
   return (

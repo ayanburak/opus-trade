@@ -31,9 +31,7 @@ from ..broker.base import Broker, ClosePreview, Preview
 from ..domain import rules
 from ..domain.catalog import Catalog
 from ..domain.errors import RuleError
-from ..domain.models import TpLevel
-from ..domain.trading import (AccountEvent, Actor, AddToPosition, ClosePosition, Command, OpenPosition, PlaceOrder,
-                              UpdateProtection)
+from ..domain.trading import AccountEvent, Actor, AmendOrder, ClosePosition, Command, PlaceOrder, SetLeverage
 from .bus import EventBus
 from .limits import Limit, breach
 from .risk import RiskGuard
@@ -70,41 +68,48 @@ class Gate:
         self.guard = guard
         self.source = restrictions
 
-    # Sıfır SL korumayı kaldırmak demektir, yuvarlanmaz. Sembolü katalogda
-    # olmayan komut olduğu gibi geçer, broker onu kendi mesajıyla reddeder.
+    # Emrin fiyatı ve koruma isteklerinin fiyatları adıma oturtulur. Sembolü
+    # katalogda olmayan komut olduğu gibi geçer, broker onu kendi mesajıyla
+    # reddeder.
     def _snap(self, cmd: Command) -> Command:
-        symbol = cmd.ref.symbol if isinstance(cmd, UpdateProtection) else getattr(cmd, "symbol", None)
-        if not isinstance(cmd, (OpenPosition, PlaceOrder, UpdateProtection)) or symbol not in self.catalog:
+        symbol = cmd.ref.symbol if isinstance(cmd, AmendOrder) else getattr(cmd, "symbol", None)
+        if not isinstance(cmd, (PlaceOrder, AmendOrder)) or symbol not in self.catalog:
             return cmd
         spec = self.catalog.get(symbol)
         tick = lambda x: rules.to_tick(spec, x) if x else x
-        changes = {"sl": tick(cmd.sl)}
-        if cmd.tp_levels is not None:
-            changes["tp_levels"] = tuple(TpLevel(tick(k.price), k.pct, k.qty) for k in cmd.tp_levels)
-        if isinstance(cmd, PlaceOrder):
-            changes["trigger"] = tick(cmd.trigger)
-        return replace(cmd, **changes)
+        if isinstance(cmd, AmendOrder):
+            return replace(cmd, price=tick(cmd.price))
+        return replace(cmd, price=tick(cmd.price),
+                       protection=tuple(replace(x, price=tick(x.price)) for x in cmd.protection))
 
     def _check(self, cmd: Command, actor: Actor, now: int) -> None:
         state = self.broker.state()
-        if self.guard and (reason := self.guard.check(cmd, state)):
-            raise RuleError(f"Reddedildi, {reason}.")
+        if self.guard and (reason := self.guard.check(cmd, state, self.broker.price)):
+            raise RuleError(f"{reason[0].upper()}{reason[1:]}.")
         if actor is Actor.STRATEGY and self.source:
             found = self.source.restrictions(now)
-            hit = breach(cmd, state, [r.limit for r in found])
+            hit = breach(cmd, state, [r.limit for r in found], self.broker.price)
             if hit:
                 rid = next(r.id for r in found if r.limit is hit)
-                raise RuleError(f"Reddedildi, yöneticinin #{rid} numaralı kesin kısıtı geçerli: {hit.text()}.")
+                raise RuleError(f"Yöneticinin #{rid} numaralı kesin kısıtı geçerli: {hit.text()}.")
 
-    def preview(self, cmd: OpenPosition | PlaceOrder | AddToPosition, actor: Actor, now: int) -> Preview:
-        """Giriş ya da ekleme komutunu göndermeden kapının ve hesabın denetiminden geçirir, tahmini sonucunu döndürür.
+    def preview(self, cmd: PlaceOrder, actor: Actor, now: int, leverage: int | None = None) -> Preview:
+        """Giriş emrini göndermeden kapının ve hesabın denetiminden geçirir, tahmini sonucunu döndürür.
+
+        Args:
+            cmd: Önizlenecek giriş emri.
+            actor: Komutun kaynağı.
+            now: Şimdiki zaman.
+            leverage: Girişten önce ayarlanacak kaldıraç, zincirdeki kaldıraç komutunun değeri.
 
         Raises:
             RuleError: Risk koruması, bir kesin kısıt ya da hesap kuralları komutu reddederse.
         """
         cmd = self._snap(cmd)
+        if leverage is not None:
+            self._check(SetLeverage(cmd.symbol, leverage), actor, now)
         self._check(cmd, actor, now)
-        return self.broker.preview(cmd)
+        return self.broker.preview(cmd, leverage)
 
     def preview_close(self, cmd: ClosePosition, actor: Actor, now: int) -> ClosePreview:
         """Kapatma komutunu göndermeden kapının ve hesabın denetiminden geçirir, tahmini sonucunu döndürür.

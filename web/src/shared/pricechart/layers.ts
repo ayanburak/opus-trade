@@ -10,8 +10,8 @@
  * description: Fiyat grafiğinin katmanları, çizgileri ve işaretleri.
  */
 
-import { signed, num } from "../format";
-import { REASONS } from "../labels";
+import { qty, signed } from "../format";
+import { REASONS, orderName } from "../labels";
 import type { Alert, Order, Position, Trade } from "../types";
 
 /** Grafikte ayrı ayrı gizlenebilen katmanlar. */
@@ -72,29 +72,38 @@ export function readHidden(raw: string | null): Set<Layer> {
 
 /**
  * Grafikteki bir fiyat çizgisi. key çizimler arasında aynı çizgiyi tanır. Çizgi ait olduğu pozisyonu, emri ya da
- * alarmı taşır, tp kaçıncı TP kademesi olduğudur. Düzenlenebilen grafik sürüklemeyi bunlarla öneriye çevirir. color
- * verilmişse çizgi katmanın rengi yerine onu alır, giriş ve emir çizgisi yönünü böyle gösterir.
+ * alarmı taşır, koruma çizgisi hem emrini hem pozisyonunu. Düzenlenebilen grafik sürüklemeyi bunlarla öneriye
+ * çevirir. color verilmişse çizgi katmanın rengi yerine onu alır, giriş ve emir çizgisi yönünü böyle gösterir.
  */
 export interface PriceLine {
   key: string; layer: Layer; price: number; title: string; color?: string;
-  position?: Position; tp?: number; order?: Order; alert?: Alert;
+  position?: Position; order?: Order; alert?: Alert;
 }
 
-/** Seçili paritenin pozisyon, emir ve alarm çizgileri, gizli katmanlar çıkarılmış olarak. */
+/**
+ * Seçili paritenin pozisyon, emir ve alarm çizgileri, gizli katmanlar çıkarılmış olarak. TP ve SL çizgileri
+ * pozisyonun kapatan emirleridir, her biri numarası ve miktarıyla. İzin sabit bir fiyatı olmadığı için çizgisi yoktur.
+ */
 export function priceLines(symbol: string, positions: Position[], orders: Order[], alerts: Alert[],
                            hidden: ReadonlySet<Layer>): PriceLine[] {
   const out: PriceLine[] = [];
-  for (const p of positions.filter((x) => x.symbol === symbol)) {
-    out.push({ key: `e${p.id}`, layer: "entry", price: p.entry_price, title: `#${p.number} ${p.side} giriş`, position: p,
+  const mine = positions.filter((x) => x.symbol === symbol);
+  for (const p of mine) {
+    out.push({ key: `e${p.id}`, layer: "entry", price: p.entry_price, title: `${p.side} giriş`, position: p,
               color: p.side === "long" ? "--long" : "--short" });
-    p.tp_levels.forEach((l, i) => out.push({ key: `t${p.id}-${i}`, layer: "tp", price: l.price,
-                                              title: `#${p.number} TP %${num(l.pct, 0)}`, position: p, tp: i }));
-    if (p.sl != null) out.push({ key: `s${p.id}`, layer: "sl", price: p.sl, title: `#${p.number} SL`, position: p });
-    out.push({ key: `l${p.id}`, layer: "liq", price: p.liq_price, title: `#${p.number} likidasyon`, position: p });
+    out.push({ key: `l${p.id}`, layer: "liq", price: p.liq_price, title: `${p.side} likidasyon`, position: p });
   }
-  for (const o of orders.filter((x) => x.symbol === symbol)) {
-    out.push({ key: `o${o.id}`, layer: "order", price: o.trigger, title: `#${o.number} ${o.side} emir`, order: o,
-              color: o.side === "long" ? "--long" : "--short" });
+  for (const o of orders.filter((x) => x.symbol === symbol && x.price != null)) {
+    const price = o.price as number;
+    if (o.reduce) {
+      const layer: Layer = o.type === "take_profit" ? "tp" : "sl";
+      const size = o.qty == null ? "tümü" : qty(o.qty);
+      out.push({ key: `o${o.id}`, layer, price, title: `#${o.number} ${orderName(o)} ${size}`, order: o,
+                 position: mine.find((p) => p.side === o.side) });
+    } else {
+      out.push({ key: `o${o.id}`, layer: "order", price, title: `#${o.number} ${o.side} ${orderName(o)}`, order: o,
+                 color: o.side === "long" ? "--long" : "--short" });
+    }
   }
   for (const a of alerts.filter((x) => x.symbol === symbol)) {
     out.push({ key: `a${a.number}`, layer: "alarm", price: a.price, title: `alarm #${a.number}`, alert: a });
@@ -115,11 +124,11 @@ export function markers(trades: Trade[], symbol: string, from: number): Marker[]
     const long = t.side === "long";
     if (t.entry_time >= from) {
       out.push({ time: t.entry_time, position: long ? "belowBar" : "aboveBar", shape: long ? "arrowUp" : "arrowDown",
-                 tone: long ? "up" : "down", text: `#${t.number} ${t.side}` });
+                 tone: long ? "up" : "down", text: t.side });
     }
     if (t.exit_time >= from) {
       out.push({ time: t.exit_time, position: long ? "aboveBar" : "belowBar", shape: "circle", tone: t.net >= 0 ? "up" : "down",
-                 text: `#${t.number} ${REASONS[t.reason] ?? t.reason} ${signed(t.net)}` });
+                 text: `${REASONS[t.reason] ?? t.reason} ${signed(t.net)}` });
     }
   }
   return out.sort((a, b) => a.time - b.time);

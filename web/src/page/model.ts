@@ -5,7 +5,7 @@
  * Sayfanın saf mantığı. Üst satırdaki rakamlar, sayfanın durum satırı,
  * günlükteki uyandırma metni ve araç sayıları, günlükte kararlarla işlem
  * olaylarının tek bir zaman akışında birleşmesi. Grafiğin mantığı
- * shared/pricechart'tadır.
+ * shared/pricechart'ta, koruma emirlerinin metni shared/orders'tadır.
  *
  * description: Herkese açık sayfanın hesapları ve metinleri.
  */
@@ -15,7 +15,7 @@
 // pozisyon. Stratejinin kendi kapattığı işlem zaten kararın sonuçlarında
 // yazılıdır, ikinci kez görünmez.
 
-import { REASONS, WAKES, toolName } from "../shared/labels";
+import { REASONS, WAKES, orderName, toolName } from "../shared/labels";
 import { num, when } from "../shared/format";
 import type { Trade, Wake } from "../shared/types";
 import type { Account, Entry, Profile, ToolRecord } from "../api/types";
@@ -48,11 +48,26 @@ export function status(p: Profile, thinking: boolean, tools: number, now: number
   return { text: p.next_wake ? `Sonraki çağrı ${when(p.next_wake, now)}` : "Bekliyor", busy: false };
 }
 
+// protection eski modelin olayıdır, eski günlük kayıtları okunsun diye durur.
 export const EVENTS: Record<string, string> = {
   opened: "Pozisyon açıldı", added: "Pozisyona eklendi", closed: "Pozisyon kapandı", protection: "Koruma değişti",
-  order_placed: "Emir kuruldu", order_filled: "Emir gerçekleşti", order_failed: "Emir açılamadı",
-  order_expired: "Emrin süresi doldu", order_cancelled: "Emir iptal edildi", funding: "Fonlama",
+  leverage: "Kaldıraç değişti", order_placed: "Emir kuruldu", order_amended: "Emrin fiyatı değişti",
+  order_filled: "Emir gerçekleşti", order_failed: "Emir açılamadı", order_expired: "Emrin süresi doldu",
+  order_cancelled: "Emir iptal edildi", funding: "Fonlama",
 };
+
+// Yeni olayda numara yalnızca emrindir, emrin adı order_type ile reduce'tan
+// çıkar. Eski kayıtlarda numara pozisyonun numarasıydı ve order_type yoktu,
+// onlar numarasıyla eskisi gibi okunur.
+function eventText(d: Record<string, unknown>): string {
+  const name = d.order_type ? ` ${orderName({ type: String(d.order_type), reduce: Boolean(d.reduce) })}` : "";
+  const ref = d.number != null ? `#${d.number}${name} ` : "";
+  const side = d.side ? ` ${d.side}` : "";
+  const value = d.kind === "leverage" && typeof d.amount === "number" ? ` · ${d.amount}x`
+    : typeof d.price === "number" ? ` · ${num(d.price)}` : "";
+  const reason = d.reason ? `, ${REASONS[String(d.reason)] ?? d.reason}` : "";
+  return `${EVENTS[String(d.kind)] ?? d.kind}${reason} · ${ref}${d.symbol}${side}${value}`;
+}
 
 /** Bir uyandırmanın günlükteki satırı: nedeni ve varsa ayrıntısı. */
 export function wakeText(w: Wake): { label: string; detail: string } {
@@ -65,11 +80,7 @@ export function wakeText(w: Wake): { label: string; detail: string } {
   }
   if (!d) return { label, detail: "" };
   if (d.type === "text") return { label, detail: String(d.text ?? "") };
-  if (d.type === "event") {
-    const reason = d.reason ? `, ${REASONS[String(d.reason)] ?? d.reason}` : "";
-    const price = typeof d.price === "number" ? ` · ${num(d.price)}` : "";
-    return { label, detail: `${EVENTS[String(d.kind)] ?? d.kind}${reason} · #${d.number} ${d.symbol} ${d.side}${price}` };
-  }
+  if (d.type === "event") return { label, detail: eventText(d) };
   if (d.type === "fire") {
     const inner = (d.data ?? {}) as Record<string, unknown>;
     if (d.inner === "alert") return { label, detail: `Alarm ${d.symbol} ${num(inner.price as number)}` };

@@ -31,26 +31,35 @@ description: Opus'un talimatı, karar şeması ve istemi.
 
 from datetime import datetime, timezone
 
+from ...domain import rules
 from ...domain.fees import FeeSchedule
 from ...domain.models import SymbolSpec
-from ...domain.trading import AccountEvent
+from ...domain.trading import AccountEvent, AccountState, Order, OrderType, Position
 from ...triggers.base import Fire
 from ..base import ActionResult, Context, Wake
 from . import actions
 from .hours import hours_text
-from .texts import TZ_LABEL, clock, date_text, event_text, fire_text, levels_text, price
+from .texts import ORDER_NAMES, TZ_LABEL, clock, date_text, event_text, fire_text, guard_text, price
 
-TEMPLATE_VERSION = 4
+TEMPLATE_VERSION = 5
 
 VIEWS = ["yukselis", "dusus", "yatay", "belirsiz"]
 
 
+# Limit fiyatının mark fiyatına uzaklık sınırı iki yönde çoğu zaman aynıdır,
+# farklıysa ikisi de yazılır.
+def _band(s: SymbolSpec) -> str:
+    up, down = (s.price_up - 1) * 100, (1 - s.price_down) * 100
+    return f"yüzde {up:g}" if abs(up - down) < 1e-9 else f"yukarı yüzde {up:g}, aşağı yüzde {down:g}"
+
+
 def _symbol_table(specs: list[SymbolSpec]) -> str:
     lines = ["sembol | açıklama | en fazla kaldıraç | en küçük işlem büyüklüğü | miktar adımı | fiyat adımı | "
-             "tahmini kayma"]
+             "tahmini kayma | limit fiyatının mark fiyatına en fazla uzaklığı | likidasyon ücreti"]
     for s in specs:
         lines.append(f"{s.symbol} | {s.note or s.name.split('/')[0]} | {s.brackets[0].max_leverage}x | "
-                     f"{s.min_notional:g} dolar | {s.qty_step:g} | {s.tick:g} | yüzde {s.slippage * 100:.2f}")
+                     f"{s.min_notional:g} dolar | {s.qty_step:g} | {s.tick:g} | yüzde {s.slippage * 100:.2f} | "
+                     f"{_band(s)} | yüzde {s.liq_fee * 100:g}")
     return "\n".join(lines)
 
 
@@ -98,50 +107,66 @@ ve tartarsın. Önceki çağrılarda vardığın sonuçlar, yeni verilerle yenid
 
 ## Kurallar
 
-- Tek bir dolar bakiyen var. Aynı anda istediğin kadar pozisyon açabilirsin, farklı paritelerde ya da aynı \
-paritede, aynı yönde ya da ters yönde.
-- Pozisyonların ve bekleyen emirlerin aynı numaralandırmayı paylaşır. Numara, o an açık olan pozisyon ve emirlerin \
-kullanmadığı en küçük sayıdır. Kapanan bir kaydın numarası sonra yeni bir kayda verilebilir. Bir emir dolunca \
-açılan pozisyon emrin numarasını alır. Bu yüzden numarayla bir kayda dokunan her eylemde sembolü ve yönü de \
-yazarsın. Numara artık o sembol ve yöndeki kaydı göstermiyorsa eylem reddedilir.
-- Her pozisyonun marjini izoledir. Likidasyonda yalnızca o pozisyonun marjini kaybedilir. Her pozisyonun \
-likidasyon fiyatı sana bildirilir.
-- Miktar, marjin çarpı kaldıracın fiyata bölümüdür ve paritenin miktar adımına aşağı yuvarlanır. Büyüklük, \
-en küçük işlem büyüklüğünden ve bir miktar adımının değerinden az olamaz. Verdiğin fiyatlar, yani tetik, TP ve \
-SL, paritenin fiyat adımına en yakın yönde yuvarlanır. Kaldıraç tam sayıdır.
-- Açık bir pozisyona ekleme yapabilir ya da bir kısmını kapatabilirsin. Eklemede giriş fiyatı ağırlıklı \
-ortalamayla yeniden hesaplanır.
-- Komisyon işlem büyüklüğü üzerinden kesilir. Fiyatın gelmesini bekleyen girişler, yani long için güncel \
-fiyatın altındaki, short için üstündeki emirler ve TP kademeleri maker sayılır, yüzde {fees.maker * 100:.2f} öder \
-ve tam fiyatından gerçekleşir. Piyasa emirleri, kırılım yönündeki emirler, SL, iz süren stop ve senin kapatmaların \
-taker sayılır, yüzde {fees.taker * 100:.2f} öder ve tablodaki kadar aleyhine kayma ile gerçekleşir.
+- Tek bir dolar bakiyen var. Hesap Binance'in hedge modundadır: her paritede bir long ve bir short pozisyonun \
+olabilir, ikisi ayrı tutulur. Pozisyonun numarası yoktur, BTCUSDT long gibi parite ve yönüyle anılır. Aynı yönde \
+yeni bir giriş açık pozisyonla birleşir, giriş fiyatı miktarla ağırlıklı ortalanır, marjinler toplanır.
+- Her pozisyonun marjini izoledir. Likidasyonda yalnızca o pozisyonun marjini kaybedilir ve büyüklükten tablodaki \
+likidasyon ücreti alınır. Her pozisyonun likidasyon fiyatı sana bildirilir.
+- Kaldıraç paritenin ayarıdır, o paritedeki long ve short için ortaktır ve yeni girişlere uygulanır. Tam sayıdır, \
+en fazla tablodaki değer olur. Hiç ayarlamadığın paritenin kaldıracı 20'dir. Paritede açık pozisyon varken \
+kaldıraç düşürülemez, yükseltilebilir. Yükseltme açık pozisyonun marjinini ve likidasyon fiyatını değiştirmez. \
+Paritelerin ayarlı kaldıracı hesap bölümünde yazar.
+- Girişte marjini dolar olarak verirsin. Miktar, marjin çarpı kaldıracın fiyata bölümüdür ve paritenin miktar \
+adımına aşağı yuvarlanır. Büyüklük, en küçük işlem büyüklüğünden ve bir miktar adımının değerinden az olamaz. \
+Verdiğin fiyatlar paritenin fiyat adımına en yakın yönde yuvarlanır.
+- Kullanılabilir bakiye, nakitten bekleyen limit emirlerin ayırdığı tutar düşülerek bulunur. Bir giriş marjinini \
+ve komisyonunu kullanılabilir bakiyeden karşılar. Marjin kullanılabilir bakiyeyi yüzde 2'ye kadar aşarsa miktar \
+bakiyeye sığacak kadar küçültülür ve bu sana bildirilir, daha fazla aşarsa giriş reddedilir.
+- Piyasa girişi hemen, güncel fiyattan gerçekleşir.
+- Limit emir: Fiyatı long için güncel fiyatın altında, short için üstündeyse defterde bekler. Fiyat seviyeni bir \
+fiyat adımı geçince tam seviyenden gerçekleşir. Fiyatı yanlış taraftaysa hemen piyasadan gerçekleşir. Limit emir \
+verildiği anda marjinini kullanılabilir bakiyeden ayırır, fiyatı mark fiyatının aleyhindeyse aradaki açık zararı \
+da ayırır. Limit fiyatı mark fiyatından tablodaki uzaklıktan daha uzak olamaz. Yalnızca limit emrin fiyatı \
+değiştirilebilir, diğer emirler iptal edilip yeniden verilir.
+- Kırılım emri: Long için güncel fiyatın üstünde, short için altında bir tetiktir. Geri çekilme emri: Long için \
+güncel fiyatın altında, short için üstünde bir tetiktir. İkisi de son işlem fiyatı tetiğe değince piyasa emri olur \
+ve tetik anının fiyatından gerçekleşir: fiyat tetiğin ötesine sıçrayarak geldiyse oradan, gelmediyse tetikten. \
+Fiyatın sonradan iğne gibi geri dönmesi gerçekleşmeyi değiştirmez. Tetiği yanlış tarafta olan emir reddedilir. \
+Tetikli emir gerçekleşene kadar bakiye ayırmaz, bakiye gerçekleştiği anda kontrol edilir. Yetmezse emir açılamaz \
+ve bu sana bildirilir.
+- Bekleyen bir emre geçerlilik süresi verebilirsin, o süre içinde gerçekleşmezse emir iptal olur.
+- Emirlerin numarası vardır. Numara, o an açık emirlerin kullanmadığı en küçük sayıdır. İptal edilen ya da \
+gerçekleşen bir emrin numarası sonra yeni bir emre verilebilir. Bu yüzden numarayla bir emre dokunan her eylemde \
+sembolü ve yönü de yazarsın. Numara artık o sembol ve yöndeki emri göstermiyorsa eylem reddedilir.
+- Koruma emirleri: TP, SL ve iz süren stop pozisyonu kapatan ayrı emirlerdir, her birinin numarası ve miktarı \
+vardır. Miktarsız bir koruma tetiklendiği an pozisyonda kalan miktarın tamamını kapatır. Bir girişe koruma \
+verirsen giriş gerçekleşince o girişin miktarıyla kurulur, böylece aynı pozisyondaki farklı girişlerin ayrı \
+korumaları olabilir. Bir giriş en fazla dört TP kademesi taşır. Açık bir pozisyona sonradan da koruma \
+ekleyebilirsin. Pozisyon tamamen kapanınca ona bağlı bütün koruma emirleri iptal olur. Tetiklenen bir korumanın \
+miktarı pozisyonda kalandan büyükse kalanı kapatır. Fiyat, giriş gerçekleşirken bir korumanın seviyesini çoktan \
+geçtiyse o koruma kurulmaz ve bu sana bildirilir.
+- TP son işlem fiyatı oraya değdiği an tetiklenir ve tetik anının fiyatından piyasadan gerçekleşir. SL, iz süren \
+stop ve likidasyon ise mark fiyatına bakar, mark fiyatı oraya değdiği an uygulanır. Mark fiyatı Binance'in \
+birçok borsanın fiyatından hesapladığı adil fiyattır, yalnızca bu borsada görülen kısa iğneler onu oynatmaz. \
+Grafikteki mumlar son işlem fiyatıdır, bir iğnenin SL'ye değmesi SL'yi çalıştırmayabilir. SL ve iz süren stop \
+tetiklendiği andaki son işlem fiyatından gerçekleşir, fiyat sıçradıysa seviyesinden kötü olabilir. Hiçbiri senin \
+çağrılmanı beklemez. Bir mum içinde hem TP hem SL görülürse SL uygulanır.
+- İz süren stop: Konduğu andan beri görülen en iyi mark fiyatından verdiğin yüzde kadar geride durur ve fiyat \
+lehine gittikçe kendiliğinden ilerler. Yüzde 0.1 ile 10 arasında olur. Her iz emrinin gördüğü en iyi mark fiyatı \
+ve bugünkü seviyesi hesap bölümünde yazar. SL ile birlikte kullanılabilir, mark fiyatı hangisine önce değerse o \
+uygulanır.
+- Komisyon işlem büyüklüğü üzerinden kesilir. Defterde bekleyip seviyesinden gerçekleşen limit emirler maker \
+sayılır, yüzde {fees.maker * 100:.2f} öder ve tam fiyatından gerçekleşir. Piyasa girişleri, hemen gerçekleşen \
+limit emirler, kırılım ve geri çekilme emirleri, TP, SL, iz süren stop ve senin kapatmaların taker sayılır, yüzde \
+{fees.taker * 100:.2f} öder ve tablodaki kadar aleyhine kayma ile gerçekleşir.
 - Fonlama gerçek piyasadaki gibi uygulanır, çoğu paritede sekiz saatte bir, bazılarında dört saatte bir. Oran \
 pozitifse long'lar öder, short'lar alır, negatifse tersi. Ödeme pozisyonun marjininden düşer ya da marjine \
 eklenir ve likidasyon fiyatını değiştirir.
-- Bir pozisyona tek bir TP ya da birden çok TP kademesi koyabilirsin. Her kademe bir fiyat ve pozisyonun yüzdesi \
-taşır. Yüzdelerin toplamı en fazla 100 olur, toplam 100 ise son kademe kalanın tamamını kapatır. Bir kademenin \
-miktarı pozisyon miktarının o yüzdesidir, miktar adımına aşağı yuvarlanır ve en az bir miktar adımı olmalıdır. \
-Küçük bir pozisyonda kademe sayısını azaltırsın ya da tek TP kullanırsın, yoksa istek reddedilir. Kademenin \
-miktarı kurulurken sabitlenir. Pozisyon kısmen kapanınca, ekleme yapılınca ya da bir kademe dolunca hesap \
-bölümündeki yüzdeler kademenin kalan pozisyondaki güncel payını gösterir.
-- İz süren stop: Pozisyonun açıldığından beri gördüğü en iyi mark fiyatından verdiğin yüzde kadar geride durur \
-ve fiyat lehine gittikçe SL'yi kendiliğinden taşır. Yüzde 0.1 ile 10 arasında olur. Sonradan eklersen de bu en \
-iyi fiyattan hesaplanır, her pozisyonun gördüğü en iyi mark fiyatı sana bildirilir. Hesaplanan seviye fiyatın \
-gerisinde kalacaksa, yani stop hemen tetiklenecekse, istek reddedilir. SL ile birlikte kullanılabilir, hangisi \
-fiyata daha yakınsa o geçerlidir.
-- TP son işlem fiyatı oraya değdiği an uygulanır. SL, iz süren stop ve likidasyon ise mark fiyatına bakar, mark \
-fiyatı oraya değdiği an uygulanır. Mark fiyatı Binance'in birçok borsanın fiyatından hesapladığı adil fiyattır, \
-yalnızca bu borsada görülen kısa iğneler onu oynatmaz. Grafikteki mumlar son işlem fiyatıdır, bir iğnenin SL'ye \
-değmesi SL'yi çalıştırmayabilir. SL tetiklendiği andaki son işlem fiyatından gerçekleşir, fiyat sıçradıysa \
-seviyesinden kötü olabilir. Hiçbiri senin çağrılmanı beklemez. Bir mum içinde hem TP hem SL görülürse SL uygulanır.
-- Bekleyen emir: Bir tetik fiyatı verirsin, fiyat oraya değince yeni bir pozisyon açılır. Tetik güncel fiyatın \
-altındaysa fiyat düşüp değince, üstündeyse yükselip değince gerçekleşir. İstersen bir geçerlilik süresi \
-verirsin, o süre içinde gerçekleşmezse emir iptal olur. Nakit, emir gerçekleştiği anda kontrol edilir.
 - Fiyat alarmı: Bir paritede bir fiyat seviyesi ve kendine bir not verirsin. Fiyat oraya değince hemen çağrılırsın \
-ve notunu görürsün. Alarm işlem açmaz. Alarmların numarası pozisyon ve emirlerden ayrıdır.
+ve notunu görürsün. Alarm işlem açmaz. Alarmların numarası emirlerden ayrıdır.
 - Sen yalnızca çağrıldığında karar verirsin. Bir sonraki çağrının kaç dakika sonra olacağını sen seçersin, \
-{min_wait} ile {max_wait} dakika arası. Bir emrin gerçekleşmesi, emir süresinin dolması, TP, SL, \
-likidasyon ya da bir alarm olduğunda beklemeden hemen çağrılırsın.
+{min_wait} ile {max_wait} dakika arası. Bir giriş emrinin gerçekleşmesi ya da açılamaması, emir süresinin \
+dolması, TP, SL, iz süren stop, likidasyon ya da bir alarm olduğunda beklemeden hemen çağrılırsın.
 - Hesabı yürüten sistem zaman zaman kapanabilir. Kapanacağı önceden belliyse kapanmadan önce çağrılır ve haber \
 verilirsin. Sistem kapalıyken çağrılamazsın ve alarmların seni çağıramaz. Emirlerin, TP, SL, iz süren stop ve \
 likidasyon ise kapalıyken de işlemeye devam eder. Sistem açılınca kapalı kalınan süre ve o sürede olanlar sana \
@@ -242,36 +267,71 @@ def _correction(results: list[ActionResult]) -> str:
     return "\n".join(lines)
 
 
+# İz emrinin satırı konduğundan beri gördüğü en iyi mark fiyatını ve bugünkü
+# seviyesini de taşır, Opus izin nereye geldiğini hesaplamadan görür.
+def _exit_line(o: Order, side) -> str:
+    text = guard_text(o, "kalanın tamamı")
+    if o.type is OrderType.TRAILING_STOP and o.best:
+        text += (f", gördüğü en iyi mark fiyatı {price(o.best)}, seviyesi "
+                 f"{price(rules.trail_level(side, o.best, o.trail_pct))}")
+    return text
+
+
+# SL ya da izle korunmayan miktar. Miktarsız bir stop pozisyonun tamamını
+# korur. Giriş başına ayrı SL konunca bir girişin SL'siz kalması buradan
+# görünür.
+def _unguarded(p: Position, exits: list[Order]) -> float:
+    stops = [o for o in exits if o.type in (OrderType.STOP, OrderType.TRAILING_STOP)]
+    if any(o.qty is None for o in stops):
+        return 0.0
+    return max(0.0, round(p.qty - sum(o.qty for o in stops), 10))
+
+
+def _position_lines(p: Position, s: AccountState, ctx: Context) -> list[str]:
+    last = ctx.prices.get(p.symbol, p.entry_price)
+    mark = ctx.marks.get(p.symbol, last)
+    upnl = rules.unrealized_pnl(p.side, p.entry_price, p.qty, mark)
+    exits = [o for o in s.orders if o.reduce and o.symbol == p.symbol and o.side is p.side]
+    lines = [f"- {p.symbol} {p.side}, miktar {p.qty:g}, marjin {p.margin:.2f}, büyüklük {p.qty * p.entry_price:.2f}, "
+             f"giriş {price(p.entry_price)}, güncel {price(last)}, mark {price(mark)}, açılış {clock(p.entry_time)}, "
+             f"likidasyon {price(p.liq_price)}, açık kâr/zarar {upnl:+.2f}, fonlama {-p.funding:+.4f}"]
+    if exits:
+        lines.append("  Koruma emirleri:")
+        lines += [f"  - {_exit_line(o, p.side)}" for o in exits]
+    else:
+        lines.append("  Koruma emri yok.")
+    if exits and (rest := _unguarded(p, exits)) > 0:
+        lines.append(f"  SL ya da izle korunmayan miktar {rest:g}.")
+    return lines
+
+
+def _entry_line(o: Order) -> str:
+    valid = f", geçerlilik {clock(o.expires_at)}" if o.expires_at else ""
+    asks = ", ".join(guard_text(x, "girişin tamamı") for x in o.protection) or "yok"
+    reserved = f", ayırdığı {o.margin:.2f}" if o.margin else ""
+    return (f"- #{o.number} {o.symbol} {o.side} {ORDER_NAMES[str(o.type)]} {price(o.price)} miktar {o.qty:g}"
+            f"{reserved}, gerçekleşince kurulacak koruma: {asks}{valid}")
+
+
 def _account(ctx: Context) -> str:
     s, st = ctx.state, ctx.stats
     ret = (s.equity / ctx.start_balance - 1) * 100 if ctx.start_balance else 0.0
-    a = [f"# Hesap\n\nNakit: {s.cash:.2f} dolar\nÖzkaynak: {s.equity:.2f} dolar, başlangıç {ctx.start_balance:g}, "
-         f"getiri yüzde {ret:+.2f}"]
+    levs = ", ".join(f"{sym} {s.leverage(sym)}x" for sym in ctx.symbols)
+    a = [f"# Hesap\n\nNakit: {s.cash:.2f} dolar\nKullanılabilir bakiye: {s.available:.2f} dolar\n"
+         f"Özkaynak: {s.equity:.2f} dolar, başlangıç {ctx.start_balance:g}, getiri yüzde {ret:+.2f}\n"
+         f"Paritelerin kaldıracı: {levs}"]
     if s.positions:
         a.append("\nAçık pozisyonlar:")
-        for x in s.positions:
-            last = ctx.prices.get(x.symbol, x.entry_price)
-            mark = ctx.marks.get(x.symbol, last)
-            upnl = (mark - x.entry_price) * x.qty * x.side.sign
-            trail = f", iz süren stop yüzde {x.trail_pct:g}" if x.trail_pct else ""
-            a.append(f"- #{x.number} {x.symbol} {x.side} {x.leverage:g}x, miktar {x.qty:g}, marjin {x.margin:.2f}, "
-                     f"büyüklük {x.qty * x.entry_price:.2f}, giriş {price(x.entry_price)}, güncel {price(last)}, "
-                     f"mark {price(mark)}, gördüğü en iyi mark fiyatı {price(x.best_price)}, "
-                     f"açılış {clock(x.entry_time)}, "
-                     f"TP {levels_text(x.tp_levels)}, SL {price(x.sl)}{trail}, likidasyon {price(x.liq_price)}, "
-                     f"açık kâr/zarar {upnl:+.2f}, fonlama {-x.funding:+.4f}")
+        for p in s.positions:
+            a += _position_lines(p, s, ctx)
     else:
         a.append("\nAçık pozisyon yok.")
-    if s.orders:
-        a.append("\nBekleyen emirler:")
-        for o in s.orders:
-            valid = f", geçerlilik {clock(o.expires_at)}" if o.expires_at else ""
-            trail = f", iz yüzde {o.trail_pct:g}" if o.trail_pct else ""
-            a.append(f"- #{o.number} {o.symbol} {o.side} tetik {price(o.trigger)} {o.leverage:g}x marjin "
-                     f"{o.margin:.2f}, {'maker' if o.maker else 'taker'}, TP {levels_text(o.tp_levels)}, "
-                     f"SL {price(o.sl)}{trail}{valid}")
+    entries = [o for o in s.orders if not o.reduce]
+    if entries:
+        a.append("\nBekleyen giriş emirleri:")
+        a += [_entry_line(o) for o in entries]
     else:
-        a.append("\nBekleyen emir yok.")
+        a.append("\nBekleyen giriş emri yok.")
     if ctx.alerts:
         a.append("\nAlarmlar:")
         for al in ctx.alerts:

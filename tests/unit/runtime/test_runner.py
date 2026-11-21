@@ -18,13 +18,14 @@ import pytest
 from opus_trade import plugins
 from opus_trade.domain.clock import HOME_TZ
 from opus_trade.domain.fees import BINANCE_STANDARD
-from opus_trade.domain.models import Side, TpLevel
+from opus_trade.domain.models import Side
 from opus_trade.domain.profile import ProfileConfig, State
-from opus_trade.domain.trading import (AccountEvent, Actor, ClosePosition, EventKind, OpenPosition, Ref,
-                                       Trade)
+from opus_trade.domain.trading import (AccountEvent, Actor, ClosePosition, EventKind, OrderType, PlaceOrder,
+                                       Protection, SetLeverage, Trade)
 from opus_trade.market.models import Candle
 from opus_trade.market.stream import MarketStream
 from opus_trade.registry import Param
+from opus_trade.runtime import wakes
 from opus_trade.runtime.bus import EventBus
 from opus_trade.runtime.model_access import ModelAccess
 from opus_trade.runtime.profiles import ProfileError, ProfileService
@@ -84,7 +85,7 @@ class World:
     def __init__(self, path):
         plugins.load()
         con = connect(path / "core.db")
-        migrate(con, MIGRATIONS, path / "bak")
+        migrate(con, MIGRATIONS, path / "bak", catalog=catalog())
         self.clock = FakeClock(T)
         self.ledger, self.journal, self.state = Ledger(con), JournalRepo(con), StateRepo(con)
         self.repo = ProfileRepo(con)
@@ -112,6 +113,13 @@ class World:
         await r.wait_idle()
 
 
+# 10x kaldıraçla 1 SOL, 100 dolardan 10 dolar marjin. Likidasyon 95'in
+# altında kalır, SL'li testler likidasyona takılmaz.
+def opening(*protection, wait_s=None) -> Decision:
+    return Decision([SetLeverage(SOL, 10), PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=1, protection=protection)],
+                    ["kaldıraç", "aç"], wait_s=wait_s)
+
+
 def go(coro):
     return asyncio.run(coro)
 
@@ -119,13 +127,20 @@ def go(coro):
 # --- Profil servisi ---
 
 def test_command_result_writes_numbers_and_unit_the_turkish_way():
-    """Komutun sonucu panelin Onay kartında olduğu gibi görünür. Sayılar virgüllü, miktar paritenin birimiyle yazılır."""
-    t = Trade(1, 1, 1, 1, "ETHUSDT", Side.LONG, 10, 0.041, 6.6, 1600, 0, 1608.913, 60, "admin", 0.37, 0.07, 0.0, 1610,
-              1599)
-    events = [AccountEvent(EventKind.OPENED, 1, 0, Actor.ADMIN, 2, "ETHUSDT", Side.LONG, price=1608.913),
-              AccountEvent(EventKind.CLOSED, 1, 60, Actor.ADMIN, 1, "ETHUSDT", Side.LONG, price=1608.913, trade=t)]
-    assert describe(events) == ("#2 ETHUSDT long açıldı, giriş 1608,9. #1 ETHUSDT long pozisyonundan 0,041 ETH "
-                                "1608,9 fiyatından kapandı, net +0,30 dolar.")
+    """Komutun sonucu Opus'a ve panelin Onay kartına gider. Sayılar virgüllü, miktar paritenin birimiyle yazılır.
+    Emir türüyle anılır: stop hem kırılım girişi hem SL olabildiği için kapatan emir olup olmadığı ayrıca okunur.
+    Miktarsız koruma kalanın tamamını kapatır."""
+    t = Trade(1, 1, 1, "ETHUSDT", Side.LONG, 0.041, 6.6, 1600, 0, 1608.913, 60, "admin", 0.37, 0.07, 0.0, 1610, 1599)
+    ev = lambda kind, **kw: AccountEvent(kind, 1, 0, Actor.ADMIN, "ETHUSDT", Side.LONG, **kw)
+    events = [ev(EventKind.OPENED, price=1608.913, qty=0.041),
+              ev(EventKind.ORDER_PLACED, number=1, price=1590, order_type=OrderType.STOP, reduce=True),
+              ev(EventKind.CLOSED, price=1608.913, trade=t),
+              ev(EventKind.ORDER_CANCELLED, number=1, order_type=OrderType.STOP, reduce=True, reason="position_closed"),
+              ev(EventKind.ORDER_CANCELLED, number=3, order_type=OrderType.STOP)]
+    assert describe(events) == (
+        "ETHUSDT long pozisyonu 0,041 ETH ile 1608,9 fiyatından açıldı. #1 ETHUSDT long SL emri 1590,0 kuruldu, "
+        "miktar kalanın tamamı. ETHUSDT long pozisyonundan 0,041 ETH 1608,9 fiyatından kapandı, net +0,30 dolar. "
+        "#1 ETHUSDT long SL emri pozisyon kapandığı için iptal oldu. #3 ETHUSDT long kırılım giriş emri iptal edildi.")
 
 
 def test_new_version_keeps_the_old_and_is_filled_with_defaults(tmp_path):
@@ -176,7 +191,7 @@ def test_reset_keeps_old_trades_and_needs_a_stopped_profile(tmp_path):
 def test_first_decision_is_taken_and_recorded_with_its_version(tmp_path):
     """Her karar yürürlükteki sürümün kimliğini taşır. Ayar değişse de hangi kararın hangi ayarla verildiği bilinir."""
     w = World(tmp_path)
-    Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10)], ["aç"], wait_s=300)]
+    Scripted.script = [opening(wait_s=300)]
     p, r = w.running()
     go(w.step(r))
     entry = w.journal.entries(p.id)[0]
@@ -188,13 +203,28 @@ def test_first_decision_is_taken_and_recorded_with_its_version(tmp_path):
 def test_corrections_stop_after_two(tmp_path):
     """Strateji aynı hatayı tekrarlarsa düzeltme sonsuza kadar sürmez, en fazla iki kez denenir."""
     w = World(tmp_path)
-    bad = lambda: Decision([ClosePosition(Ref(9, SOL, Side.LONG))], ["kapat #9"])
+    bad = lambda: Decision([ClosePosition(SOL, Side.SHORT)], ["kapat"])
     Scripted.script = [bad(), bad(), bad(), bad()]
     p, r = w.running()
     go(w.step(r))
     assert [c.wakes[0].kind for c in Scripted.seen] == ["start", "correction", "correction"]
     rejected = Scripted.seen[1].wakes[0].data[0]
-    assert isinstance(rejected, ActionResult) and "#9 numaralı açık pozisyon yok" in rejected.message
+    assert isinstance(rejected, ActionResult) and "Açık SOLUSDT short pozisyonu yok" in rejected.message
+
+
+def test_chained_command_is_not_sent_when_the_one_before_is_refused(tmp_path):
+    """Kaldıraç reddedilirse giriş eski kaldıraçla açılmaz. Yeni koruma reddedilirse eskisinin iptali gitmez,
+    pozisyon korumasız kalmaz. Zincirsiz komut önceki redden etkilenmez."""
+    w = World(tmp_path)
+    Scripted.script = [Decision([SetLeverage(SOL, 500), PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=1),
+                                 PlaceOrder(SOL, Side.SHORT, OrderType.MARKET, qty=1)],
+                                ["giriş", "giriş", "short"], chained=[False, True, False])]
+    p, r = w.running(corrects=0)
+    go(w.step(r))
+    results = w.journal.entries(p.id)[0]["results"]
+    assert [x["ok"] for x in results] == [False, False, True]
+    assert "uygulanmadı" in results[1]["message"]
+    assert [x.side for x in r.broker.state().positions] == [Side.SHORT]
 
 
 def test_model_closed_holds_wakes_and_releases_them_together(tmp_path):
@@ -241,7 +271,7 @@ def test_paused_profile_still_hits_tp_but_strategy_is_not_woken(tmp_path):
     """Duraklatılan profilin pozisyonu korumasız kalmaz, TP fiyat gelince çalışır. Profil yeniden çalışınca
     strateji duraklatıldığı sırada olanları eski olay olarak almaz, yeniden çalıştırıldığını öğrenir."""
     w = World(tmp_path)
-    Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10, (TpLevel(105, 100),))], ["aç"])]
+    Scripted.script = [opening(Protection(OrderType.TAKE_PROFIT, 105))]
     p, r = w.running()
     go(w.step(r))
     w.service.move(p.id, "pause")
@@ -259,7 +289,7 @@ def test_position_opened_mid_minute_ignores_earlier_prices_of_that_minute(tmp_pa
     tetiklememeli, yoksa pozisyon açıldığı saniyede gerçekte hiç görmediği bir fiyattan kapanır. Sonradan gelen
     yeni tepe ise tetiklemeli."""
     w = World(tmp_path)
-    Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10, (TpLevel(105, 100),))], ["aç"])]
+    Scripted.script = [opening(Protection(OrderType.TAKE_PROFIT, 105))]
     p, r = w.running()
     m = T // 60 * 60
     r.on_candle(Candle(SOL, m, 100, 110, 100, 100, 1, 1, 1, 1), False)
@@ -275,7 +305,7 @@ def test_mark_price_drives_the_sl_and_fills_at_the_last_price(tmp_path):
     """Canlı mark fiyatı SL'ye değince pozisyon o anın son fiyatından kapanır. Son fiyattaki iğne tek başına SL'yi
     çalıştırmaz."""
     w = World(tmp_path)
-    Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10, (), 95)], ["aç"])]
+    Scripted.script = [opening(Protection(OrderType.STOP, 95))]
     p, r = w.running()
     m = T // 60 * 60
     r.on_candle(Candle(SOL, m, 100, 100, 100, 100, 1, 1, 1, 1), False)
@@ -304,7 +334,7 @@ def test_alert_set_mid_minute_ignores_earlier_prices_of_that_minute(tmp_path):
 def test_missed_minutes_are_replayed_after_a_gap(tmp_path):
     """Kapalı geçen dakikadaki SL atlanırsa pozisyon gerçekte kapanmış olduğu halde açık görünür."""
     w = World(tmp_path)
-    Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10, (), 95)], ["aç"])]
+    Scripted.script = [opening(Protection(OrderType.STOP, 95))]
     p, r = w.running()
     go(w.step(r))
     r.on_candle(Candle(SOL, T // 60 * 60, 100, 100, 100, 100, 1, 1, 1, 1), True)
@@ -328,7 +358,7 @@ def test_version_change_while_deciding_waits_for_the_decision(tmp_path):
 
     async def scenario():
         Scripted.hold = asyncio.Event()
-        Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10)], ["aç"], wait_s=600)]
+        Scripted.script = [opening(wait_s=600)]
         p, r = w.running()
         r.tick(w.clock.t)
         await asyncio.sleep(0)
@@ -357,3 +387,26 @@ def test_version_change_while_deciding_waits_for_the_decision(tmp_path):
         assert len(Scripted.seen) == 2 and [x.kind for x in Scripted.seen[1].wakes] == ["admin"]
 
     go(scenario())
+
+
+def test_wake_saved_before_the_binance_model_still_decodes():
+    """Göçten önce sırada bekleyen kapanış olayı eski alanları taşır: numara, kaldıraç ve yüzdeli TP kademeleri.
+    Okunamazsa yayından sonraki ilk açılışta profilin karar döngüsü hata verir."""
+    old = ('{"type": "event", "kind": "closed", "account_id": 1, "time": 5, "actor": "system", "number": 3, '
+           '"symbol": "SOLUSDT", "side": "long", "price": 97.0, "position_id": 2, "order_id": null, '
+           '"reason": "sl", "amount": null, "trade": {"id": 1, "account_id": 1, "position_id": 2, "number": 3, '
+           '"symbol": "SOLUSDT", "side": "long", "leverage": 10, "qty": 1, "margin": 10, "entry_price": 100, '
+           '"entry_time": 0, "exit_price": 97, "exit_time": 5, "reason": "sl", "pnl": -3, "fee": 0.1, '
+           '"funding": 0, "best_price": 101, "worst_price": 97, "sl": 97, '
+           '"tp_levels": [{"price": 105, "pct": 100, "qty": null}]}}')
+    e = wakes.decode(old)
+    assert (e.kind, e.number, e.side, e.trade.tp_prices, e.trade.sl) == (EventKind.CLOSED, 3, Side.LONG, (105,), 97)
+    assert wakes.decode(wakes.encode(e)) == e
+
+
+def test_wake_keeps_the_order_type_and_whether_it_closes():
+    """Bekleyen bir dolum olayı yeniden başlatmadan sonra türünü kaybederse Opus emri yanlış adla görür."""
+    e = AccountEvent(EventKind.ORDER_FAILED, 1, 5, Actor.SYSTEM, SOL, Side.LONG, price=95.0, reason="geçti",
+                     order_type=OrderType.STOP, reduce=True)
+    back = wakes.decode(wakes.encode(e))
+    assert back == e and back.order_type is OrderType.STOP

@@ -47,6 +47,7 @@ from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
 from ..storage.runtime_state import StateRepo
 from ..strategy.base import ActionResult, Context, Decision, Strategy, Wake
+from ..strategy.llm.texts import order_name
 from ..triggers.base import Fire, Trigger
 from ..triggers.price_alert import PriceAlerts
 from . import wakes as wake_codec
@@ -65,25 +66,44 @@ _WAKING = (EventKind.CLOSED, EventKind.ORDER_FILLED, EventKind.ORDER_FAILED, Eve
 FUNDING_EVERY_S = 300
 
 
+# Komutun sonucu stratejiye ve yöneticiye gider. Pozisyon parite ve yönüyle,
+# emir numarası ve türüyle anılır. Koruma emrinin miktarsızı tetik anında
+# kalanın tamamını kapatır, izin seviyesi olayda yoktur, yalnızca türü yazılır.
+def _order(e: AccountEvent) -> str:
+    return f"#{e.number} {e.symbol} {e.side} {order_name(e.order_type, e.reduce)}"
+
+
 def describe(events: list[AccountEvent]) -> str:
     """Bir komutun olaylarını kısa bir Türkçe sonuca çevirir."""
     parts = []
     for e in events:
-        head = f"#{e.number} {e.symbol} {e.side}"
+        pos = f"{e.symbol} {e.side}"
         match e.kind:
             case EventKind.OPENED:
-                parts.append(f"{head} açıldı, giriş {numbers.price(e.price)}.")
+                parts.append(f"{pos} pozisyonu {numbers.qty(e.qty, e.symbol)} ile {numbers.price(e.price)} "
+                             f"fiyatından açıldı.")
             case EventKind.ADDED:
-                parts.append(f"{head} pozisyonuna ekleme yapıldı, ortalama giriş {numbers.price(e.price)}.")
+                parts.append(f"{pos} pozisyonuna {numbers.qty(e.qty, e.symbol)} {numbers.price(e.price)} "
+                             f"fiyatından eklendi, pozisyon birleşti.")
             case EventKind.CLOSED:
-                parts.append(f"{head} pozisyonundan {numbers.qty(e.trade.qty, e.symbol)} {numbers.price(e.price)} "
+                parts.append(f"{pos} pozisyonundan {numbers.qty(e.trade.qty, e.symbol)} {numbers.price(e.price)} "
                              f"fiyatından kapandı, net {numbers.num(e.trade.net, 2, sign=True)} dolar.")
-            case EventKind.PROTECTION:
-                parts.append(f"{head} pozisyonunun koruması güncellendi.")
+            case EventKind.LEVERAGE:
+                parts.append(f"{e.symbol} kaldıracı {numbers.num(e.amount)}x oldu.")
             case EventKind.ORDER_PLACED:
-                parts.append(f"{head} emri kaydedildi, tetik {numbers.price(e.price)}.")
+                level = f" {numbers.price(e.price)}" if e.price else ""
+                qty = numbers.qty(e.qty, e.symbol) if e.qty is not None else "kalanın tamamı"
+                parts.append(f"{_order(e)}{level} kuruldu, miktar {qty}.")
+            case EventKind.ORDER_AMENDED:
+                parts.append(f"{_order(e)} fiyatı {numbers.price(e.price)} oldu.")
+            case EventKind.ORDER_CANCELLED if e.reason == "position_closed":
+                parts.append(f"{_order(e)} pozisyon kapandığı için iptal oldu.")
             case EventKind.ORDER_CANCELLED:
-                parts.append(f"{head} emri iptal edildi.")
+                parts.append(f"{_order(e)} iptal edildi.")
+            case EventKind.ORDER_FAILED:
+                level = f" {numbers.price(e.price)}" if e.price else ""
+                parts.append(f"{pos} pozisyonunun{level} {order_name(e.order_type, e.reduce)} kurulamadı: "
+                             f"{e.reason}")
     return " ".join(parts) or "Açık pozisyon ve bekleyen emir yoktu."
 
 
@@ -217,10 +237,11 @@ class ProfileRunner:
     def on_candle(self, candle: Candle, closed: bool) -> None:
         if candle.symbol not in self.symbols:
             return
+        before = self.prices.get(candle.symbol, candle.open)
         self.prices[candle.symbol] = candle.close
         fresh = self._fresh(candle)
         if isinstance(self.broker, PriceDriven):
-            self._account(self.broker.on_price(candle.symbol, fresh.high, fresh.low, candle.close,
+            self._account(self.broker.on_price(candle.symbol, before, fresh.high, fresh.low, candle.close,
                                                self.clock.time()))
         for t in self.triggers:
             self._fire(t.on_candle(candle))
@@ -261,7 +282,7 @@ class ProfileRunner:
                 if m := marks.get(c.time):
                     self._account(self.broker.on_mark(s, m.high, m.low, m.close, c.time + 59, None))
                     self.marks[s] = m.close
-                self._account(self.broker.on_price(s, c.high, c.low, c.close, c.time + 59))
+                self._account(self.broker.on_price(s, c.open, c.high, c.low, c.close, c.time + 59))
                 self.prices[s] = c.close
             if candles:
                 self.state.set_setting(f"price_seen:{self.pid}:{s}", candles[-1].time)
@@ -355,12 +376,19 @@ class ProfileRunner:
                        on_tool=lambda t: self.bus.publish({"profile": self.pid, "tool": t}))
 
     async def _apply(self, d: Decision, now: int) -> list[ActionResult]:
-        results = list(d.errors)
-        for cmd, label in zip(d.commands, d.labels):
+        results = d.errors + d.notes
+        failed = False
+        for i, (cmd, label) in enumerate(zip(d.commands, d.labels)):
+            if failed and i < len(d.chained) and d.chained[i]:
+                results.append(ActionResult(label, False, f"{label} uygulanmadı, aynı eylemin önceki adımı "
+                                                          f"reddedildi."))
+                continue
             try:
                 results.append(ActionResult(label, True, describe(await self.gate.submit(cmd, Actor.STRATEGY, now))))
+                failed = False
             except RuleError as e:
                 results.append(ActionResult(label, False, f"{label} reddedildi: {e}"))
+                failed = True
         for op in d.alarms:
             label = op.get("label", "alarm")
             try:

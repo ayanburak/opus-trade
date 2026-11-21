@@ -11,7 +11,7 @@ description: tools.market için birim testleri.
 
 import asyncio
 
-from opus_trade.domain.models import Side, TpLevel
+from opus_trade.domain.models import Side
 from opus_trade.domain.trading import Trade
 from opus_trade.collector.store import MIGRATIONS as MARKET_MIGRATIONS
 from opus_trade.collector.store import CollectorStore
@@ -20,6 +20,8 @@ from opus_trade.storage.database import connect
 from opus_trade.storage.ledger import MIGRATIONS, Ledger
 from opus_trade.storage.migrate import migrate
 from opus_trade.tools import market as tools
+
+from tests.fakes import catalog
 
 NOW = 1_795_000_000
 
@@ -47,20 +49,37 @@ def test_liquidations_tool_reads_the_collector_store(tmp_path, monkeypatch):
 def test_exit_report_reads_the_profile_account(tmp_path, monkeypatch):
     """Çıkış karnesi yalnızca profilin kendi hesabını okur ve değmeyen TP'yi kapanıştaki kademelerden bulur."""
     con = connect(tmp_path / "core.db")
-    migrate(con, MIGRATIONS, tmp_path / "bak")
+    migrate(con, MIGRATIONS, tmp_path / "bak", catalog=catalog())
     ledger = Ledger(con)
     mine, other = ledger.create_account("paper", 10, NOW), ledger.create_account("paper", 10, NOW)
     for acc in (mine, other):
         with ledger.atomic():
-            pid = ledger.insert_position(acc, number=1, symbol="SOLUSDT", side=Side.LONG, leverage=10, qty=1,
-                                         margin=10, entry_price=100, entry_time=NOW - 600, tp_levels=(), sl=None,
-                                         trail_pct=None, best_price=100, best_time=NOW, worst_price=100,
-                                         worst_time=NOW, liq_price=90, fee=0, funding=0, order_id=None).id
-            ledger.insert_trade(Trade(0, acc, pid, 1, "SOLUSDT", Side.LONG, 10, 1, 10, 100, NOW - 600, 99, NOW, "sl",
-                                      -1, 0.1, 0, 104, 98.5, (TpLevel(104.5, 100),), 98.9))
+            pid = ledger.insert_position(acc, symbol="SOLUSDT", side=Side.LONG, qty=1, margin=10, entry_price=100,
+                                         entry_time=NOW - 600, best_price=100, best_time=NOW, worst_price=100,
+                                         worst_time=NOW, liq_price=90, fee=0, funding=0).id
+            ledger.insert_trade(Trade(0, acc, pid, "SOLUSDT", Side.LONG, 1, 10, 100, NOW - 600, 99, NOW, "sl",
+                                      -1, 0.1, 0, 104, 98.5, (104.5,), 98.9))
     monkeypatch.setenv("OPUS_CORE_DB", str(tmp_path / "core.db"))
     monkeypatch.setenv("OPUS_ACCOUNT", str(mine))
     text = tools.cikis_karnesi(10)
-    assert text.count("#1 SOLUSDT long") == 1
+    assert text.count("SOLUSDT long") == 1
     assert "Değmeyen en yakın TP 104.5, fiyat yüzde 0.50 kala döndü" in text
     assert "TP'ye yüzde 0.6'dan az farkla varamayan işlem 1" in text
+
+
+def test_trade_history_tells_the_effective_leverage(tmp_path, monkeypatch):
+    """Kaldıraç paritenin ayarıdır, işlem kaydında tutulmaz. Araç büyüklüğün marjine oranını etkin kaldıraç diye
+    yazar, Opus onu paritenin bugünkü ayarıyla karıştırmaz."""
+    con = connect(tmp_path / "core.db")
+    migrate(con, MIGRATIONS, tmp_path / "bak", catalog=catalog())
+    ledger = Ledger(con)
+    acc = ledger.create_account("paper", 10, NOW)
+    with ledger.atomic():
+        pid = ledger.insert_position(acc, symbol="SOLUSDT", side=Side.SHORT, qty=2, margin=8, entry_price=100,
+                                     entry_time=NOW - 600, best_price=100, best_time=NOW, worst_price=100,
+                                     worst_time=NOW, liq_price=110, fee=0, funding=0).id
+        ledger.insert_trade(Trade(0, acc, pid, "SOLUSDT", Side.SHORT, 2, 8, 100, NOW - 600, 98, NOW, "tp",
+                                  4, 0.2, 0, 98, 100.5, (98,), None))
+    monkeypatch.setenv("OPUS_CORE_DB", str(tmp_path / "core.db"))
+    monkeypatch.setenv("OPUS_ACCOUNT", str(acc))
+    assert tools.gecmis_islemlerim(5).startswith("SOLUSDT short etkin kaldıraç 25.0x, miktar 2 marjin 8.00, giriş 100")

@@ -22,9 +22,16 @@ description: Likidasyon dalgası sonrası geri dönüş kuralı.
 # NOTE: Her paritede aynı anda en fazla bir pozisyon olur, o paritede açık
 # pozisyon varken gelen dalga atlanır. Farklı paritelerde nakit yettiği kadar
 # pozisyon açılabilir.
+#
+# NOTE: Kaldıraç paritenin ayarıdır. Paritenin kaldıracı kuralınkinden farklıysa
+# girişten önce kaldıraç ayarlanır. Paritede açık pozisyon olmadığı için ayar
+# her zaman kabul edilir, kaldıracın paritenin üst sınırını aşmasını broker
+# reddeder.
 
-from ...domain.models import Side, TpLevel
-from ...domain.trading import ClosePosition, OpenPosition, Ref
+from ...domain import rules
+from ...domain.catalog import Catalog
+from ...domain.models import Side
+from ...domain.trading import ClosePosition, Command, OrderType, PlaceOrder, Protection, SetLeverage
 from ...registry import Param
 from ...triggers.liquidation_wave import Wave
 from ..base import STRATEGIES, Context, Decision, Strategy
@@ -40,12 +47,14 @@ class LiquidationReversal(Strategy):
         min_tp_pct: TP uzaklığı fiyatın bu yüzdesinden kısaysa işlem açılmaz.
         sl_range: SL'nin dalganın ucundan uzaklığı, aralığın oranı olarak.
         hold_min: Pozisyon bu kadar dakika sonra hâlâ açıksa kapatılır.
+        catalog: Miktarın adıma yuvarlanması için parite kuralları.
     """
 
     def __init__(self, notional: float, leverage: float, tp_range: float, min_tp_pct: float, sl_range: float,
-                 hold_min: int) -> None:
+                 hold_min: int, catalog: Catalog) -> None:
         self.notional = notional
-        self.leverage = leverage
+        self.leverage = int(round(leverage))
+        self.catalog = catalog
         self.tp_range = tp_range
         self.min_tp_pct = min_tp_pct
         self.sl_range = sl_range
@@ -53,49 +62,57 @@ class LiquidationReversal(Strategy):
 
     # Dalga işlenmez ise nedeni kayda geçer, admin panelinde neden işlem
     # açılmadığı görülsün diye.
-    def _entry(self, w: Wave, ctx: Context, busy: set[str], cash: float) -> tuple[OpenPosition | None, str]:
+    def _entry(self, w: Wave, ctx: Context, busy: set[str], cash: float) -> tuple[list[Command], float, str]:
         price = ctx.prices.get(w.symbol)
         if w.symbol not in ctx.symbols:
-            return None, "parite profilde yok"
+            return [], 0.0, "parite profilde yok"
         if w.symbol in busy:
-            return None, "paritede açık pozisyon var"
+            return [], 0.0, "paritede açık pozisyon var"
         if price is None:
-            return None, "fiyat henüz yok"
+            return [], 0.0, "fiyat henüz yok"
         span = w.high - w.low
         tp_dist = span * self.tp_range
         if tp_dist < price * self.min_tp_pct / 100:
-            return None, f"TP uzaklığı {tp_dist:g}, fiyatın yüzde {self.min_tp_pct:g}'ünden kısa"
+            return [], 0.0, f"TP uzaklığı {tp_dist:g}, fiyatın yüzde {self.min_tp_pct:g}'ünden kısa"
         margin = self.notional / self.leverage
         if margin > cash:
-            return None, "nakit yetmiyor"
+            return [], 0.0, "nakit yetmiyor"
         side = w.dominant
         tp = price + tp_dist if side is Side.LONG else price - tp_dist
         sl = w.low - span * self.sl_range if side is Side.LONG else w.high + span * self.sl_range
-        return OpenPosition(w.symbol, side, self.leverage, margin, (TpLevel(tp, 100),), sl), "açıldı"
+        qty = rules.qty_for_margin(self.catalog.get(w.symbol), self.leverage, margin, price)
+        out: list[Command] = []
+        if ctx.state.leverage(w.symbol) != self.leverage:
+            out.append(SetLeverage(w.symbol, self.leverage))
+        out.append(PlaceOrder(w.symbol, side, OrderType.MARKET, qty=qty,
+                              protection=(Protection(OrderType.TAKE_PROFIT, tp), Protection(OrderType.STOP, sl))))
+        return out, margin, "açıldı"
 
     async def decide(self, ctx: Context) -> Decision:
         d = Decision()
         for p in ctx.state.positions:
             if ctx.now - p.entry_time >= self.hold_s:
-                d.commands.append(ClosePosition(Ref(p.number, p.symbol, p.side)))
-                d.labels.append(f"#{p.number} {p.symbol} süre doldu, kapat")
+                d.commands.append(ClosePosition(p.symbol, p.side))
+                d.labels.append(f"{p.symbol} {p.side} süre doldu, kapat")
         busy = {p.symbol for p in ctx.state.positions}
-        cash = ctx.state.cash
+        cash = ctx.state.available
         notes = []
         for wake in ctx.wakes:
             fire = wake.data
             if wake.kind != "trigger" or getattr(fire, "kind", None) != "liquidation_wave":
                 continue
-            cmd, why = self._entry(fire.data, ctx, busy, cash)
+            cmds, margin, why = self._entry(fire.data, ctx, busy, cash)
             notes.append({"symbol": fire.symbol, "result": why})
-            if cmd:
+            for cmd in cmds:
                 d.commands.append(cmd)
-                d.labels.append(f"{cmd.symbol} {cmd.side} aç")
-                busy.add(cmd.symbol)
-                cash -= cmd.margin
+                d.labels.append(f"{cmd.symbol} kaldıraç {cmd.leverage}x" if isinstance(cmd, SetLeverage)
+                                else f"{cmd.symbol} {cmd.side} aç")
+            if cmds:
+                busy.add(fire.symbol)
+                cash -= margin
         # Açık ya da yeni açılan her pozisyonun süresi dolunca uyanılır.
         ends = [p.entry_time + self.hold_s for p in ctx.state.positions if ctx.now - p.entry_time < self.hold_s]
-        ends += [ctx.now + self.hold_s for c in d.commands if isinstance(c, OpenPosition)]
+        ends += [ctx.now + self.hold_s for c in d.commands if isinstance(c, PlaceOrder)]
         d.wait_s = max(1, min(ends) - ctx.now) if ends else None
         d.record = {"waves": notes}
         return d
@@ -106,11 +123,11 @@ STRATEGIES.register(
     "Likidasyon dalgası durulunca dalganın paritesinde baskın taraf yönünde, sabit kurallarla işlem açar. "
     "Profilde likidasyon dalgası tetikleyicisi olmalıdır.",
     (Param("notional", "float", "İşlem büyüklüğü, dolar", default=75.0, low=5, high=100000),
-     Param("leverage", "float", "Kaldıraç", default=20.0, low=1, high=125),
+     Param("leverage", "float", "Kaldıraç", default=20.0, low=1, high=150),
      Param("tp_range", "float", "TP uzaklığı, aralığın oranı", default=0.5, low=0.05, high=5),
      Param("min_tp_pct", "float", "En kısa TP uzaklığı, yüzde", default=0.3, low=0, high=10),
      Param("sl_range", "float", "SL'nin dalga ucundan uzaklığı, aralığın oranı", default=0.5, low=0, high=5),
      Param("hold_min", "int", "En uzun tutma süresi, dakika", default=60, low=1, high=10080)),
-    lambda deps, **p: LiquidationReversal(**p),
+    lambda deps, **p: LiquidationReversal(**p, catalog=deps.catalog),
     LiquidationReversal,
 )

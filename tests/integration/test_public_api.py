@@ -16,9 +16,10 @@ import json
 
 import httpx
 
+from opus_trade.api import public
 from opus_trade.api.public import Hub, create_public_app
 from opus_trade.domain.models import Side
-from opus_trade.domain.trading import OpenPosition
+from opus_trade.domain.trading import OrderType, PlaceOrder
 from opus_trade.market.models import Candle
 from opus_trade.strategy.base import Decision
 from tests.integration.harness import ECHO, FLAKY, SOL, T, Api, Echo, Flaky
@@ -101,7 +102,7 @@ async def test_journal_carries_no_admin_traces(api):
         "kind": "restrict", "weight": "firm", "params": {"limit": {"type": "max_leverage", "value": 5}}})
     await api.call("POST", f"/profiles/{pid}/interventions", json={
         "kind": "message", "weight": "firm", "params": {"text": "FOMC notu"}, "call_now": True})
-    Echo.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10)], ["long_ac SOLUSDT"],
+    Echo.script = [Decision([PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=1)], ["long_ac SOLUSDT"],
                             record={"prompt": "GIZLI-TALIMAT", "raw": "GIZLI-HAM", "reply": "GIZLI-CEVAP",
                                     "summary": "Bekliyorum.",
                                     "decision": {"ozet": "Bekliyorum.", "yoneticiye_cevap": "GIZLI-CEVAP"}})]
@@ -204,3 +205,14 @@ async def test_hub_filters_events_and_limits_clients(api):
     assert q.empty()
     hub.leave(q)
     assert hub._task is None
+
+
+def test_restriction_rejection_is_hidden_in_old_and_new_wording():
+    """Yayından önceki kayıtlar kısıt reddini cümle ortasında küçük harfle, yenileri başta büyük harfle yazar.
+    Arama birini kaçırırsa yöneticinin kısıtı herkese açık sayfada görünür."""
+    old = {"label": "long_ac SOLUSDT", "ok": False,
+           "message": "long_ac SOLUSDT reddedildi: Reddedildi, yöneticinin #1 numaralı kesin kısıtı geçerli: x."}
+    new = {"label": "piyasa_giris SOLUSDT", "ok": False,
+           "message": "piyasa_giris SOLUSDT reddedildi: Yöneticinin #1 numaralı kesin kısıtı geçerli: x."}
+    assert public._public_result(old)["message"] == "long_ac SOLUSDT reddedildi."
+    assert public._public_result(new)["message"] == "piyasa_giris SOLUSDT reddedildi."

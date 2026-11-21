@@ -1,6 +1,6 @@
 /**
  * file: format.ts
- * importable: parseNum, num, money, signed, pct, clock, dayClock, when, ago, duration
+ * importable: parseNum, num, qty, money, signed, pct, clock, dayClock, when, ago, duration
  *
  * Sayıların ve zamanların Türkçe gösterimi ile formdaki sayıların okunması.
  * Gösterimde binlik ayıracı nokta, ondalık virgüldür. Formda kullanıcı
@@ -44,6 +44,12 @@ export function num(x: number | null | undefined, digits?: number): string {
   if (x == null || Number.isNaN(x)) return "—";
   const d = digits ?? (Math.abs(x) >= 1000 ? 1 : Math.abs(x) >= 10 ? 2 : 4);
   return x.toLocaleString("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: d }).replace("-", "−");
+}
+
+/** Emir ve pozisyon miktarı. Sondaki sıfırlar yazılmaz, miktar adımı paritesine göre değişir. */
+export function qty(x: number | null | undefined): string {
+  if (x == null || Number.isNaN(x)) return "—";
+  return x.toLocaleString("tr-TR", { maximumFractionDigits: 6 });
 }
 
 /** Dolar tutarı, iki hane. */

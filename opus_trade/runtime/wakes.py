@@ -16,11 +16,11 @@ description: Uyandırma verisinin saklanabilir biçimi.
 # encode() TypeError fırlatır.
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from typing import Any
 
-from ..domain.models import Side, TpLevel
-from ..domain.trading import AccountEvent, Actor, EventKind, Trade
+from ..domain.models import Side
+from ..domain.trading import AccountEvent, Actor, EventKind, OrderType, Trade
 from ..triggers.base import Fire
 from ..triggers.liquidation_wave import Wave
 from ..triggers.price_alert import Alert
@@ -40,10 +40,15 @@ def encode(data: Any) -> str | None:
     raise TypeError(f"Saklanamayan uyandırma verisi: {type(data).__name__}")
 
 
+# Binance modeline göçten önce saklanan uyandırmalar eski alanları taşır:
+# numara, kaldıraç ve yüzdeli TP kademeleri. Bilinmeyen alanlar düşer, TP
+# kademelerinin fiyatları kalır.
 def _trade(d: dict | None) -> Trade | None:
     if d is None:
         return None
-    return Trade(**{**d, "side": Side(d["side"]), "tp_levels": tuple(TpLevel(**k) for k in d["tp_levels"])})
+    known = {f.name for f in fields(Trade)} - {"side", "tp_prices"}
+    tps = d.get("tp_prices", [k["price"] for k in d.get("tp_levels", [])])
+    return Trade(**{k: v for k, v in d.items() if k in known}, side=Side(d["side"]), tp_prices=tuple(tps))
 
 
 def decode(text: str | None) -> Any:
@@ -54,7 +59,10 @@ def decode(text: str | None) -> Any:
     if kind == "text":
         return d["text"]
     if kind == "event":
-        return AccountEvent(**{**d, "kind": EventKind(d["kind"]), "actor": Actor(d["actor"]), "side": Side(d["side"]),
-                               "trade": _trade(d["trade"])})
+        known = {f.name for f in fields(AccountEvent)}
+        return AccountEvent(**{**{k: v for k, v in d.items() if k in known}, "kind": EventKind(d["kind"]),
+                               "actor": Actor(d["actor"]),
+                               "side": Side(d["side"]) if d.get("side") else None, "trade": _trade(d.get("trade")),
+                               "order_type": OrderType(d["order_type"]) if d.get("order_type") else None})
     inner = Wave(**d["data"]) if d["inner"] == "wave" else Alert(**d["data"])
     return Fire(d["kind"], d["time"], d["symbol"], inner)

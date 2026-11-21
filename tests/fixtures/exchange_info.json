@@ -42,7 +42,8 @@
      "filterType": "POSITION_RISK_CONTROL",
      "positionControlSide": "NONE"
     }
-   ]
+   ],
+   "liquidationFee": "0.012500"
   },
   {
    "symbol": "ETHUSDT",
@@ -86,7 +87,8 @@
      "filterType": "POSITION_RISK_CONTROL",
      "positionControlSide": "NONE"
     }
-   ]
+   ],
+   "liquidationFee": "0.012500"
   },
   {
    "symbol": "XRPUSDT",
@@ -130,7 +132,8 @@
      "filterType": "POSITION_RISK_CONTROL",
      "positionControlSide": "NONE"
     }
-   ]
+   ],
+   "liquidationFee": "0.012500"
   },
   {
    "symbol": "ZECUSDT",
@@ -174,7 +177,8 @@
      "filterType": "POSITION_RISK_CONTROL",
      "positionControlSide": "NONE"
     }
-   ]
+   ],
+   "liquidationFee": "0.015000"
   },
   {
    "symbol": "SOLUSDT",
@@ -218,7 +222,8 @@
      "positionControlSide": "NONE",
      "filterType": "POSITION_RISK_CONTROL"
     }
-   ]
+   ],
+   "liquidationFee": "0.015000"
   },
   {
    "symbol": "XAUUSDT",
@@ -262,7 +267,8 @@
      "filterType": "POSITION_RISK_CONTROL",
      "positionControlSide": "NONE"
     }
-   ]
+   ],
+   "liquidationFee": "0.015000"
   }
  ]
 }

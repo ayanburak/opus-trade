@@ -97,14 +97,23 @@ class Context:
 
 # commands sırayla kapıya gider, biri reddedilse diğerleri yine denenir.
 # labels her komutun stratejinin dilindeki adıdır, sonuç ona bu adla döner.
-# alarms kurulacak ya da iptal edilecek alarmlardır. wait_s bir sonraki
-# uyanmaya kadar beklenecek süredir, None ise strateji yalnızca olayla uyanır.
+# chained bir komutun kendinden öncekine bağlı olduğunu söyler, önceki
+# reddedilirse o gönderilmez. Tek bir eylemden çıkan kaldıraç ve giriş ya da
+# yeni koruma ve eskisinin iptali böyle bir zincirdir, yarısı uygulanırsa
+# pozisyon istenmeyen kaldıraçla açılır ya da korumasız kalır. Boşsa hiçbir
+# komut zincirli değildir.
+# alarms kurulacak ya da iptal edilecek alarmlardır. errors komuta hiç
+# çevrilemeyen eylemlerin reddi, notes çevirinin kabul edilmiş açıklamasıdır.
+# wait_s bir sonraki uyanmaya kadar beklenecek süredir, None ise strateji
+# yalnızca olayla uyanır.
 @dataclass
 class Decision:
     commands: list[Command] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
+    chained: list[bool] = field(default_factory=list)
     alarms: list[dict] = field(default_factory=list)
     errors: list[ActionResult] = field(default_factory=list)
+    notes: list[ActionResult] = field(default_factory=list)
     wait_s: int | None = None
     memory: dict[str, Any] = field(default_factory=dict)
     record: dict[str, Any] = field(default_factory=dict)

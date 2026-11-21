@@ -13,7 +13,7 @@ description: api.control ve runtime.interventions için entegrasyon testleri.
 import asyncio
 
 from opus_trade.domain.models import Side
-from opus_trade.domain.trading import OpenPosition
+from opus_trade.domain.trading import OrderType, PlaceOrder
 from opus_trade.market.models import Candle
 from opus_trade.strategy.base import Decision
 from tests.integration.harness import ECHO, RULE, SOL, T, Api, Echo
@@ -67,8 +67,8 @@ async def test_rule_strategy_takes_only_firm_actions(api):
                    json={"kind": "message", "weight": "firm", "params": {"text": "Neden?"}})
     iv = await api.call("POST", f"/profiles/{pid}/interventions",
                         json={"kind": "command",
-                              "params": {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}})
-    assert "#1 SOLUSDT long açıldı" in iv["result"]
+                              "params": {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}})
+    assert "SOLUSDT long pozisyonu 1 SOL ile" in iv["result"]
     acc = await api.call("GET", f"/profiles/{pid}/account")
     assert len(acc["state"]["positions"]) == 1
 
@@ -81,7 +81,7 @@ async def test_firm_restriction_rejects_strategy_and_is_told(api):
     iv = await api.call("POST", f"/profiles/{pid}/interventions", json={
         "kind": "restrict", "weight": "firm", "params": {"limit": {"type": "max_leverage", "value": 5}},
         "call_now": True})
-    Echo.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10)], ["long_ac SOLUSDT"])]
+    Echo.script = [Decision([PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=1)], ["long_ac SOLUSDT"])]
     await api.step(r, 1)
     ctx = Echo.seen[1]
     assert f"#{iv['id']}, kesin: kaldıraç en fazla 5x." in ctx.admin["restrictions"]
@@ -136,7 +136,7 @@ async def test_look_now_wakes_strategy_at_once(api):
 async def test_account_command_has_no_offer(api):
     """Hesap işlemi her zaman kesindir. Teklif olarak gönderilen işlem sessizce uygulanmamalı, reddedilmeli."""
     pid, _ = await api.running(ECHO)
-    spec = {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}
+    spec = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}
     await api.call("POST", f"/profiles/{pid}/interventions", ok=False,
                    json={"kind": "command", "weight": "offer", "params": spec})
     iv = await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": spec})
@@ -149,8 +149,7 @@ async def test_stop_with_close_all_closes_positions_and_records_it(api):
     """Durdururken kapatma istenirse pozisyonlar kapanır ve bu bir kesin müdahale olarak kayda geçer."""
     pid, r = await api.running(RULE)
     await api.call("POST", f"/profiles/{pid}/interventions", json={
-        "kind": "command",
-        "params": {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}})
+        "kind": "command", "params": {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}})
     await api.call("POST", f"/profiles/{pid}/stop", json={"close_all": True})
     acc = await api.call("GET", f"/profiles/{pid}/account")
     assert acc["state"]["positions"] == []
@@ -173,10 +172,10 @@ async def test_overview_counts_today_and_open_risk(api):
     pid, r = await api.running(ECHO)
     await api.step(r)
     await api.call("POST", f"/profiles/{pid}/interventions", json={
-        "kind": "command", "params": {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}})
+        "kind": "command", "params": {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}})
     await api.call("POST", f"/profiles/{pid}/interventions", json={
-        "kind": "command", "params": {"type": "place_order", "symbol": SOL, "side": "long", "trigger": 90,
-                                       "leverage": 5, "margin": 4}})
+        "kind": "command", "params": {"type": "order", "order_type": "limit", "symbol": SOL, "side": "long",
+                                       "qty": 0.2, "price": 90}})
     r.tick(api.clock.t + 60)
     ov = await api.call("GET", "/overview")
     [p] = ov["profiles"]
@@ -200,14 +199,14 @@ async def test_version_results_split_by_exit_time(api):
     """
     pid, r = await api.running(ECHO)
     await api.step(r)
-    open_ = {"kind": "command", "params": {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}}
+    open_ = {"kind": "command", "params": {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}}
     await api.call("POST", f"/profiles/{pid}/interventions", json=open_)
-    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {"type": "close", "number": 1, "symbol": SOL, "side": "long"}})
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {"type": "close", "symbol": SOL, "side": "long"}})
     await api.call("POST", f"/profiles/{pid}/interventions", json=open_)
     api.clock.t += 60
     await api.call("POST", f"/profiles/{pid}/config", json={"config": ECHO, "note": "İkinci"})
     api.clock.t += 60
-    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {"type": "close", "number": 1, "symbol": SOL, "side": "long"}})
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {"type": "close", "symbol": SOL, "side": "long"}})
     await api.step(r, 3600)
     first, second = (await api.call("GET", f"/profiles/{pid}"))["versions"]
     assert (first["result"]["trades"], second["result"]["trades"]) == (1, 1)
@@ -230,8 +229,8 @@ async def test_malformed_command_is_a_plain_error(api):
     """Yanlış biçimli bir komut sunucu hatası değil, panelin gösterebileceği Türkçe bir 400 olmalı."""
     pid, _ = await api.running(RULE)
     out = await api.call("POST", f"/profiles/{pid}/interventions", ok=False, json={"kind": "command", "params": {
-        "type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10, "tp_levels": [[0, 50]]}})
-    assert "tp_levels" in out["detail"]
+        "type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1, "protection": [[0, 50]]}})
+    assert "protection" in out["detail"]
 
 
 @run
@@ -277,7 +276,8 @@ async def test_preview_matches_the_real_entry(api):
     Eski panel bu hesabı JS'te kopyalıyordu ve kurallar değişince tahmin gerçekten ayrışıyordu.
     """
     pid, r = await api.running(RULE)
-    spec = {"type": "open", "symbol": SOL, "side": "short", "leverage": 10, "margin": 10, "sl": 105}
+    spec = {"type": "order", "order_type": "market", "symbol": SOL, "side": "short", "qty": 1,
+            "protection": [{"type": "stop", "price": 105}]}
     pre = await api.call("POST", f"/profiles/{pid}/preview", json={"params": spec})
     acc = await api.call("GET", f"/profiles/{pid}/account")
     assert acc["state"]["positions"] == [] and acc["state"]["cash"] == 100
@@ -286,25 +286,28 @@ async def test_preview_matches_the_real_entry(api):
     [p] = acc["state"]["positions"]
     assert (pre["entry"], pre["qty"], pre["margin"], pre["fee"], pre["liq_price"]) == \
         (p["entry_price"], p["qty"], p["margin"], p["fee"], p["liq_price"])
-    assert abs(pre["cash_after"] - acc["state"]["cash"]) < 1e-9
-    bad = await api.call("POST", f"/profiles/{pid}/preview", ok=False, json={"params": {**spec, "sl": 90}})
-    assert "SL" in bad["detail"] or "stop" in bad["detail"].lower()
+    assert abs(pre["cash_after"] - acc["state"]["available"]) < 1e-9
+    bad = await api.call("POST", f"/profiles/{pid}/preview", ok=False,
+                         json={"params": {**spec, "protection": [{"type": "stop", "price": 90}]}})
+    assert "hemen tetiklenirdi" in bad["detail"]
 
 
 @run
-async def test_add_preview_goes_through_the_gate(api):
-    """Panelin ekleme kartı önizlemeyi bu uçtan alır. Uç eklemeyi kabul etmeli ve tahmin gerçek eklemeyle aynı olmalı.
-    Emir iptali gibi önizlemesi olmayan komut anlaşılır bir hatayla reddedilmeli."""
+async def test_merging_entry_preview_goes_through_the_gate(api):
+    """Aynı yöndeki ikinci giriş pozisyonla birleşir. Önizleme birleşmiş pozisyonun ortalama girişini ve
+    likidasyonunu gerçek girişle aynı vermeli. Emir iptali gibi önizlemesi olmayan komut anlaşılır bir hatayla
+    reddedilmeli."""
     pid, r = await api.running(RULE)
-    entry = {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}
+    entry = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}
     await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": entry})
-    spec = {"type": "add", "number": 1, "symbol": SOL, "side": "long", "leverage": 10, "margin": 20}
+    spec = {**entry, "qty": 2}
     pre = await api.call("POST", f"/profiles/{pid}/preview", json={"params": spec})
     await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": spec})
     acc = await api.call("GET", f"/profiles/{pid}/account")
     [p] = acc["state"]["positions"]
-    assert (pre["avg_entry"], pre["leverage"], pre["liq_price"]) == (p["entry_price"], p["leverage"], p["liq_price"])
-    assert abs(pre["cash_after"] - acc["state"]["cash"]) < 1e-9
+    assert (pre["avg_entry"], pre["liq_price"]) == (p["entry_price"], p["liq_price"])
+    assert pre["leverage"] == round(p["entry_price"] * p["qty"] / p["margin"], 2)
+    assert abs(pre["cash_after"] - acc["state"]["available"]) < 1e-9
     bad = await api.call("POST", f"/profiles/{pid}/preview", ok=False,
                          json={"params": {"type": "cancel_order", "number": 1, "symbol": SOL, "side": "long"}})
     assert "Önizleme" in bad["detail"]
@@ -315,9 +318,9 @@ async def test_close_preview_matches_the_real_close(api):
     """Kapatma kartı çıkışı, kârı, komisyonu ve neti bu uçtan alır. Net, kapanınca İşlemler sekmesinde görünen net'le
     aynı olmalı, nakit de tahmin edilen nakit olmalı. Önizleme pozisyona dokunmamalı."""
     pid, r = await api.running(RULE)
-    entry = {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}
+    entry = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}
     await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": entry})
-    spec = {"type": "close", "number": 1, "symbol": SOL, "side": "long", "pct": 50}
+    spec = {"type": "close", "symbol": SOL, "side": "long", "qty": 0.5}
     pre = await api.call("POST", f"/profiles/{pid}/preview", json={"params": spec})
     before = (await api.call("GET", f"/profiles/{pid}/account"))["state"]["positions"][0]["qty"]
     await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": spec})
@@ -326,6 +329,77 @@ async def test_close_preview_matches_the_real_close(api):
     assert (pre["exit"], pre["qty"]) == (t["exit_price"], t["qty"])
     assert abs(pre["net"] - t["net"]) < 1e-9 and abs(pre["cash_after"] - acc["state"]["cash"]) < 1e-9
     assert pre["remaining"] == acc["state"]["positions"][0]["qty"] == round(before - t["qty"], 10)
+
+
+@run
+async def test_chain_sets_leverage_then_enters(api):
+    """Panel kaldıracı girişle birlikte tek onayda gönderir. Önizleme yeni kaldıraçla hesaplamalı ama paritenin
+    ayarını değiştirmemeli, gerçek giriş de önizlemedeki marjinle açılmalı.
+
+    Önizleme kaldıracı yok sayarsa Onay kartı eski kaldıracın marjinini ve likidasyonunu gösterirdi. Açık pozisyon
+    varken kaldıracı düşüren zincir önizlemede de reddedilmeli. Hesap ucu ayarlanmamış paritenin varsayılanını da
+    vermeli, işlem kaydı kaldıracını taşımalı, arayüzler bu kuralları kopyalamasın.
+    """
+    pid, _ = await api.running(RULE)
+    entry = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}
+    chain = {"chain": [{"type": "leverage", "symbol": SOL, "leverage": 5}, entry]}
+    pre = await api.call("POST", f"/profiles/{pid}/preview", json={"params": chain})
+    plain = await api.call("POST", f"/profiles/{pid}/preview", json={"params": entry})
+    assert pre["margin"] > plain["margin"] and pre["liq_price"] < plain["liq_price"]
+    assert (await api.call("GET", f"/profiles/{pid}/account"))["state"]["leverages"] == {SOL: 20}
+    iv = await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": chain})
+    state = (await api.call("GET", f"/profiles/{pid}/account"))["state"]
+    [p] = state["positions"]
+    assert state["leverages"] == {SOL: 5} and (pre["margin"], pre["liq_price"]) == (p["margin"], p["liq_price"])
+    assert "kaldıra" in iv["result"] and "açıldı" in iv["result"]
+    lower = {"chain": [{"type": "leverage", "symbol": SOL, "leverage": 2}, entry]}
+    bad = await api.call("POST", f"/profiles/{pid}/preview", ok=False, json={"params": lower})
+    assert "düşürülemez" in bad["detail"]
+    bad = await api.call("POST", f"/profiles/{pid}/preview", ok=False,
+                         json={"params": {"chain": [entry, {"type": "leverage", "symbol": SOL, "leverage": 5}]}})
+    assert "Önizleme" in bad["detail"]
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {
+        "type": "close", "symbol": SOL, "side": "long"}})
+    [t] = await api.call("GET", f"/profiles/{pid}/trades")
+    assert t["leverage"] == p["entry_price"] * p["qty"] / p["margin"]
+
+
+@run
+async def test_chain_stops_at_first_rejection(api):
+    """Zincirde bir adım reddedilince sonrakiler gönderilmez.
+
+    İlk adım reddedilirse hesap değişmemeli ve müdahale kaydedilmemeli. Sonraki bir adım reddedilirse önceki adım
+    hesabı değiştirmiştir, müdahale Opus öğrensin diye kaydedilmeli ve yöneticiye yine hata dönmeli. Koruma taşıma
+    bu yüzden önce yeni korumayı kurar: yenisi reddedilirse eskisi iptal edilmez, pozisyon korumasız kalmaz.
+    """
+    pid, _ = await api.running(RULE)
+    base = f"/profiles/{pid}/interventions"
+    await api.call("POST", base, json={"kind": "command", "params": {
+        "type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1,
+        "protection": [{"type": "stop", "price": 90}]}})
+    [sl] = (await api.call("GET", f"/profiles/{pid}/account"))["state"]["orders"]
+    move = lambda price: {"chain": [
+        {"type": "order", "order_type": "stop", "symbol": SOL, "side": "long", "reduce": True, "price": price},
+        {"type": "cancel_order", "number": sl["number"], "symbol": SOL, "side": "long"}]}
+    count = len(await api.call("GET", base))
+    bad = await api.call("POST", base, ok=False, json={"kind": "command", "params": move(110)})
+    assert "Önceki adımlar" not in bad["detail"] and len(await api.call("GET", base)) == count
+    assert [o["price"] for o in (await api.call("GET", f"/profiles/{pid}/account"))["state"]["orders"]] == [90]
+    moved = await api.call("POST", base, json={"kind": "command", "params": move(92)})
+    assert [o["price"] for o in (await api.call("GET", f"/profiles/{pid}/account"))["state"]["orders"]] == [92]
+    assert "reddedildi" not in moved["result"]
+    broken = {"chain": [{"type": "order", "order_type": "stop", "symbol": SOL, "side": "long", "reduce": True,
+                         "price": 94},
+                        {"type": "cancel_order", "number": 99, "symbol": SOL, "side": "long"},
+                        {"type": "close", "symbol": SOL, "side": "long"}]}
+    bad = await api.call("POST", base, ok=False, json={"kind": "command", "params": broken})
+    assert "2. adımı reddedildi" in bad["detail"] and "Önceki adımlar uygulandı" in bad["detail"]
+    [iv] = (await api.call("GET", base))[:1]
+    assert "2. adımı reddedildi" in iv["result"] and "Sonraki adımlar uygulanmadı" in iv["result"]
+    state = (await api.call("GET", f"/profiles/{pid}/account"))["state"]
+    assert len(state["positions"]) == 1 and sorted(o["price"] for o in state["orders"]) == [92, 94]
+    empty = await api.call("POST", base, ok=False, json={"kind": "command", "params": {"chain": []}})
+    assert "chain" in empty["detail"]
 
 
 @run

@@ -17,10 +17,10 @@ from opus_trade.broker.paper import PaperBroker
 from opus_trade.domain.errors import RuleError
 from opus_trade.domain.fees import BINANCE_STANDARD as FEES
 from opus_trade.domain.models import Side
-from opus_trade.domain.trading import Actor, ClosePosition, OpenPosition, PlaceOrder, Ref
+from opus_trade.domain.trading import Actor, ClosePosition, OrderType, PlaceOrder, Protection, SetLeverage
 from opus_trade.runtime.bus import EventBus
 from opus_trade.runtime.gate import Gate, Restriction, RestrictionSource
-from opus_trade.runtime.limits import MaxLeverage, MaxMargin
+from opus_trade.runtime.limits import MaxLeverage, MaxMargin, NoOpen
 from opus_trade.runtime.risk import RiskGuard
 from opus_trade.storage.database import connect
 from opus_trade.storage.ledger import MIGRATIONS, Ledger
@@ -29,7 +29,8 @@ from tests.fakes import FakeClock, catalog
 
 T = 1_795_000_000
 SOL = "SOLUSDT"
-OPEN = OpenPosition(SOL, Side.LONG, leverage=10, margin=10)
+# Varsayılan 20x kaldıraçla 2 SOL, 100 dolardan 10 dolar marjin.
+OPEN = PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=2)
 
 
 class Fixed(RestrictionSource):
@@ -43,10 +44,10 @@ class Fixed(RestrictionSource):
 @pytest.fixture
 def parts(tmp_path):
     con = connect(tmp_path / "core.db")
-    migrate(con, MIGRATIONS, tmp_path / "bak")
+    migrate(con, MIGRATIONS, tmp_path / "bak", catalog=catalog())
     ledger, clock = Ledger(con), FakeClock(T)
     broker = PaperBroker(ledger, ledger.create_account("paper", 100.0, T), catalog(), FEES, clock)
-    broker.on_price(SOL, 100, 100, 100, T)
+    broker.on_price(SOL, 100, 100, 100, 100, T)
     return broker, RiskGuard(ledger, clock), EventBus()
 
 
@@ -63,11 +64,22 @@ def test_restriction_binds_the_strategy_but_not_the_admin(parts):
     assert submit(gate, OPEN, Actor.ADMIN)
 
 
+def test_leverage_setting_is_bound_by_leverage_limit_only(parts):
+    """Kaldıraç ayarı kaldıraç sınırına takılır. Ayar tek başına işlem açmadığı için yeni işlem yasağına takılmaz."""
+    broker, _, bus = parts
+    gate = Gate(broker, bus, catalog(), restrictions=Fixed([Restriction(1, MaxLeverage(5)), Restriction(2, NoOpen())]))
+    with pytest.raises(RuleError, match="kaldıraç en fazla 5x"):
+        submit(gate, SetLeverage(SOL, 10))
+    assert submit(gate, SetLeverage(SOL, 5))
+    with pytest.raises(RuleError, match="yeni işlem açılmaz"):
+        submit(gate, OPEN)
+
+
 def test_total_margin_limit_counts_pending_orders(parts):
     """Bekleyen emirler dolunca marjin kullanır. Sayılmazsa toplam sınır emirlerle aşılabilir."""
     broker, _, bus = parts
     gate = Gate(broker, bus, catalog(), restrictions=Fixed([Restriction(1, MaxMargin(25, total=True))]))
-    submit(gate, PlaceOrder(SOL, Side.LONG, trigger=95, leverage=10, margin=10))
+    submit(gate, PlaceOrder(SOL, Side.LONG, OrderType.LIMIT, qty=2, price=95))
     submit(gate, OPEN)
     with pytest.raises(RuleError, match="toplam marjin"):
         submit(gate, OPEN)
@@ -79,17 +91,17 @@ def test_daily_loss_blocks_new_risk_but_never_closing(parts):
     guard.daily_loss = 0.5
     gate = Gate(broker, bus, catalog(), guard=guard)
     submit(gate, OPEN)
-    broker.on_price(SOL, 100, 99, 99, T + 60)
-    with pytest.raises(RuleError, match="günlük zarar sınırı"):
+    broker.on_mark(SOL, 99, 99, 99, T + 60, None)
+    with pytest.raises(RuleError, match="Günlük zarar sınırı"):
         submit(gate, OPEN)
-    assert submit(gate, ClosePosition(Ref(1, SOL, Side.LONG)))
+    assert submit(gate, ClosePosition(SOL, Side.LONG))
 
 
 def test_halt_stops_the_admin_too(parts):
     """Acil durdurma canlı hesabın son güvencesidir, admin'in elle açmak istediği işlemi de durdurur."""
     broker, guard, bus = parts
     guard.halted = True
-    with pytest.raises(RuleError, match="acil durdurma"):
+    with pytest.raises(RuleError, match="Acil durdurma"):
         submit(Gate(broker, bus, catalog(), guard=guard), OPEN, Actor.ADMIN)
 
 
@@ -97,12 +109,13 @@ def test_gate_puts_prices_on_the_tick_before_the_broker(parts):
     """Opus ve panel fiyat adımını bilmek zorunda değil, kapı fiyatı adıma oturtur. Broker ise adım dışı fiyatı
     reddeder, yuvarlama yalnızca kapıda olmalı."""
     broker, _, bus = parts
-    cmd = PlaceOrder(SOL, Side.LONG, trigger=95.004, leverage=10, margin=10, sl=90.006)
+    cmd = PlaceOrder(SOL, Side.LONG, OrderType.LIMIT, qty=2, price=95.004,
+                     protection=(Protection(OrderType.STOP, price=90.006),))
     with pytest.raises(RuleError, match="katı olmalı"):
         asyncio.run(broker.execute(cmd, Actor.STRATEGY))
     submit(Gate(broker, bus, catalog()), cmd)
     [o] = broker.state().orders
-    assert (o.trigger, o.sl) == (95.0, 90.01)
+    assert (o.price, o.protection[0].price) == (95.0, 90.01)
 
 
 def test_slow_listener_does_not_block_the_others():

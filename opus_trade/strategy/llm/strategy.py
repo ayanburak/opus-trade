@@ -16,6 +16,8 @@ description: Kararı Opus'a soran strateji türü.
 # NOTE: Çeviride takılan bir eylem, örneğin tp ile tp_kademeleri birlikte
 # verilmişse, kapıya hiç gitmez ve reddedilmiş sonuç olarak errors listesine
 # girer. Düzeltme çağrısı onu da kapıdan dönen redlerle birlikte gösterir.
+# Çevirinin bir notu varsa, örneğin miktar bakiyeye sığdırıldıysa, not kabul
+# edilmiş bir sonuç olarak notes listesine girer.
 
 from ...domain.catalog import Catalog
 from ...domain.fees import FeeSchedule, BINANCE_STANDARD
@@ -48,7 +50,7 @@ class LLMStrategy(Strategy):
         max_wait: En uzun bekleme, dakika.
         step_limit: Opus'a bildirilen araç adımı sınırı. Sert sınır bunun beş üstüdür.
         timeout_s: Bir çağrının en uzun süresi.
-        fees: Talimatta yazan komisyon oranları.
+        fees: Komisyon oranları, talimattaki oranlar ve girişin maliyeti için.
     """
 
     accepts_messages = True
@@ -88,15 +90,18 @@ class LLMStrategy(Strategy):
                      memory={"notebook": k["not_defteri"]})
         for a in k["eylemler"]:
             try:
-                kind, item = actions.translate(a)
+                t = actions.translate(a, ctx.state, ctx.prices, ctx.marks, self.catalog, self.fees)
             except ValueError as e:
                 d.errors.append(ActionResult(_label(a), False, f"{_label(a)} reddedildi: {e}"))
                 continue
-            if kind == "command":
-                d.commands.append(item)
-                d.labels.append(_label(a))
+            if t.note:
+                d.notes.append(ActionResult(_label(a), True, f"{_label(a)}: {t.note}"))
+            if t.kind == "command":
+                d.commands += t.item
+                d.labels += [_label(a)] * len(t.item)
+                d.chained += [False] + [True] * (len(t.item) - 1)
             else:
-                d.alarms.append({**item, "label": _label(a)})
+                d.alarms.append({**t.item, "label": _label(a)})
         d.record = {"template_version": prompt.TEMPLATE_VERSION, "model": self.model, "effort": self.effort,
                     "prompt": text, "decision": k, "raw": res.raw, "tools": res.tools, "usage": res.usage,
                     "cost_usd": res.cost_usd, "duration_s": res.duration_s, "summary": k["ozet"],

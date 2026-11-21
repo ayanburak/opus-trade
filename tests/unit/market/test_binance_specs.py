@@ -39,6 +39,7 @@ def test_binance_filters_become_the_spec():
     btc = next(s for s in specs_from(INFO, load_brackets()) if s.symbol == "BTCUSDT")
     assert (btc.tick, btc.qty_step, btc.min_notional, btc.max_market_qty) == (0.1, 0.001, 50, 120)
     assert (btc.price_up, btc.price_down, btc.max_orders, btc.name) == (1.03, 0.97, 200, "BTC/USDT")
+    assert (btc.max_qty, btc.liq_fee) == (1000, 0.0125)
     assert btc.brackets[0].max_leverage == 150 and btc.brackets[0].mm_rate == 0.004
     assert [b.cap for b in btc.brackets] == sorted(b.cap for b in btc.brackets)
 

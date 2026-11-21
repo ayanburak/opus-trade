@@ -20,11 +20,12 @@ description: Hesabın günlük zarar sınırı, acil durdurması ve sabit risk s
 # kapatmak acil durdurmayı tetikleyen tarafın ayrı bir CloseAll komutuyla yaptığı
 # iştir.
 
+from collections.abc import Callable
 from datetime import datetime, time
 
 from ..domain import numbers
 from ..domain.clock import HOME_TZ, Clock
-from ..domain.trading import AccountState, Command, RISKY
+from ..domain.trading import AccountState, Command, risky
 from ..storage.ledger import Ledger
 from .limits import Limit, breach
 
@@ -62,13 +63,19 @@ class RiskGuard:
     def breached(self, state: AccountState) -> bool:
         return self.daily_loss is not None and self.day_pnl(state) <= -self.daily_loss
 
-    def check(self, cmd: Command, state: AccountState) -> str | None:
-        """Riski artıran komut reddedilecekse nedenini, kabul edilecekse None döndürür."""
-        if not isinstance(cmd, RISKY):
+    def check(self, cmd: Command, state: AccountState, price: Callable[[str], float]) -> str | None:
+        """Riski artıran komut reddedilecekse nedenini, kabul edilecekse None döndürür.
+
+        Args:
+            cmd: Denetlenen komut.
+            state: Hesabın o anki hali.
+            price: Paritenin son fiyatı, piyasa emrinin marjini bununla hesaplanır.
+        """
+        if not risky(cmd):
             return None
         if self.halted:
             return "acil durdurma açık, yeni risk alınmaz"
         if self.breached(state):
             return f"günlük zarar sınırı olan {numbers.num(self.daily_loss)} dolara ulaşıldı, bugün yeni risk alınmaz"
-        hit = breach(cmd, state, self.limits)
+        hit = breach(cmd, state, self.limits, price)
         return f"risk sınırı: {hit.text()}" if hit else None

@@ -9,10 +9,11 @@ Binance vadelinin en alt standart oranlarıdır, BNB indirimi yoktur.
 description: Komisyon oranları.
 """
 
-# NOTE: Fiyatın gelmesini bekleyen işlemler maker öder: lehine tetiklenen emir
-# girişleri ve TP kademeleri. Anında gerçekleşen her şey taker öder: piyasa
-# emri, kırılım emri, SL ve kapatmalar. Hangi işlemin hangisi olduğuna
-# kuralları kullanan taraf karar verir, burası yalnızca oranı tutar.
+# NOTE: Defterde bekleyip fiyatın gelmesiyle dolan limit emir maker öder.
+# Anında gerçekleşen her şey taker öder: piyasa emri, yanlış taraftaki limit,
+# tetiklenince piyasa emri olan stop, take-profit ve iz, kapatmalar. Hangi
+# işlemin hangisi olduğuna kuralları kullanan taraf karar verir, burası
+# yalnızca oranı tutar.
 #
 # NOTE: Oranlar sabit değil bir nesnedir, çünkü canlı hesabın oranı Binance'teki
 # VIP kademesine göre değişebilir. Kâğıt ve canlı broker kendi oranını alır.

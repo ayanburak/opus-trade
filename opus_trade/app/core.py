@@ -73,7 +73,7 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
     """Çekirdeğin parçalarını kurar ve birbirine bağlar."""
     plugins.load()
     con = connect(cfg.core_db)
-    applied = migrate(con, MIGRATIONS, cfg.backups)
+    applied = migrate(con, MIGRATIONS, cfg.backups, catalog=catalog)
     if applied:
         log.info("Taşımalar uygulandı: %s", ", ".join(applied))
     ledger, journal, state, repo = Ledger(con), JournalRepo(con), StateRepo(con), ProfileRepo(con)

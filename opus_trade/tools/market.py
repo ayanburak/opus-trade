@@ -486,6 +486,9 @@ def gecmis_kararlarim(adet: int = 20, atla: int = 0, analiz_dahil: bool = False)
 @server.tool()
 def gecmis_islemlerim(adet: int = 50) -> str:
     """Kapanmış işlemlerini yeniden eskiye getirir. Bir pozisyonun kısmi kapanışları ayrı satırdır. Net sonuç komisyon ve fonlama dahildir.
+    Aynı yöndeki girişler pozisyonla birleştiği için giriş fiyatı birleşen girişlerin ortalaması, açılış saati ilk
+    girişin saatidir. Etkin kaldıraç büyüklüğün marjine oranıdır, farklı kaldıraçlı girişler birleştiyse paritenin
+    ayarından farklı olabilir.
 
     Args:
         adet: Bir ile beş yüz arası.
@@ -494,25 +497,25 @@ def gecmis_islemlerim(adet: int = 50) -> str:
     if not found:
         return "Kapanmış işlem yok."
     return "\n".join(
-        f"#{t.number} {t.symbol} {t.side} {t.leverage:g}x miktar {t.qty:g} marjin {t.margin:.2f}, giriş "
+        f"{t.symbol} {t.side} etkin kaldıraç {t.leverage:.1f}x, miktar {t.qty:g} marjin {t.margin:.2f}, giriş "
         f"{t.entry_price:g} {_clock(t.entry_time)}, çıkış {t.exit_price:g} {_clock(t.exit_time)}, "
         f"{REASONS.get(t.reason, t.reason)}, net {t.net:+.2f} dolar" for t in found)
 
 
 # Her kapanan parça kendi miktarıyla değerlendirilir. En iyi andaki açık kâr
 # komisyonsuzdur, net sonuç komisyon ve fonlama dahildir, yakalama oranı bu
-# ikisinin oranıdır. SL kapanıştaki son değerdir, iz süren stop taşıdıysa
-# taşınmış halidir.
+# ikisinin oranıdır. SL kapanış anında pozisyonu koruyan SL emirleri ve izlerin
+# o anki seviyelerinden fiyata en yakın olanıdır.
 def _exit_report(t) -> tuple[str, float | None, float | None]:
     sign = t.side.sign
     peak = sign * (t.best_price - t.entry_price) * t.qty
     minutes = (t.exit_time - t.entry_time) // 60
-    text = (f"#{t.number} {t.symbol} {t.side}, giriş {t.entry_price:g}, çıkış {t.exit_price:g}, "
+    text = (f"{t.symbol} {t.side}, giriş {t.entry_price:g}, çıkış {t.exit_price:g}, "
             f"{REASONS.get(t.reason, t.reason)}, süre {minutes // 60} sa {minutes % 60} dk, net {t.net:+.2f} dolar. ")
     capture = t.net / peak * 100 if peak > 0 else None
     text += (f"En iyi fiyat {t.best_price:g}, o anda açık kâr {peak:+.2f} dolar, yakalama yüzde {capture:.0f}. "
              if capture is not None else f"En iyi fiyat {t.best_price:g}, en iyi anda da kârda değildi. ")
-    missed = [k.price for k in t.tp_levels if sign * (k.price - t.best_price) > 0]
+    missed = [x for x in t.tp_prices if sign * (x - t.best_price) > 0]
     gap = None
     if missed:
         nearest = min(missed) if sign > 0 else max(missed)

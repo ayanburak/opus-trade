@@ -38,7 +38,7 @@ from ..domain.models import Side
 from ..domain.clock import Clock
 from ..domain.errors import RuleError
 from ..domain.profile import ProfileConfig
-from ..domain.trading import Actor, AddToPosition, ClosePosition, OpenPosition, PlaceOrder
+from ..domain.trading import Actor, ClosePosition, PlaceOrder, SetLeverage
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
 from ..storage.notifications import NotificationRepo
@@ -47,7 +47,7 @@ from ..storage.runtime_state import StateRepo
 from ..strategy.base import STRATEGIES
 from ..triggers.base import TRIGGERS
 from ..runtime.bus import EventBus
-from ..runtime.interventions import Interventions, command_from
+from ..runtime.interventions import Interventions, commands_from
 from ..runtime.health import CollectorWatch
 from ..runtime.model_access import ModelAccess
 from ..runtime.risk import DAY_TZ
@@ -288,7 +288,12 @@ def create_app(core: Core) -> FastAPI:
     @app.get("/profiles/{pid}/account")
     async def account(pid: int):
         r = runner(pid)
-        st = _plain(r.broker.state())
+        state = r.broker.state()
+        # available bir property'dir, asdict onu almaz. leverages profilin
+        # bütün paritelerini taşır, ayarlanmamış paritenin varsayılanını panel
+        # bilmek zorunda kalmaz.
+        st = {**_plain(state), "available": state.available,
+              "leverages": {s: state.leverage(s) for s in sorted({*r.symbols, *state.leverages})}}
         # Pozisyonun açık kârı son fiyatla burada hesaplanır, panel hesap
         # kuralı taşımaz. Fiyat henüz gelmediyse None'dır.
         for x in st["positions"]:
@@ -302,8 +307,8 @@ def create_app(core: Core) -> FastAPI:
     @app.get("/profiles/{pid}/trades")
     async def trades(pid: int):
         p = profile(pid)
-        # net bir property'dir, asdict onu almaz. Panel neti kendisi hesaplamasın diye eklenir.
-        return [{**_plain(t), "net": t.net} for t in reversed(core.ledger.trades(p.account_id))] if p.account_id else []
+        # net ve leverage property'dir, asdict onları almaz. Arayüzler kendisi hesaplamasın diye eklenir.
+        return [{**_plain(t), "net": t.net, "leverage": t.leverage} for t in reversed(core.ledger.trades(p.account_id))] if p.account_id else []
 
     @app.get("/profiles/{pid}/equity")
     async def equity(pid: int, since: int = 0):
@@ -376,12 +381,18 @@ def create_app(core: Core) -> FastAPI:
 
     @app.post("/profiles/{pid}/preview")
     async def preview(pid: int, params: dict = Body(..., embed=True)):
-        cmd, gate, now = command_from(params), runner(pid).gate, core.clock.time()
-        if isinstance(cmd, ClosePosition):
+        cmds, gate, now = commands_from(params), runner(pid).gate, core.clock.time()
+        # Önizlenen zincir yalnızca kaldıraç ve ardından aynı paritenin
+        # girişi olabilir, kaldıraç girişin tahminine katılır.
+        leverage = None
+        if len(cmds) == 2 and isinstance(cmds[0], SetLeverage) and getattr(cmds[1], "symbol", None) == cmds[0].symbol:
+            leverage, cmds = cmds[0].leverage, cmds[1:]
+        cmd = cmds[0]
+        if len(cmds) == 1 and isinstance(cmd, ClosePosition) and leverage is None:
             return _plain(gate.preview_close(cmd, Actor.ADMIN, now))
-        if not isinstance(cmd, (OpenPosition, PlaceOrder, AddToPosition)):
-            raise ValueError("Önizleme yalnızca pozisyon açma, emir, ekleme ve kapatma için yapılır.")
-        return _plain(gate.preview(cmd, Actor.ADMIN, now))
+        if len(cmds) > 1 or not isinstance(cmd, PlaceOrder) or cmd.reduce:
+            raise ValueError("Önizleme yalnızca giriş emri, kaldıraçla birlikte giriş emri ve kapatma için yapılır.")
+        return _plain(gate.preview(cmd, Actor.ADMIN, now, leverage))
 
     @app.post("/profiles/{pid}/interventions/{iid}/withdraw")
     async def withdraw(pid: int, iid: int):

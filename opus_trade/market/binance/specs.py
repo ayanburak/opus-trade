@@ -61,8 +61,9 @@ def specs_from(info: dict, brackets: dict[str, list[dict]]) -> tuple[SymbolSpec,
             symbol=symbol, name=f"{s['baseAsset']}/{s['quoteAsset']}",
             tick=float(f["PRICE_FILTER"]["tickSize"]), qty_step=float(f["LOT_SIZE"]["stepSize"]),
             min_notional=float(f["MIN_NOTIONAL"]["notional"]), max_market_qty=float(f["MARKET_LOT_SIZE"]["maxQty"]),
+            max_qty=float(f["LOT_SIZE"]["maxQty"]),
             price_up=float(f["PERCENT_PRICE"]["multiplierUp"]), price_down=float(f["PERCENT_PRICE"]["multiplierDown"]),
             max_orders=int(f["MAX_NUM_ORDERS"]["limit"]),
             brackets=tuple(sorted((_bracket(b) for b in brackets[symbol]), key=lambda b: b.cap)),
-            slippage=SLIPPAGE, note=note))
+            slippage=SLIPPAGE, liq_fee=float(s["liquidationFee"]), note=note))
     return tuple(out)

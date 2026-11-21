@@ -73,3 +73,38 @@ def test_database_newer_than_code_is_refused(tmp_path):
     (m / "0002_b.sql").unlink()
     with pytest.raises(MigrationError, match="daha yeni"):
         migrate(con, m, tmp_path / "bak")
+
+
+def test_python_migration_gets_the_context(tmp_path):
+    """Python taşıması SQL'in hesaplayamadığı dönüşümler içindir, ihtiyaç duyduğu bilgiyi migrate()'ten alır."""
+    m = tmp_path / "m"
+    write(m, "0001_a.sql", "CREATE TABLE a (x INTEGER);")
+    write(m, "0002_b.py", "def apply(con, value):\n    con.execute('INSERT INTO a VALUES (?)', (value,))\n")
+    con = connect(tmp_path / "x.db")
+    assert migrate(con, m, tmp_path / "bak", value=42) == ["0001_a.sql", "0002_b.py"]
+    assert con.execute("SELECT x FROM a").fetchone()[0] == 42
+
+
+def test_failed_python_migration_is_rolled_back_and_keys_come_back(tmp_path):
+    """Python taşıması yarıda hata verirse yaptığı her şey geri alınır. Kapattığı yabancı anahtar denetimi
+    açık kalmazsa sonraki yazmalar bozuk bağ kurabilirdi."""
+    m = tmp_path / "m"
+    write(m, "0001_a.sql", "CREATE TABLE a (x INTEGER);")
+    write(m, "0002_b.py", "def apply(con):\n    con.execute('INSERT INTO a VALUES (1)')\n    raise ValueError('bozuk')\n")
+    con = connect(tmp_path / "x.db")
+    with pytest.raises(MigrationError, match="0002_b.py uygulanamadı.*bozuk"):
+        migrate(con, m, tmp_path / "bak")
+    assert con.execute("SELECT COUNT(*) FROM a").fetchone()[0] == 0
+    assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_python_migration_that_breaks_a_reference_is_refused(tmp_path):
+    """Taşıma sırasında yabancı anahtar denetimi kapalıdır. Sonunda kopan bir bağ kalırsa taşıma reddedilir."""
+    m = tmp_path / "m"
+    write(m, "0001_a.sql", "CREATE TABLE p (id INTEGER PRIMARY KEY);"
+                           "CREATE TABLE c (p_id INTEGER REFERENCES p (id));")
+    write(m, "0002_b.py", "def apply(con):\n    con.execute('INSERT INTO c VALUES (9)')\n")
+    con = connect(tmp_path / "x.db")
+    with pytest.raises(MigrationError, match="bağlandığı kayıt yok"):
+        migrate(con, m, tmp_path / "bak")
+    assert con.execute("SELECT COUNT(*) FROM c").fetchone()[0] == 0

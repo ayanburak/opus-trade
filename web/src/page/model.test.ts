@@ -16,9 +16,9 @@ import { status, summary, timeline, toolCounts, wakeText } from "./model";
 const NOW = 1_795_149_360;
 const PROFILE: Profile = { id: 1, name: "Opus", short: "op", strategy: "llm", state: "running", version: 2, equity: 110,
   start_balance: 100, positions: 0, orders: 0, busy: false, next_wake: null, symbols: ["BTCUSDT"] };
-const trade = (n: number, reason: string, net: number, exit: number): Trade => ({ id: n, number: n, symbol: "BTCUSDT",
+const trade = (n: number, reason: string, net: number, exit: number): Trade => ({ id: n, position_id: n, symbol: "BTCUSDT",
   side: "long", leverage: 10, qty: 1, margin: 10, entry_price: 1, entry_time: exit - 600, exit_price: 2, exit_time: exit,
-  reason, pnl: net, fee: 0, funding: 0, net });
+  reason, pnl: net, fee: 0, funding: 0, net, best_price: 2, worst_price: 1, tp_prices: [], sl: null, order_id: null });
 const entry = (id: number, time: number): Entry => ({ id, time, version_id: 1, next_wake: null, wakes: [], results: [],
   record: {}, error: null });
 
@@ -49,9 +49,20 @@ describe("durum satırı", () => {
 });
 
 describe("günlük", () => {
+  it("eski modelin kayıtları pozisyon numarasıyla eskisi gibi okunur", () => {
+    const old = JSON.stringify({ type: "event", kind: "protection", number: 4, symbol: "BTCUSDT", side: "long", price: 62000 });
+    expect(wakeText({ kind: "account", time: 0, data: old }).detail).toBe("Koruma değişti · #4 BTCUSDT long · 62.000,0");
+  });
+
   it("uyandırmanın verisi okunur cümleye çevrilir", () => {
-    const ev = JSON.stringify({ type: "event", kind: "closed", reason: "tp", number: 4, symbol: "BTCUSDT", side: "long", price: 62000 });
-    expect(wakeText({ kind: "account", time: 0, data: ev })).toEqual({ label: "hesap olayı", detail: "Pozisyon kapandı, TP · #4 BTCUSDT long · 62.000,0" });
+    const ev = (d: object) => wakeText({ kind: "account", time: 0, data: JSON.stringify({ type: "event", symbol: "BTCUSDT", ...d }) });
+    expect(ev({ kind: "closed", reason: "tp", side: "long", price: 62000, number: null }))
+      .toEqual({ label: "hesap olayı", detail: "Pozisyon kapandı, TP · BTCUSDT long · 62.000,0" });
+    expect(ev({ kind: "order_filled", number: 3, order_type: "stop", reduce: false, side: "long", price: 61000 }).detail)
+      .toBe("Emir gerçekleşti · #3 kırılım BTCUSDT long · 61.000,0");
+    expect(ev({ kind: "order_filled", number: 5, order_type: "stop", reduce: true, side: "long", price: 60000 }).detail)
+      .toBe("Emir gerçekleşti · #5 SL BTCUSDT long · 60.000,0");
+    expect(ev({ kind: "leverage", amount: 10, number: null }).detail).toBe("Kaldıraç değişti · BTCUSDT · 10x");
     expect(wakeText({ kind: "timer", time: 0, data: null })).toEqual({ label: "zamanlayıcı", detail: "" });
     expect(wakeText({ kind: "timer", time: 0, data: "{bozuk" }).detail).toBe("");
   });
@@ -66,6 +77,6 @@ describe("günlük", () => {
   it("kararla kapanan işlem ikinci kez görünmez, TP ve SL ayrı satır olur, yüklenen kararlardan eskisi gelmez", () => {
     const rows = timeline([entry(2, NOW), entry(1, NOW - 1000)],
                           [trade(1, "strategy", 1, NOW - 10), trade(2, "tp", 1, NOW - 20), trade(3, "sl", -1, NOW - 5000)]);
-    expect(rows.map((r) => (r.kind === "entry" ? `k${r.entry.id}` : `i${r.trade.number}`))).toEqual(["k2", "i2", "k1"]);
+    expect(rows.map((r) => (r.kind === "entry" ? `k${r.entry.id}` : `i${r.trade.id}`))).toEqual(["k2", "i2", "k1"]);
   });
 });

@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { dayClock, duration, money, num, parseNum, pct, signed, when } from "./format";
+import { dayClock, duration, money, num, parseNum, pct, signed, when, qty } from "./format";
 
 describe("parseNum", () => {
   it("tek nokta ya da virgül her zaman ondalıktır, eski arayüzdeki binlik hatası tekrar etmemeli", () => {
@@ -51,6 +51,15 @@ describe("gösterim", () => {
     expect(when(now + 17 * 3600, now)).toBe("yarın 00:36");
     expect(when(now - 8 * 3600, now)).toBe("dün 23:36");
     expect(when(now + 3 * 86400, now)).toBe("23.11 07:36");
+  });
+});
+
+describe("miktar", () => {
+  it("miktarı sondaki sıfırlar olmadan, altı haneye kadar yazar", () => {
+    expect(qty(0.5)).toBe("0,5");
+    expect(qty(0.0012345678)).toBe("0,001235");
+    expect(qty(1500)).toBe("1.500");
+    expect(qty(null)).toBe("—");
   });
 });
 

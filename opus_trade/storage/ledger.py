@@ -2,11 +2,11 @@
 file: ledger.py
 importable: MIGRATIONS, Ledger
 
-Ledger hesap defterinin deposudur: hesaplar, pozisyonlar, emirler, kapanmış
-işlemler, hesap olayları ve özkaynak. Broker'lar hesabın durumunu yalnızca
-bunun üzerinden okur ve yazar. Yazan metotlar işlemi kendileri kapatmaz,
-birbirine bağlı birkaç yazma atomic() içinde yapılır ve ya hepsi ya hiçbiri
-kalıcı olur. MIGRATIONS çekirdek veritabanının taşıma klasörüdür.
+Ledger hesap defterinin deposudur: hesaplar, paritelerin kaldıracı,
+pozisyonlar, emirler, kapanmış işlemler, hesap olayları ve özkaynak.
+Broker'lar hesabın durumunu yalnızca bunun üzerinden okur ve yazar. Yazan
+metotlar işlemi kendileri kapatmaz, birbirine bağlı birkaç yazma atomic()
+içinde yapılır ve ya hepsi ya hiçbiri kalıcı olur. MIGRATIONS çekirdek veritabanının taşıma klasörüdür.
 
 description: Hesap defterinin SQLite deposu.
 """
@@ -15,10 +15,12 @@ description: Hesap defterinin SQLite deposu.
 # doğruluğun kaynağı Binance'tir ve defter onun kaydıdır, aynı tablolar
 # kullanılır.
 #
-# NOTE: Görünen numara açık pozisyonlar ile bekleyen emirlerin birlikte
-# kullanmadığı en küçük sayıdır. Veritabanında bunu tek bir kısıtla
-# zorlamak iki tabloya yayıldığı için mümkün değil, free_number() ile
-# atomic() içinde seçilir. Program tek yazarlı olduğu için yarış olmaz.
+# NOTE: Görünen numara bekleyen emirlerin kullanmadığı en küçük sayıdır,
+# free_number() ile atomic() içinde seçilir. Veritabanı da bekleyen emirlerde
+# numaranın, açık pozisyonlarda parite ve yönün tekliğini dizinle zorlar.
+#
+# NOTE: Emrin koruma istekleri ve işlemin TP fiyatları JSON metni olarak
+# tutulur. İkisi de yalnızca birlikte okunur, ayrı tabloya değmez.
 
 import json
 import sqlite3
@@ -27,43 +29,41 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Iterator
 
-from ..domain.models import Side, TpLevel
-from ..domain.trading import AccountEvent, Order, Position, Trade
+from ..domain.models import Side
+from ..domain.trading import AccountEvent, Order, OrderType, Position, Protection, Trade
 
 MIGRATIONS = Path(__file__).parent / "migrations"
 
-_POSITION_FIELDS = ("number", "symbol", "side", "leverage", "qty", "margin", "entry_price", "entry_time", "tp_levels",
-                    "sl", "trail_pct", "best_price", "best_time", "worst_price", "worst_time", "liq_price", "fee",
-                    "funding", "order_id")
+_POSITION_FIELDS = ("symbol", "side", "qty", "margin", "entry_price", "entry_time", "best_price", "best_time",
+                    "worst_price", "worst_time", "liq_price", "fee", "funding")
+
+_ORDER_FIELDS = ("account_id", "number", "symbol", "side", "type", "reduce", "qty", "price", "trail_pct", "best",
+                 "margin", "protection", "expires_at", "created_at")
 
 
-def _levels_json(levels: tuple[TpLevel, ...]) -> str:
-    return json.dumps([asdict(k) for k in levels])
+def _protection_json(items: tuple[Protection, ...]) -> str:
+    return json.dumps([asdict(x) for x in items])
 
 
-def _levels(text: str) -> tuple[TpLevel, ...]:
-    return tuple(TpLevel(**k) for k in json.loads(text))
+def _protection(text: str) -> tuple[Protection, ...]:
+    return tuple(Protection(**{**x, "type": OrderType(x["type"])}) for x in json.loads(text))
 
 
 def _position(r: sqlite3.Row) -> Position:
-    return Position(id=r["id"], account_id=r["account_id"], number=r["number"], symbol=r["symbol"],
-                    side=Side(r["side"]), leverage=r["leverage"], qty=r["qty"], margin=r["margin"],
-                    entry_price=r["entry_price"], entry_time=r["entry_time"], tp_levels=_levels(r["tp_levels"]),
-                    sl=r["sl"], trail_pct=r["trail_pct"], best_price=r["best_price"], best_time=r["best_time"],
-                    worst_price=r["worst_price"], worst_time=r["worst_time"], liq_price=r["liq_price"],
-                    fee=r["fee"], funding=r["funding"], order_id=r["order_id"])
+    return Position(id=r["id"], account_id=r["account_id"], **{k: r[k] for k in _POSITION_FIELDS if k != "side"},
+                    side=Side(r["side"]))
 
 
 def _order(r: sqlite3.Row) -> Order:
     return Order(id=r["id"], account_id=r["account_id"], number=r["number"], symbol=r["symbol"],
-                 side=Side(r["side"]), trigger=r["trigger_price"], below=bool(r["below"]), maker=bool(r["maker"]),
-                 leverage=r["leverage"], margin=r["margin"], tp_levels=_levels(r["tp_levels"]), sl=r["sl"],
-                 trail_pct=r["trail_pct"], expires_at=r["expires_at"], created_at=r["created_at"])
+                 side=Side(r["side"]), type=OrderType(r["type"]), reduce=bool(r["reduce"]), qty=r["qty"],
+                 price=r["price"], trail_pct=r["trail_pct"], best=r["best"], margin=r["margin"],
+                 protection=_protection(r["protection"]), expires_at=r["expires_at"], created_at=r["created_at"])
 
 
 def _trade(r: sqlite3.Row) -> Trade:
-    rest = {k: r[k] for k in r.keys() if k not in ("side", "tp_levels")}
-    return Trade(**rest, side=Side(r["side"]), tp_levels=_levels(r["tp_levels"]))
+    rest = {k: r[k] for k in r.keys() if k not in ("side", "tp_prices")}
+    return Trade(**rest, side=Side(r["side"]), tp_prices=tuple(json.loads(r["tp_prices"])))
 
 
 # Olayın detayı JSON'a çevrilirken Trade gibi iç içe tipler de sözlük olur,
@@ -116,7 +116,7 @@ class Ledger:
         args: tuple = (account_id,)
         if symbol:
             sql, args = sql + " AND symbol = ?", (account_id, symbol)
-        return tuple(_position(r) for r in self.con.execute(sql + " ORDER BY number", args))
+        return tuple(_position(r) for r in self.con.execute(sql + " ORDER BY id", args))
 
     def orders(self, account_id: int, symbol: str | None = None) -> tuple[Order, ...]:
         sql = "SELECT * FROM orders WHERE account_id = ? AND status = 'pending'"
@@ -128,15 +128,21 @@ class Ledger:
     def position(self, position_id: int) -> Position:
         return _position(self.con.execute("SELECT * FROM positions WHERE id = ?", (position_id,)).fetchone())
 
+    def order(self, order_id: int) -> Order:
+        return _order(self.con.execute("SELECT * FROM orders WHERE id = ?", (order_id,)).fetchone())
+
     def trades(self, account_id: int, since: int | None = None) -> tuple[Trade, ...]:
         rows = self.con.execute("SELECT * FROM trades WHERE account_id = ? AND exit_time >= ? ORDER BY id",
                                 (account_id, since or 0))
         return tuple(_trade(r) for r in rows)
 
+    def leverages(self, account_id: int) -> dict[str, int]:
+        rows = self.con.execute("SELECT symbol, leverage FROM leverages WHERE account_id = ?", (account_id,))
+        return {r[0]: r[1] for r in rows}
+
     def free_number(self, account_id: int) -> int:
         used = {r[0] for r in self.con.execute(
-            "SELECT number FROM positions WHERE account_id = ? AND status = 'open' "
-            "UNION SELECT number FROM orders WHERE account_id = ? AND status = 'pending'", (account_id, account_id))}
+            "SELECT number FROM orders WHERE account_id = ? AND status = 'pending'", (account_id,))}
         n = 1
         while n in used:
             n += 1
@@ -144,8 +150,10 @@ class Ledger:
 
     # --- Yazma ---
 
+    def set_leverage(self, account_id: int, symbol: str, leverage: int) -> None:
+        self.con.execute("INSERT OR REPLACE INTO leverages VALUES (?, ?, ?)", (account_id, symbol, leverage))
+
     def insert_position(self, account_id: int, **fields) -> Position:
-        fields["tp_levels"] = _levels_json(fields["tp_levels"])
         fields["side"] = str(fields["side"])
         cols = ("account_id",) + _POSITION_FIELDS
         cur = self.con.execute(f"INSERT INTO positions ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
@@ -153,8 +161,6 @@ class Ledger:
         return self.position(cur.lastrowid)
 
     def update_position(self, position_id: int, **fields) -> Position:
-        if "tp_levels" in fields:
-            fields["tp_levels"] = _levels_json(fields["tp_levels"])
         self.con.execute(f"UPDATE positions SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
                          (*fields.values(), position_id))
         return self.position(position_id)
@@ -166,22 +172,28 @@ class Ledger:
         row = asdict(t)
         row.pop("id")
         row["side"] = str(row["side"])
-        row["tp_levels"] = _levels_json(t.tp_levels)
+        row["tp_prices"] = json.dumps(list(t.tp_prices))
         cur = self.con.execute(f"INSERT INTO trades ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
                                tuple(row.values()))
         return _trade(self.con.execute("SELECT * FROM trades WHERE id = ?", (cur.lastrowid,)).fetchone())
 
     def insert_order(self, o: Order) -> Order:
-        cur = self.con.execute(
-            "INSERT INTO orders (account_id, number, symbol, side, trigger_price, below, maker, leverage, margin, "
-            "tp_levels, sl, trail_pct, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (o.account_id, o.number, o.symbol, str(o.side), o.trigger, int(o.below), int(o.maker), o.leverage,
-             o.margin, _levels_json(o.tp_levels), o.sl, o.trail_pct, o.expires_at, o.created_at))
-        return _order(self.con.execute("SELECT * FROM orders WHERE id = ?", (cur.lastrowid,)).fetchone())
+        row = {**{k: getattr(o, k) for k in _ORDER_FIELDS}, "side": str(o.side), "type": str(o.type),
+               "reduce": int(o.reduce), "protection": _protection_json(o.protection)}
+        cur = self.con.execute(f"INSERT INTO orders ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
+                               tuple(row.values()))
+        return self.order(cur.lastrowid)
+
+    # Fiyatı değişen limit emir ve en iyi fiyatı ilerleyen iz bunu kullanır.
+    def update_order(self, order_id: int, **fields) -> Order:
+        self.con.execute(f"UPDATE orders SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                         (*fields.values(), order_id))
+        return self.order(order_id)
 
     def resolve_order(self, order_id: int, status: str, now: int, note: str | None = None,
                       position_id: int | None = None) -> None:
-        self.con.execute("UPDATE orders SET status = ?, resolved_at = ?, note = ?, position_id = ? WHERE id = ?",
+        self.con.execute("UPDATE orders SET status = ?, resolved_at = ?, note = ?, "
+                         "position_id = COALESCE(?, position_id) WHERE id = ?",
                          (status, now, note, position_id, order_id))
 
     def log_event(self, e: AccountEvent) -> None:

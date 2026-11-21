@@ -14,25 +14,29 @@ import asyncio
 import pytest
 
 from opus_trade import plugins
-from opus_trade.domain.models import Side, TpLevel
-from opus_trade.domain.trading import AccountState, ClosePosition, OpenPosition, Position
+from opus_trade.domain.models import Side
+from opus_trade.domain.trading import (AccountState, ClosePosition, OrderType, PlaceOrder, Position, Protection,
+                                       SetLeverage)
 from opus_trade.market.models import Candle, Liquidation
 from opus_trade.registry import validate
 from opus_trade.strategy.base import STRATEGIES, Context, Wake
 from opus_trade.strategy.rules.liquidation_reversal import LiquidationReversal
 from opus_trade.triggers.base import TRIGGERS, Fire
 from opus_trade.triggers.liquidation_wave import LiquidationWave, Wave
+from tests.fakes import catalog
 
 NOW = 1_795_000_020
 SOL, ETH = "SOLUSDT", "ETHUSDT"
 
 
 def rule() -> LiquidationReversal:
-    return LiquidationReversal(notional=75, leverage=20, tp_range=0.5, min_tp_pct=0.3, sl_range=0.5, hold_min=60)
+    return LiquidationReversal(notional=75, leverage=20, tp_range=0.5, min_tp_pct=0.3, sl_range=0.5, hold_min=60,
+                               catalog=catalog())
 
 
-def ctx(wakes, positions=(), cash=10.0, price=100.0) -> Context:
-    return Context(now=NOW, wakes=wakes, state=AccountState(1, cash, cash, tuple(positions), ()),
+def ctx(wakes, positions=(), cash=10.0, price=100.0, leverages=None) -> Context:
+    state = AccountState(1, cash, cash, tuple(positions), (), leverages or {})
+    return Context(now=NOW, wakes=wakes, state=state,
                    prices={SOL: price, ETH: 2000.0}, symbols=(SOL, ETH), market=None)
 
 
@@ -42,17 +46,26 @@ def wave_wake(symbol=SOL, low=96.0, high=100.0, long_usd=500_000.0, short_usd=1_
 
 
 def position(symbol=SOL, entry_time=NOW - 600) -> Position:
-    return Position(1, 1, 1, symbol, Side.LONG, 20, 0.75, 3.75, 100, entry_time, (), None, None, 100, entry_time, 100,
-                    entry_time, 95, 0.03, 0, None)
+    return Position(1, 1, symbol, Side.LONG, 0.75, 3.75, 100, entry_time, 100, entry_time, 100, entry_time, 95, 0.03,
+                    0)
 
 
 # --- Kural stratejisi ---
 
 def test_long_wave_opens_long_with_tp_and_sl_from_the_range():
-    """Long'ların likide olduğu dalga sonrası long açılır. TP yarım aralık ileride, SL dibin yarım aralık altında."""
+    """Long'ların likide olduğu dalga sonrası long açılır. TP yarım aralık ileride, SL dibin yarım aralık altında.
+    Büyüklük kuralın büyüklüğüdür, miktar adıma yuvarlanır."""
     d = asyncio.run(rule().decide(ctx([wave_wake()])))
-    assert d.commands == [OpenPosition(SOL, Side.LONG, 20, 3.75, (TpLevel(102.0, 100),), 94.0)]
+    assert d.commands == [PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=0.75, protection=(
+        Protection(OrderType.TAKE_PROFIT, 102.0), Protection(OrderType.STOP, 94.0)))]
     assert d.wait_s == 3600
+
+
+def test_symbol_leverage_is_set_before_the_entry():
+    """Kaldıraç paritenin ayarıdır. Paritenin kaldıracı kuralınkinden farklıysa önce kaldıraç ayarlanır, yoksa
+    giriş beklenenden farklı marjinle açılırdı."""
+    d = asyncio.run(rule().decide(ctx([wave_wake()], leverages={SOL: 5})))
+    assert d.commands[0] == SetLeverage(SOL, 20) and isinstance(d.commands[1], PlaceOrder)
 
 
 def test_wave_is_skipped_when_tp_is_too_close():
@@ -70,7 +83,7 @@ def test_one_position_per_symbol():
 def test_position_is_closed_when_hold_time_is_over():
     """Süresi dolan pozisyon kapanır. Bu kural olmadan geri dönüş gelmeyen pozisyon süresiz açık kalırdı."""
     d = asyncio.run(rule().decide(ctx([Wake("timer", NOW)], positions=[position(entry_time=NOW - 3600)])))
-    assert isinstance(d.commands[0], ClosePosition) and d.commands[0].ref.number == 1
+    assert d.commands == [ClosePosition(SOL, Side.LONG)]
     assert d.wait_s is None
 
 
@@ -112,7 +125,7 @@ def test_registered_types_validate_their_params():
     plugins.load()
     entry = STRATEGIES.get("liquidation_reversal")
     assert validate(entry.params, {})["hold_min"] == 60
-    with pytest.raises(ValueError, match="Kaldıraç 1 ile 125 arasında"):
+    with pytest.raises(ValueError, match="Kaldıraç 1 ile 150 arasında"):
         validate(entry.params, {"leverage": 500})
     with pytest.raises(ValueError, match="Bilinmeyen parametre"):
         validate(entry.params, {"lever": 5})

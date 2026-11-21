@@ -211,7 +211,7 @@ class Notifier:
 
     def _account(self, e: AccountEvent) -> list[_Note]:
         pid = self._profile_of(e.account_id)
-        head = f"#{e.number} {e.symbol} {e.side}"
+        head = f"{f'#{e.number} ' if e.number else ''}{e.symbol} {e.side}"
         match e.kind:
             case EventKind.OPENED:
                 return [_Note("important", "opened", pid, f"{head} açıldı",
