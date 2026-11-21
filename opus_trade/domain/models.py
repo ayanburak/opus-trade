@@ -1,9 +1,10 @@
 """
 file: models.py
-importable: Side, SymbolSpec, TpLevel, Sizing
+importable: Side, Bracket, SymbolSpec, TpLevel, Sizing
 
 Hesap kurallarının üzerinde çalıştığı küçük veri tipleri. Side bir pozisyonun
-ya da emrin yönüdür. SymbolSpec bir paritenin Binance'teki işlem kurallarıdır.
+ya da emrin yönüdür. SymbolSpec bir paritenin Binance'teki işlem kurallarıdır,
+Bracket onun kaldıraç ve bakım marjı kademelerinden biridir.
 TpLevel bir kâr alma kademesidir. Sizing bir işlemin büyüklük hesabının
 sonucudur. Hepsi değişmezdir.
 
@@ -29,8 +30,18 @@ class Side(StrEnum):
         return 1 if self is Side.LONG else -1
 
 
-# Değerler Binance'in kendi kurallarıdır. Bakım marjı en düşük kademeye
-# yakın tutulur, bu hesabın büyüklüklerinde üst kademelere hiç çıkılmaz.
+# Binance'in kaldıraç ve bakım marjı kademesi. cap kademenin kapsadığı en
+# büyük pozisyon büyüklüğüdür, dolar. Bakım marjı büyüklük × mm_rate −
+# mm_amount'tur, mm_amount kademe sınırında bakım marjının sıçramamasını sağlar.
+@dataclass(frozen=True)
+class Bracket:
+    cap: float
+    max_leverage: int
+    mm_rate: float
+    mm_amount: float
+
+
+# Değerler çekirdek açılırken Binance'ten okunur, burada varsayılan yoktur.
 # note boş değilse paritenin ne olduğunu anlatan kısa bir Türkçe ad taşır,
 # örneğin XAUUSDT için altın.
 @dataclass(frozen=True)
@@ -40,21 +51,29 @@ class SymbolSpec:
     Args:
         symbol: Binance'teki sembol, örneğin BTCUSDT.
         name: Arayüzde görünen ad, örneğin BTC/USDT.
-        max_leverage: İzin verilen en yüksek kaldıraç.
-        maint_margin: Bakım marjı oranı, örneğin 0.004.
-        slippage: Taker işlemlerde fiyatın aleyhe kayma oranı.
-        min_notional: Binance'in en küçük işlem büyüklüğü, dolar.
+        tick: Fiyat adımı. Fiyat, tetik, TP ve SL bunun katıdır.
         qty_step: Miktar adımı. Miktar her zaman bunun katıdır.
+        min_notional: Binance'in en küçük işlem büyüklüğü, dolar.
+        max_market_qty: Tek bir piyasa emrinin en büyük miktarı.
+        price_up: Alış limitinin mark fiyatına oranı en fazla bu kadar olabilir, örneğin 1.03.
+        price_down: Satış limitinin mark fiyatına oranı en az bu kadar olabilir, örneğin 0.97.
+        max_orders: Paritede aynı anda açık olabilecek emir sayısı.
+        brackets: Kaldıraç ve bakım marjı kademeleri, küçükten büyüğe.
+        slippage: Taker işlemlerde fiyatın aleyhe kayma oranı.
         note: Paritenin ne olduğunu anlatan kısa ad, yoksa boş.
     """
 
     symbol: str
     name: str
-    max_leverage: int
-    maint_margin: float
-    slippage: float
-    min_notional: float
+    tick: float
     qty_step: float
+    min_notional: float
+    max_market_qty: float
+    price_up: float
+    price_down: float
+    max_orders: int
+    brackets: tuple[Bracket, ...]
+    slippage: float
     note: str = ""
 
 

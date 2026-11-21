@@ -1,16 +1,17 @@
 """
 file: core.py
-importable: assemble
+importable: assemble, load_catalog
 
-Çekirdek servisinin giriş noktası. OPUS_STATE klasöründeki core.db'yi açar,
-eksik taşımaları uygular, profilleri kurar ve canlı akışla birlikte kontrol
+Çekirdek servisinin giriş noktası. Parite kurallarını Binance'ten okur,
+OPUS_STATE klasöründeki core.db'yi açar, eksik taşımaları uygular, profilleri kurar ve canlı akışla birlikte kontrol
 API'sini OPUS_CORE_SOCKET soketinde çalıştırır. SIGTERM ya da Ctrl+C gelince
 süren kararların bitmesini bekleyip kapanır.
 
     python -m opus_trade.app.core
 
 assemble() parçaları birbirine bağlar ve testlerin de kullandığı Core'u
-döndürür.
+döndürür. load_catalog() kuralları Binance'ten okur, ulaşamazsa son kopyayı
+kullanır.
 
 description: Çekirdeğin kuruluş noktası.
 """
@@ -23,6 +24,7 @@ description: Çekirdeğin kuruluş noktası.
 # Python yorumlayıcısıyla, proje kökü PYTHONPATH'te olacak şekilde başlar.
 
 import asyncio
+import json
 import logging
 import signal
 import sys
@@ -38,9 +40,11 @@ from ..domain.catalog import Catalog
 from ..domain.clock import Clock, SystemClock
 from ..domain.fees import BINANCE_STANDARD
 from ..domain.profile import Profile
+from ..domain.catalog import SYMBOLS
 from ..market.binance.rest import BASE_URL, BinanceRest
+from ..market.binance.specs import load_brackets, specs_from
 from ..market.binance.stream import BinanceStream
-from ..market.source import MarketData
+from ..market.source import MarketData, MarketDataError
 from ..market.stream import MarketStream
 from ..runtime.bus import EventBus
 from ..runtime.interventions import Interventions
@@ -64,7 +68,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 log = logging.getLogger("opus_trade.core")
 
 
-def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStream, llm: LLMClient | None) -> Core:
+def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStream, llm: LLMClient | None,
+             catalog: Catalog) -> Core:
     """Çekirdeğin parçalarını kurar ve birbirine bağlar."""
     plugins.load()
     con = connect(cfg.core_db)
@@ -72,7 +77,7 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
     if applied:
         log.info("Taşımalar uygulandı: %s", ", ".join(applied))
     ledger, journal, state, repo = Ledger(con), JournalRepo(con), StateRepo(con), ProfileRepo(con)
-    catalog, bus = Catalog(), EventBus()
+    bus = EventBus()
     access = ModelAccess(state, clock)
 
     def deps(p: Profile) -> Deps:
@@ -91,6 +96,28 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
                 CollectorWatch(cfg.market_db, bus))
 
 
+# Binance'e ulaşılamazsa çekirdek son okunan kopyayla açılır, ikisi de yoksa
+# açılmaz. Kopya yalnızca masanın paritelerini tutar, cevabın tamamı birkaç
+# megabayttır.
+async def load_catalog(rest: BinanceRest, saved: Path) -> Catalog:
+    """Masanın paritelerinin kurallarını kurar.
+
+    Raises:
+        MarketDataError: Binance'e ulaşılamazsa ve kayıtlı kopya yoksa.
+        ValueError: Bir parite Binance'te işleme kapalıysa ya da kademesi bilinmiyorsa.
+    """
+    try:
+        info = await rest.exchange_info()
+        info = {"symbols": [s for s in info["symbols"] if s["symbol"] in SYMBOLS]}
+        saved.write_text(json.dumps(info))
+    except MarketDataError:
+        if not saved.exists():
+            raise
+        log.warning("Binance'ten parite kuralları okunamadı, son kopyayla açılıyor.")
+        info = json.loads(saved.read_text())
+    return Catalog(specs_from(info, load_brackets()))
+
+
 async def _watch_collector(watch: CollectorWatch, clock: Clock) -> None:
     while True:
         try:
@@ -106,8 +133,9 @@ async def _main(cfg: AppConfig) -> None:
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=20) as client:
-        core = assemble(cfg, SystemClock(), BinanceRest(client), BinanceStream(),
-                        ClaudeCliClient(Path(sys.executable), _ROOT))
+        rest = BinanceRest(client)
+        core = assemble(cfg, SystemClock(), rest, BinanceStream(), ClaudeCliClient(Path(sys.executable), _ROOT),
+                        await load_catalog(rest, cfg.exchange_info))
         # Arka plan görevleri kapanışta iptal edilir, sunucu ise should_exit ile
         # süren isteklerini bitirip kendisi kapanır.
         background = [asyncio.create_task(core.supervisor.run()), asyncio.create_task(core.notifier.run()),

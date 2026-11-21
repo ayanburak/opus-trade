@@ -24,7 +24,7 @@ from opus_trade.config import AppConfig
 from opus_trade.market.models import Candle
 from opus_trade.market.stream import MarketStream
 from opus_trade.strategy.base import STRATEGIES, Decision, Strategy
-from tests.fakes import FakeClock, FakeMarket
+from tests.fakes import FakeClock, FakeMarket, catalog
 
 T = 1_795_000_020
 SOL = "SOLUSDT"
@@ -61,7 +61,7 @@ class NullStream(MarketStream):
 class Api:
     def __init__(self, path):
         self.clock = FakeClock(T)
-        self.core = assemble(AppConfig(path), self.clock, FakeMarket(), NullStream(), None)
+        self.core = assemble(AppConfig(path), self.clock, FakeMarket(), NullStream(), None, catalog())
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(create_app(self.core)), base_url="http://core")
         Echo.seen, Echo.script = [], []
 

@@ -1,6 +1,6 @@
 """
 file: fakes.py
-importable: FakeClock, FakeMarket
+importable: FakeClock, FakeMarket, catalog
 
 Testlerin ortak sahte parçaları. FakeClock elle ilerletilen bir saattir.
 FakeMarket MarketData'nın ağa çıkmayan bir uygulamasıdır, beş dakikalık
@@ -8,16 +8,31 @@ istatistikleri istenen aralık için üretir ve her isteği calls listesine
 yazar. Bir sembolü fail kümesine eklemek o sembolün isteklerini
 MarketDataError ile düşürür. oldest verilirse ondan eski bir başlangıç da
 Binance'teki gibi MarketDataError alır. minutes paritelerin dakikalık
-mumlarıdır, candles() aralıktakileri döndürür.
+mumlarıdır, candles() aralıktakileri döndürür. catalog() masanın paritelerini
+tests/fixtures'daki exchangeInfo kopyasından ve paketin kademe tablosundan kurar,
+testler Binance'e çıkmaz.
 
 description: Testlerde kullanılan sahte saat ve sahte piyasa verisi.
 """
 
+import json
 from datetime import datetime, timezone
+from functools import cache
+from pathlib import Path
 
+from opus_trade.domain.catalog import Catalog
 from opus_trade.domain.clock import Clock
+from opus_trade.market.binance.specs import load_brackets, specs_from
 from opus_trade.market.models import Candle, LongShortRatio, OpenInterest, Premium, TakerVolume
 from opus_trade.market.source import MarketData, MarketDataError
+
+
+# exchangeInfo kopyası 21.11.2026'da alındı. Testlerin rakamları bu kopyanın
+# adımlarıyla elle hesaplandı, kopya yenilenirse rakamlar da yeniden hesaplanır.
+@cache
+def catalog() -> Catalog:
+    info = json.loads((Path(__file__).parent / "fixtures" / "exchange_info.json").read_text())
+    return Catalog(specs_from(info, load_brackets()))
 
 
 class FakeClock(Clock):

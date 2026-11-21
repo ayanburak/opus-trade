@@ -1,7 +1,8 @@
 """
 file: rules.py
-importable: TOLERANCE, slipped, round_qty, min_notional, liq_price, unrealized_pnl, funding_payment,
-            order_is_maker, check_leverage, check_sl, check_trail, trail_level, trailed_sl,
+importable: TOLERANCE, slipped, round_qty, to_tick, min_notional, bracket, liq_price, unrealized_pnl,
+            funding_payment, order_is_maker, check_leverage, check_ticks, check_sl, check_trail, trail_level,
+            trailed_sl,
             check_tp_levels, split_tp, tp_shares, size, close_fill
 
 Binance USDⓈ-M vadelinin izole marjinli hesap kuralları, saf fonksiyonlar
@@ -10,7 +11,7 @@ bu kurallarla hesabı simüle eder, canlı broker ise emri Binance'e göndermede
 önce aynı kurallarla kontrol eder. Kurala aykırı bir girdi RuleError
 fırlatır.
 
-description: Kaldıraç, büyüklük, kayma, likidasyon, TP kademesi ve iz süren stop kuralları.
+description: Kaldıraç, fiyat adımı, büyüklük, kayma, likidasyon, TP kademesi ve iz süren stop kuralları.
 """
 
 # NOTE: Kayma aleyhe işler. Alışta fiyat yükselir, satışta düşer. Long giriş ve
@@ -25,7 +26,7 @@ import math
 
 from . import numbers
 from .errors import RuleError
-from .models import Side, SymbolSpec, TpLevel, Sizing
+from .models import Bracket, Side, SymbolSpec, TpLevel, Sizing
 
 TOLERANCE = 1e-9
 
@@ -35,8 +36,9 @@ TOLERANCE = 1e-9
 # kalır. Bunu reddetmek anlamsız olurdu.
 _CASH_SLACK = 0.02
 
-# İz süren stop en iyi fiyattan en fazla bu kadar yüzde uzakta olabilir.
-_MAX_TRAIL_PCT = 50
+# İz süren stopun en iyi fiyattan uzaklığı Binance'teki gibi bu aralıktadır,
+# yüzde.
+_MIN_TRAIL_PCT, _MAX_TRAIL_PCT = 0.1, 10
 
 
 # --- Fiyat ve miktar ---
@@ -53,6 +55,13 @@ def round_qty(spec: SymbolSpec, qty: float) -> float:
     return round(math.floor(qty / spec.qty_step + 1e-6) * spec.qty_step, 10)
 
 
+# Fiyat adımın katına en yakın yönde yuvarlanır. Kurallar yuvarlamaz, adıma
+# uymayan fiyatı reddeder. Bunu kapı kullanır, gelen fiyatı broker'a
+# göndermeden önce adıma oturtur.
+def to_tick(spec: SymbolSpec, price: float) -> float:
+    return round(round(price / spec.tick) * spec.tick, 10)
+
+
 # En küçük büyüklük, Binance'in dolar sınırı ile tek bir miktar adımının
 # değerinden büyük olanıdır. BTC'de 0.001 BTC çoğu zaman elli dolardan fazla
 # ettiği için belirleyici olan adımdır.
@@ -61,14 +70,25 @@ def min_notional(spec: SymbolSpec, price: float) -> float:
     return max(math.ceil(spec.min_notional / price / step - 1e-9) * step, step) * price
 
 
+# Büyüklüğü kapsayan ilk kademe. Tablonun dışına taşan büyüklük son kademede
+# sayılır, kaldıraç kontrolü onu ayrıca reddeder.
+def bracket(spec: SymbolSpec, notional: float) -> Bracket:
+    return next((b for b in spec.brackets if notional <= b.cap), spec.brackets[-1])
+
+
 # Likidasyon, marjin ile açık zararın toplamının bakım marjına düştüğü
-# fiyattır. Formül marjin üzerinden kurulduğu için ekleme, kısmi kapanış ve
-# fonlamayla marjin değiştiğinde de aynı formül doğru sonucu verir.
+# fiyattır. Bakım marjı Binance'teki gibi kademelidir: büyüklük × oran − sabit.
+# Formül marjin üzerinden kurulduğu için ekleme, kısmi kapanış ve fonlamayla
+# marjin değiştiğinde de aynı formül doğru sonucu verir.
+#
+# Kademe giriş büyüklüğünden seçilir. Binance likidasyon anındaki büyüklüğe
+# bakar ve fark yalnızca kademe sınırına çok yakın bir pozisyonda görülür. Bu
+# hesabın büyüklükleri hep ilk kademede kalır.
 def liq_price(spec: SymbolSpec, side: Side, entry: float, qty: float, margin: float) -> float:
-    mm = spec.maint_margin
+    b = bracket(spec, entry * qty)
     if side is Side.LONG:
-        return max(0.0, (entry * qty - margin) / (qty * (1 - mm)))
-    return (entry * qty + margin) / (qty * (1 + mm))
+        return max(0.0, (entry * qty - margin - b.mm_amount) / (qty * (1 - b.mm_rate)))
+    return (entry * qty + margin + b.mm_amount) / (qty * (1 + b.mm_rate))
 
 
 def unrealized_pnl(side: Side, entry: float, qty: float, price: float) -> float:
@@ -91,9 +111,26 @@ def order_is_maker(side: Side, trigger: float, price: float) -> bool:
 
 # --- Doğrulama ---
 
-def check_leverage(spec: SymbolSpec, leverage: float) -> None:
-    if not 1 <= leverage <= spec.max_leverage:
-        raise RuleError(f"{spec.symbol} için kaldıraç 1 ile {spec.max_leverage} arasında olmalı, {numbers.num(leverage)} verildi.")
+# Binance'te kaldıraç tam sayıdır. Kaldıraç büyüdükçe izin verilen en büyük
+# pozisyon küçülür: verilen kaldıracı taşıyan kademelerin en büyüğü sınırdır.
+def check_leverage(spec: SymbolSpec, leverage: float, notional: float) -> None:
+    top = spec.brackets[0].max_leverage
+    if leverage != int(leverage) or not 1 <= leverage <= top:
+        raise RuleError(f"{spec.symbol} için kaldıraç 1 ile {top} arasında bir tam sayı olmalı, "
+                        f"{numbers.num(leverage)} verildi.")
+    cap = max(b.cap for b in spec.brackets if b.max_leverage >= leverage)
+    if notional > cap + TOLERANCE:
+        raise RuleError(f"{spec.symbol} için {numbers.num(leverage)}x kaldıraçla pozisyon en fazla {numbers.num(cap)} "
+                        f"dolar olabilir, bu işlemle {numbers.num(notional, 2)} dolar oluyor.")
+
+
+# Fiyat, tetik, TP ve SL Binance'te fiyat adımının katı olmalıdır. Sıfır SL
+# korumayı kaldırmak demektir, kontrol edilmez.
+def check_ticks(spec: SymbolSpec, *prices: float | None) -> None:
+    for x in prices:
+        if x and abs(x / spec.tick - round(x / spec.tick)) > 1e-6:
+            raise RuleError(f"{spec.symbol} fiyatı {numbers.num(x)}, fiyat adımı {numbers.num(spec.tick)} "
+                            f"değerinin katı olmalı.")
 
 
 # ref bir pozisyonda güncel fiyat ya da giriş fiyatı, bir emirde tetik
@@ -108,8 +145,9 @@ def check_sl(side: Side, ref: float, sl: float | None) -> None:
 
 
 def check_trail(pct: float | None) -> None:
-    if pct is not None and not 0 < pct <= _MAX_TRAIL_PCT:
-        raise RuleError(f"İz süren stop mesafesi sıfırdan büyük ve en fazla yüzde {_MAX_TRAIL_PCT} olmalı.")
+    if pct is not None and not _MIN_TRAIL_PCT <= pct <= _MAX_TRAIL_PCT:
+        raise RuleError(f"İz süren stop mesafesi yüzde {numbers.num(_MIN_TRAIL_PCT)} ile "
+                        f"{numbers.num(_MAX_TRAIL_PCT)} arasında olmalı, {numbers.num(pct)} verildi.")
 
 
 # --- İz süren stop ---
@@ -200,7 +238,8 @@ def split_tp(spec: SymbolSpec, levels: list[TpLevel], qty: float) -> list[TpLeve
             continue
         q = round_qty(spec, qty * k.pct / 100)
         if q == 0:
-            raise RuleError(f"TP kademesi {numbers.num(k.price)} için yüzde {numbers.num(k.pct)}, en küçük miktar adımının altında kalıyor. "
+            raise RuleError(f"TP kademesi {numbers.num(k.price)} için yüzde {numbers.num(k.pct)}, en küçük miktar "
+                            f"adımının altında kalıyor. "
                             f"Kademeyi büyüt ya da kademe sayısını azalt.")
         out.append(TpLevel(k.price, k.pct, q))
     return out
@@ -246,6 +285,9 @@ def tp_shares(levels: tuple[TpLevel, ...], qty: float) -> tuple[TpLevel, ...]:
 # yuvarlanmış miktardan yeniden hesaplanır, bu yüzden verilen marjinden biraz
 # az olabilir. Nakit yetmiyorsa ama fark _CASH_SLACK'ten küçükse miktar nakde
 # sığacak kadar küçültülür.
+#
+# TODO: Miktar sınırı Binance'in piyasa emri sınırıdır. Limit emrin sınırı daha
+# geniştir, emir türleri ayrılınca ikisi ayrı kontrol edilmeli.
 def size(spec: SymbolSpec, leverage: float, margin: float, entry: float, fee_rate: float, cash: float) -> Sizing:
     """Bir girişin miktarını, gerçek marjinini ve komisyonunu hesaplar.
 
@@ -261,7 +303,8 @@ def size(spec: SymbolSpec, leverage: float, margin: float, entry: float, fee_rat
         Yuvarlanmış miktar, ona düşen marjin ve giriş komisyonu.
 
     Raises:
-        RuleError: Marjin sıfır ya da negatifse, nakit yetmiyorsa ya da büyüklük en küçük sınırın altındaysa.
+        RuleError: Marjin sıfır ya da negatifse, nakit yetmiyorsa, miktar tek emrin sınırını aşıyorsa ya da
+            büyüklük en küçük sınırın altındaysa.
     """
     if margin <= 0:
         raise RuleError("Marjin sıfırdan büyük olmalı.")
@@ -270,9 +313,12 @@ def size(spec: SymbolSpec, leverage: float, margin: float, entry: float, fee_rat
     if needed(qty) > cash + TOLERANCE:
         most = round_qty(spec, cash / (entry / leverage + entry * fee_rate))
         if needed(qty) > cash * (1 + _CASH_SLACK) or most <= 0:
-            raise RuleError(f"Yetersiz nakit. Nakit {numbers.num(cash, 2)} dolar, bu işlem için {numbers.num(needed(qty), 2)} dolar "
-                            f"gerekiyor.")
+            raise RuleError(f"Yetersiz nakit. Nakit {numbers.num(cash, 2)} dolar, bu işlem için "
+                            f"{numbers.num(needed(qty), 2)} dolar gerekiyor.")
         qty = most
+    if qty > spec.max_market_qty:
+        raise RuleError(f"{spec.symbol} için tek emrin miktarı en fazla "
+                        f"{numbers.qty(spec.max_market_qty, spec.symbol)} olabilir.")
     smallest = min_notional(spec, entry)
     if qty * entry < smallest - TOLERANCE:
         got = (f"miktar sıfıra yuvarlanıyor, en küçük miktar {numbers.qty(spec.qty_step, spec.symbol)}" if qty == 0

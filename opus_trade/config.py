@@ -42,6 +42,11 @@ class AppConfig:
     def core_db(self) -> Path:
         return self.state_dir / "core.db"
 
+    # Binance'in parite kurallarının son okunan kopyası.
+    @property
+    def exchange_info(self) -> Path:
+        return self.state_dir / "exchange_info.json"
+
     # Her LLM profilinin claude komutu kendi klasöründe çalışır.
     def work_dir(self, profile_id: int) -> Path:
         return self.state_dir / "work" / str(profile_id)

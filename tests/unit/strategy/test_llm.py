@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from opus_trade.domain.catalog import Catalog
 from opus_trade.domain.fees import FeeSchedule
 from opus_trade.domain.models import Side
 from opus_trade.domain.trading import (AccountEvent, AccountState, Actor, ClosePosition, EventKind, Ref,
@@ -27,6 +26,7 @@ from opus_trade.strategy.llm import actions, prompt
 from opus_trade.strategy.llm import strategy as llm_strategy
 from opus_trade.strategy.llm.client import ClaudeCliClient, LLMError, LLMRequest, LLMResult
 from opus_trade.triggers.price_alert import Alert
+from tests.fakes import catalog
 
 NOW = 1_795_000_000
 SOL = "SOLUSDT"
@@ -66,11 +66,12 @@ def test_schema_requires_symbol_and_side_on_every_numbered_action():
 
 def test_system_prompt_has_no_forbidden_words_and_uses_real_fees():
     """Talimatta deney, sanal para ya da dönem geçmez. Komisyon oranı hesabın kendi oranından gelir."""
-    text = prompt.system_prompt(10, [Catalog().get(SOL)], FeeSchedule(taker=0.0004, maker=0.0001), "", 15, 180, 25)
+    text = prompt.system_prompt(10, [catalog().get(SOL)], FeeSchedule(taker=0.0004, maker=0.0001), "", 15, 180, 25)
     lower = text.lower()
     for word in ("deney", "sanal", "dönem", "gerçek para"):
         assert word not in lower
     assert "yüzde 0.04 öder" in text and "yüzde 0.01 öder" in text
+    assert "SOLUSDT | SOL | 100x | 5 dolar | 0.01 | 0.01 | yüzde 0.02" in text
 
 
 def _ctx(**kw) -> Context:
@@ -127,7 +128,7 @@ def test_decide_turns_actions_into_commands_alarms_and_errors(monkeypatch, tmp_p
                              {"tip": "long_ac", "sembol": SOL, "kaldirac": 5, "marjin_usd": 10, "tp": 110,
                               "tp_kademeleri": [{"fiyat": 120, "yuzde": 100}]}]}
     fake = FakeLLM(decision)
-    s = llm_strategy.LLMStrategy(fake, Catalog(), tmp_path, {}, tmp_path / "m.db", "", "opus", "high", 15, 180, 25, 600)
+    s = llm_strategy.LLMStrategy(fake, catalog(), tmp_path, {}, tmp_path / "m.db", "", "opus", "high", 15, 180, 25, 600)
     d = asyncio.run(s.decide(_ctx()))
     assert d.commands == [UpdateProtection(Ref(1, SOL, Side.LONG), None, 95, None)]
     assert d.alarms[0]["op"] == "add" and d.alarms[0]["price"] == 90

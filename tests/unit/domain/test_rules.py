@@ -9,15 +9,17 @@ kuraldan elle hesaplanmıştır.
 description: domain.rules için birim testleri.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from opus_trade.domain import rules
-from opus_trade.domain.catalog import Catalog
 from opus_trade.domain.errors import RuleError
 from opus_trade.domain.fees import BINANCE_STANDARD
-from opus_trade.domain.models import Side, TpLevel
+from opus_trade.domain.models import Bracket, Side, TpLevel
+from tests.fakes import catalog
 
-CATALOG = Catalog()
+CATALOG = catalog()
 BTC, SOL, XRP = CATALOG.get("BTCUSDT"), CATALOG.get("SOLUSDT"), CATALOG.get("XRPUSDT")
 TAKER = BINANCE_STANDARD.taker
 
@@ -67,8 +69,16 @@ def test_size_rejects_below_min_notional_and_says_needed_margin():
 
 def test_liq_price_sits_maint_margin_before_margin_is_gone():
     """Likidasyon marjinin tamamen bittiği fiyattan bakım marjı kadar önce gelir, iki yönde de."""
-    assert rules.liq_price(SOL, Side.LONG, entry=100, qty=1, margin=10) == pytest.approx(90 / 0.99)
-    assert rules.liq_price(SOL, Side.SHORT, entry=100, qty=1, margin=10) == pytest.approx(110 / 1.01)
+    assert rules.liq_price(SOL, Side.LONG, entry=100, qty=1, margin=10) == pytest.approx(90 / 0.995)
+    assert rules.liq_price(SOL, Side.SHORT, entry=100, qty=1, margin=10) == pytest.approx(110 / 1.005)
+
+
+def test_liq_price_uses_the_bracket_of_the_position_size():
+    """Büyük pozisyonun bakım marjı üst kademeden gelir, sabitiyle birlikte. İlk kademenin oranı kullanılsaydı
+    likidasyon gerçekte olduğundan uzakta görünürdü."""
+    spec = replace(SOL, brackets=(Bracket(1000, 100, 0.005, 0), Bracket(10000, 50, 0.01, 5)))
+    assert rules.liq_price(spec, Side.LONG, entry=100, qty=20, margin=200) == pytest.approx((2000 - 200 - 5) / (20 * 0.99))
+    assert rules.liq_price(spec, Side.SHORT, entry=100, qty=20, margin=200) == pytest.approx((2000 + 200 + 5) / (20 * 1.01))
 
 
 def test_funding_sign_follows_side():
@@ -169,3 +179,45 @@ def test_size_says_qty_rounds_to_zero_instead_of_zero_dollars():
     with pytest.raises(RuleError, match="miktar sıfıra yuvarlanıyor, en küçük miktar 0,01 SOL") as e:
         rules.size(SOL, 1, 0.5, 100, TAKER, 100)
     assert "0,00 dolar" not in str(e.value)
+
+
+# --- Binance sınırları ---
+
+def test_leverage_is_a_whole_number_within_the_first_bracket():
+    """Binance kaldıracı tam sayı kabul eder, en yükseği ilk kademenin kaldıracıdır."""
+    rules.check_leverage(SOL, 100, 1000)
+    for bad in (0, 2.5, 101):
+        with pytest.raises(RuleError, match="1 ile 100 arasında bir tam sayı"):
+            rules.check_leverage(SOL, bad, 1000)
+
+
+def test_high_leverage_caps_the_position_size():
+    """Kaldıraç büyüdükçe izin verilen pozisyon küçülür. Sınır aşılırsa Binance emri reddeder."""
+    spec = replace(SOL, brackets=(Bracket(1000, 100, 0.005, 0), Bracket(10000, 50, 0.01, 5)))
+    rules.check_leverage(spec, 50, 10000)
+    with pytest.raises(RuleError, match="100x kaldıraçla pozisyon en fazla 1000 dolar"):
+        rules.check_leverage(spec, 100, 1500)
+
+
+def test_prices_must_sit_on_the_tick():
+    """Adıma uymayan fiyatı Binance reddeder, kâğıt hesap da aynısını yapmalı. Sıfır SL korumayı kaldırır, geçer."""
+    rules.check_ticks(SOL, 100.01, None, 0)
+    with pytest.raises(RuleError, match="fiyat adımı 0,01 değerinin katı"):
+        rules.check_ticks(SOL, 100.005)
+    assert rules.to_tick(SOL, 100.006) == 100.01 and rules.to_tick(BTC, 62420.04) == 62420.0
+
+
+def test_trail_stays_in_binance_range():
+    """Binance izi yüzde 0,1 ile 10 arasında kabul eder."""
+    rules.check_trail(0.1)
+    rules.check_trail(10)
+    for bad in (0.05, 10.5):
+        with pytest.raises(RuleError, match="yüzde 0,1 ile 10 arasında"):
+            rules.check_trail(bad)
+
+
+def test_size_respects_the_market_order_limit():
+    """Tek piyasa emri Binance'in miktar sınırını aşamaz."""
+    spec = replace(SOL, max_market_qty=5)
+    with pytest.raises(RuleError, match="en fazla 5 SOL"):
+        rules.size(spec, 10, 100, 100, TAKER, 1000)

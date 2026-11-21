@@ -1,10 +1,12 @@
 """
 file: catalog.py
-importable: Catalog, DEFAULT_SPECS
+importable: Catalog, SYMBOLS, SLIPPAGE
 
 Catalog işlem yapılabilen paritelerin kurallarını sembolle bulur. get()
 katalogda olmayan bir sembolde RuleError fırlatır, mesajı işlem yapılabilen
-paritelerin listesini verir. DEFAULT_SPECS bugünkü parite listesidir.
+paritelerin listesini verir. SYMBOLS masanın paritelerini ve kısa Türkçe
+adlarını, SLIPPAGE bütün paritelerin ortak kaymasını tutar. Kuralların
+kendisi burada yazılı değildir, çekirdek açılırken Binance'ten okur.
 
 description: İşlem yapılabilen paritelerin kural kataloğu.
 """
@@ -14,27 +16,24 @@ description: İşlem yapılabilen paritelerin kural kataloğu.
 # Paritelere farklı kayma vermek BTC'ye gerçekte olmayan bir maliyet avantajı
 # sağlıyordu.
 #
-# TODO: Canlı broker için en küçük büyüklük ve miktar adımı Binance'in
-# exchangeInfo ucundan okunmalı. Binance bu değerleri zaman zaman değiştiriyor,
-# elle yazılmış bir liste canlıda emrin reddedilmesine yol açar.
+# NOTE: Fiyat adımı, miktar adımı ve diğer sınırlar elle yazılmaz. Binance
+# bunları zaman zaman değiştirir, elle yazılmış bir liste canlının reddedeceği
+# emri kâğıt hesapta kabul ederdi. Burak'ın 21.11 kararı.
 
 from .errors import RuleError
 from .models import SymbolSpec
 
-DEFAULT_SPECS = (
-    SymbolSpec("BTCUSDT", "BTC/USDT", 100, 0.004, 0.0002, 50, 0.001),
-    SymbolSpec("ETHUSDT", "ETH/USDT", 100, 0.004, 0.0002, 20, 0.001),
-    SymbolSpec("SOLUSDT", "SOL/USDT", 50, 0.01, 0.0002, 5, 0.01),
-    SymbolSpec("XRPUSDT", "XRP/USDT", 50, 0.01, 0.0002, 5, 0.1),
-    SymbolSpec("XAUUSDT", "XAU/USDT", 50, 0.01, 0.0002, 5, 0.001, note="altın"),
-    SymbolSpec("ZECUSDT", "ZEC/USDT", 50, 0.01, 0.0002, 5, 0.001),
-)
+# Masanın pariteleri, Binance'teki sembol ve paritenin ne olduğunu anlatan
+# kısa ad. Ad boşsa arayüz sembolün başını kullanır.
+SYMBOLS = {"BTCUSDT": "", "ETHUSDT": "", "SOLUSDT": "", "XRPUSDT": "", "XAUUSDT": "altın", "ZECUSDT": ""}
+
+SLIPPAGE = 0.0002
 
 
 class Catalog:
     """Sembolden parite kuralına erişim. Sıra verilen sıradır."""
 
-    def __init__(self, specs: tuple[SymbolSpec, ...] = DEFAULT_SPECS) -> None:
+    def __init__(self, specs: tuple[SymbolSpec, ...]) -> None:
         self._specs = {s.symbol: s for s in specs}
 
     def get(self, symbol: str) -> SymbolSpec:

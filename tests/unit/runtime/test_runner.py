@@ -16,7 +16,6 @@ from datetime import datetime
 import pytest
 
 from opus_trade import plugins
-from opus_trade.domain.catalog import Catalog
 from opus_trade.domain.clock import HOME_TZ
 from opus_trade.domain.fees import BINANCE_STANDARD
 from opus_trade.domain.models import Side, TpLevel
@@ -38,7 +37,7 @@ from opus_trade.storage.migrate import migrate
 from opus_trade.storage.profiles import ProfileRepo
 from opus_trade.storage.runtime_state import StateRepo
 from opus_trade.strategy.base import STRATEGIES, ActionResult, Decision, Deps, Strategy
-from tests.fakes import FakeClock, FakeMarket
+from tests.fakes import FakeClock, FakeMarket, catalog
 
 T = 1_795_000_020
 SOL = "SOLUSDT"
@@ -92,9 +91,9 @@ class World:
         self.market = FakeMarket()
         self.access = ModelAccess(self.state, self.clock)
         self.sup = Supervisor(self.repo, self.ledger, self.journal, self.state, self.market, NullStream(), self.clock,
-                              EventBus(), self.access, Catalog(), BINANCE_STANDARD,
-                              lambda p: Deps(self.clock, Catalog()))
-        self.service = ProfileService(self.repo, self.ledger, self.journal, Catalog(), self.clock, self.sup.refresh)
+                              EventBus(), self.access, catalog(), BINANCE_STANDARD,
+                              lambda p: Deps(self.clock, catalog()))
+        self.service = ProfileService(self.repo, self.ledger, self.journal, catalog(), self.clock, self.sup.refresh)
         Scripted.script, Scripted.seen, Scripted.fail, Scripted.hold = [], [], [], None
 
     def config(self, **params) -> ProfileConfig:

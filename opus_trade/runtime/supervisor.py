@@ -124,7 +124,7 @@ class Supervisor(StreamListener):
             limits.append(MaxNotional(cfg.risk["max_notional"]))
         guard = RiskGuard(self.ledger, self.clock, limits, cfg.risk.get("daily_loss"))
         iv = self.interventions
-        gate = Gate(broker, self.bus, guard, iv.restriction_source(p.id) if iv else None)
+        gate = Gate(broker, self.bus, self.catalog, guard, iv.restriction_source(p.id) if iv else None)
         triggers = []
         for t in cfg.triggers:
             spec = dict(t)

@@ -13,6 +13,7 @@ description: broker.paper için birim testleri.
 """
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -26,7 +27,7 @@ from opus_trade.domain.trading import (Actor, AddToPosition, CloseAll, ClosePosi
 from opus_trade.storage.database import connect
 from opus_trade.storage.ledger import MIGRATIONS, Ledger
 from opus_trade.storage.migrate import migrate
-from tests.fakes import FakeClock
+from tests.fakes import FakeClock, catalog
 
 T = 1_795_000_000
 SOL = "SOLUSDT"
@@ -38,7 +39,7 @@ def broker(tmp_path) -> PaperBroker:
     con = connect(tmp_path / "core.db")
     migrate(con, MIGRATIONS, tmp_path / "bak")
     ledger = Ledger(con)
-    b = PaperBroker(ledger, ledger.create_account("paper", 100.0, T), Catalog(), FEES, FakeClock(T))
+    b = PaperBroker(ledger, ledger.create_account("paper", 100.0, T), catalog(), FEES, FakeClock(T))
     b.on_price(SOL, 100, 100, 100, T)
     return b
 
@@ -160,6 +161,14 @@ def test_taker_order_fills_with_slippage_even_when_price_comes_to_it(broker):
     p = broker.state().positions[0]
     assert p.entry_price == pytest.approx(95 * 1.0002)
     assert p.fee == pytest.approx(p.qty * p.entry_price * FEES.taker)
+
+
+def test_symbol_order_limit_is_enforced(broker):
+    """Binance bir paritede açık emir sayısını sınırlar. Sınırı aşan emir kâğıtta da reddedilmeli."""
+    broker.catalog = Catalog((replace(broker.catalog.get(SOL), max_orders=1),))
+    run(broker, PlaceOrder(SOL, LONG, trigger=95, leverage=10, margin=10))
+    with pytest.raises(RuleError, match="en fazla 1 bekleyen emir"):
+        run(broker, PlaceOrder(SOL, LONG, trigger=94, leverage=10, margin=10))
 
 
 def test_order_that_cannot_open_at_trigger_fails_and_leaves_the_book(broker):

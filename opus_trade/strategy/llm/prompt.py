@@ -40,16 +40,17 @@ from . import actions
 from .hours import hours_text
 from .texts import TZ_LABEL, clock, date_text, event_text, fire_text, levels_text, price
 
-TEMPLATE_VERSION = 2
+TEMPLATE_VERSION = 3
 
 VIEWS = ["yukselis", "dusus", "yatay", "belirsiz"]
 
 
 def _symbol_table(specs: list[SymbolSpec]) -> str:
-    lines = ["sembol | açıklama | en fazla kaldıraç | en küçük işlem büyüklüğü | miktar adımı | tahmini kayma"]
+    lines = ["sembol | açıklama | en fazla kaldıraç | en küçük işlem büyüklüğü | miktar adımı | fiyat adımı | "
+             "tahmini kayma"]
     for s in specs:
-        lines.append(f"{s.symbol} | {s.note or s.name.split('/')[0]} | {s.max_leverage}x | {s.min_notional:g} dolar | "
-                     f"{s.qty_step:g} | yüzde {s.slippage * 100:.2f}")
+        lines.append(f"{s.symbol} | {s.note or s.name.split('/')[0]} | {s.brackets[0].max_leverage}x | "
+                     f"{s.min_notional:g} dolar | {s.qty_step:g} | {s.tick:g} | yüzde {s.slippage * 100:.2f}")
     return "\n".join(lines)
 
 
@@ -106,7 +107,8 @@ yazarsın. Numara artık o sembol ve yöndeki kaydı göstermiyorsa eylem redded
 - Her pozisyonun marjini izoledir. Likidasyonda yalnızca o pozisyonun marjini kaybedilir. Her pozisyonun \
 likidasyon fiyatı sana bildirilir.
 - Miktar, marjin çarpı kaldıracın fiyata bölümüdür ve paritenin miktar adımına aşağı yuvarlanır. Büyüklük, \
-en küçük işlem büyüklüğünden ve bir miktar adımının değerinden az olamaz.
+en küçük işlem büyüklüğünden ve bir miktar adımının değerinden az olamaz. Verdiğin fiyatlar, yani tetik, TP ve \
+SL, paritenin fiyat adımına en yakın yönde yuvarlanır. Kaldıraç tam sayıdır.
 - Açık bir pozisyona ekleme yapabilir ya da bir kısmını kapatabilirsin. Eklemede giriş fiyatı ağırlıklı \
 ortalamayla yeniden hesaplanır.
 - Komisyon işlem büyüklüğü üzerinden kesilir. Fiyatın gelmesini bekleyen girişler, yani long için güncel \
@@ -123,7 +125,7 @@ Küçük bir pozisyonda kademe sayısını azaltırsın ya da tek TP kullanırs�
 miktarı kurulurken sabitlenir. Pozisyon kısmen kapanınca, ekleme yapılınca ya da bir kademe dolunca hesap \
 bölümündeki yüzdeler kademenin kalan pozisyondaki güncel payını gösterir.
 - İz süren stop: Pozisyonun açıldığından beri gördüğü en iyi fiyattan verdiğin yüzde kadar geride durur ve fiyat \
-lehine gittikçe SL'yi kendiliğinden taşır. Sonradan eklersen de bu en iyi fiyattan hesaplanır, her pozisyonun \
+lehine gittikçe SL'yi kendiliğinden taşır. Yüzde 0.1 ile 10 arasında olur. Sonradan eklersen de bu en iyi fiyattan hesaplanır, her pozisyonun \
 gördüğü en iyi fiyat sana bildirilir. Hesaplanan seviye fiyatın gerisinde kalacaksa, yani stop hemen \
 tetiklenecekse, istek reddedilir. SL ile birlikte kullanılabilir, hangisi fiyata daha yakınsa o geçerlidir.
 - TP, SL, iz süren stop ve likidasyon fiyat oraya değdiği an uygulanır, senin çağrılmanı beklemez. Bir mum içinde \

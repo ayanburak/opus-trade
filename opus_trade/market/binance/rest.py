@@ -141,6 +141,9 @@ class BinanceRest(MarketData):
                                     symbol=symbol, interval=interval)
         return [_candle(symbol, k) for k in raw]
 
+    async def exchange_info(self) -> dict:
+        return await self._get("/fapi/v1/exchangeInfo")
+
     async def daily_stats(self, symbol: str) -> DailyStats:
         d = await self._get("/fapi/v1/ticker/24hr", symbol=symbol)
         return DailyStats(symbol=symbol, change_pct=float(d["priceChangePercent"]), high=float(d["highPrice"]),

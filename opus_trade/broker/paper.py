@@ -182,7 +182,8 @@ class PaperBroker(Broker, PriceDriven):
     def _plan(self, symbol: str, side: Side, leverage: float, margin: float, price: float, maker: bool,
               tp_levels, sl, trail_pct):
         spec = self.catalog.get(symbol)
-        rules.check_leverage(spec, leverage)
+        rules.check_leverage(spec, leverage, margin * leverage)
+        rules.check_ticks(spec, sl, *(k.price for k in tp_levels))
         entry = price if maker else rules.slipped(spec, price, buy=side is Side.LONG)
         cash = self.ledger.cash(self.account_id)
         s = rules.size(spec, leverage, margin, entry, self.fees.rate(maker), cash)
@@ -229,7 +230,7 @@ class PaperBroker(Broker, PriceDriven):
     # Önizleme de bunu kullanır, ekleme kartının tahmini gerçek eklemeden ayrışamaz.
     def _add_plan(self, p: Position, leverage: float, margin: float):
         spec = self.catalog.get(p.symbol)
-        rules.check_leverage(spec, leverage)
+        rules.check_leverage(spec, leverage, p.qty * p.entry_price + margin * leverage)
         entry = rules.slipped(spec, self._price(p.symbol), buy=p.side is Side.LONG)
         cash = self.ledger.cash(self.account_id)
         s = rules.size(spec, leverage, margin, entry, self.fees.taker, cash)
@@ -302,6 +303,7 @@ class PaperBroker(Broker, PriceDriven):
     def _protect(self, p: Position, cmd: UpdateProtection) -> Position:
         spec, price = self.catalog.get(p.symbol), self._price(p.symbol)
         levels, sl, trail = p.tp_levels, p.sl, p.trail_pct
+        rules.check_ticks(spec, cmd.sl, *(k.price for k in cmd.tp_levels or ()))
         if cmd.tp_levels is not None:
             levels = tuple(rules.split_tp(spec, rules.check_tp_levels(p.side, price, list(cmd.tp_levels)), p.qty))
         if cmd.sl is not None:
@@ -321,7 +323,10 @@ class PaperBroker(Broker, PriceDriven):
     # bir emre tahmin vermez.
     def _check_order(self, cmd: PlaceOrder) -> tuple[float, list]:
         spec, price = self.catalog.get(cmd.symbol), self._price(cmd.symbol)
-        rules.check_leverage(spec, cmd.leverage)
+        rules.check_leverage(spec, cmd.leverage, cmd.margin * cmd.leverage)
+        rules.check_ticks(spec, cmd.trigger, cmd.sl, *(k.price for k in cmd.tp_levels))
+        if sum(o.symbol == cmd.symbol for o in self.ledger.orders(self.account_id)) >= spec.max_orders:
+            raise RuleError(f"{cmd.symbol} için en fazla {spec.max_orders} bekleyen emir olabilir.")
         if cmd.margin <= 0:
             raise RuleError("Marjin sıfırdan büyük olmalı.")
         if cmd.trigger <= 0 or abs(cmd.trigger - price) / price < _MIN_TRIGGER_GAP:
@@ -345,7 +350,8 @@ class PaperBroker(Broker, PriceDriven):
         return self.ledger.insert_order(Order(
             id=0, account_id=self.account_id, number=self.ledger.free_number(self.account_id), symbol=cmd.symbol,
             side=cmd.side, trigger=cmd.trigger, below=cmd.trigger < price,
-            maker=rules.order_is_maker(cmd.side, cmd.trigger, price) and not cmd.taker, leverage=cmd.leverage, margin=cmd.margin,
+            maker=rules.order_is_maker(cmd.side, cmd.trigger, price) and not cmd.taker, leverage=cmd.leverage,
+            margin=cmd.margin,
             tp_levels=tuple(levels), sl=cmd.sl, trail_pct=cmd.trail_pct,
             expires_at=now + cmd.valid_min * 60 if cmd.valid_min else None, created_at=now))
 
