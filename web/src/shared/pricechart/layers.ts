@@ -31,7 +31,7 @@ export const LAYERS: LayerSpec[] = [
   { key: "tp", label: "TP", color: "--tp", style: "solid" },
   { key: "sl", label: "SL", color: "--sl", style: "solid" },
   { key: "liq", label: "likidasyon", color: "--dim", style: "dotted" },
-  { key: "order", label: "emir", color: "--order", style: "dashed" },
+  { key: "order", label: "emir", color: "--order", colors: ["--long", "--short"], style: "dashed" },
   { key: "alarm", label: "alarm", color: "--alarm", style: "sparse" },
   { key: "marks", label: "işlem işaretleri", color: "--accent", style: "marks" },
 ];
@@ -73,7 +73,7 @@ export function readHidden(raw: string | null): Set<Layer> {
 /**
  * Grafikteki bir fiyat çizgisi. key çizimler arasında aynı çizgiyi tanır. Çizgi ait olduğu pozisyonu, emri ya da
  * alarmı taşır, tp kaçıncı TP kademesi olduğudur. Düzenlenebilen grafik sürüklemeyi bunlarla öneriye çevirir. color
- * verilmişse çizgi katmanın rengi yerine onu alır, giriş çizgisi pozisyonun yönünü böyle gösterir.
+ * verilmişse çizgi katmanın rengi yerine onu alır, giriş ve emir çizgisi yönünü böyle gösterir.
  */
 export interface PriceLine {
   key: string; layer: Layer; price: number; title: string; color?: string;
@@ -93,7 +93,8 @@ export function priceLines(symbol: string, positions: Position[], orders: Order[
     out.push({ key: `l${p.id}`, layer: "liq", price: p.liq_price, title: `#${p.number} likidasyon`, position: p });
   }
   for (const o of orders.filter((x) => x.symbol === symbol)) {
-    out.push({ key: `o${o.id}`, layer: "order", price: o.trigger, title: `#${o.number} ${o.side} emir`, order: o });
+    out.push({ key: `o${o.id}`, layer: "order", price: o.trigger, title: `#${o.number} ${o.side} emir`, order: o,
+              color: o.side === "long" ? "--long" : "--short" });
   }
   for (const a of alerts.filter((x) => x.symbol === symbol)) {
     out.push({ key: `a${a.number}`, layer: "alarm", price: a.price, title: `alarm #${a.number}`, alert: a });
