@@ -35,6 +35,7 @@ import json
 import sqlite3
 from datetime import datetime
 
+from ..domain import numbers
 from ..domain.clock import HOME_TZ, Clock
 from ..domain.errors import RuleError
 from ..domain.models import Side, TpLevel
@@ -307,7 +308,7 @@ class Interventions:
             if "price" not in c:
                 return f"Yönetici #{c['cancel']} numaralı alarmı kaldırdı."
             moved = f"#{c['cancel']} numaralı alarmı kaldırıp " if c.get("cancel") is not None else ""
-            return f"Yönetici {moved}{c['symbol']} {c['price']:g} seviyesine alarm kurdu. Not: {c['note'] or 'yok'}"
+            return f"Yönetici {moved}{c['symbol']} {numbers.price(c['price'])} seviyesine alarm kurdu. Not: {c['note'] or 'yok'}"
         if k == "restrict":
             text = limit_from(c["limit"]).text()
             until = f", {_clock(c['until'])} saatine kadar" if c.get("until") else ", kaldırılana kadar"

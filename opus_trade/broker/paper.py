@@ -34,7 +34,7 @@ description: Binance USDⓈ-M kurallarıyla simüle edilen kâğıt hesap.
 
 from typing import NamedTuple
 
-from ..domain import rules
+from ..domain import numbers, rules
 from ..domain.catalog import Catalog
 from ..domain.clock import Clock
 from ..domain.errors import RuleError
@@ -224,7 +224,8 @@ class PaperBroker(Broker, PriceDriven):
     # Ekleme kendi marjini ve kaldıracı olan küçük bir yeni pozisyon gibi
     # düşünülür, piyasa fiyatından taker olarak gerçekleşir. Giriş fiyatı
     # miktara göre ağırlıklı ortalanır, kaldıraç toplam büyüklüğün toplam
-    # marjine oranı olur. TP kademelerine dokunulmaz.
+    # marjine oranı olur. TP kademelerinin miktarı değişmez, yüzdeleri yeni
+    # miktara göre güncellenir.
     # Önizleme de bunu kullanır, ekleme kartının tahmini gerçek eklemeden ayrışamaz.
     def _add_plan(self, p: Position, leverage: float, margin: float):
         spec = self.catalog.get(p.symbol)
@@ -241,6 +242,7 @@ class PaperBroker(Broker, PriceDriven):
         self.ledger.set_cash(self.account_id, cash - s.margin - s.fee)
         return self.ledger.update_position(p.id, qty=qty, entry_price=avg, margin=total,
                                            leverage=round(avg * qty / total, 2),
+                                           tp_levels=rules.tp_shares(p.tp_levels, qty),
                                            liq_price=rules.liq_price(spec, p.side, avg, qty, total), fee=p.fee + s.fee)
 
     def _close_qty(self, p: Position, pct: float) -> float:
@@ -289,8 +291,9 @@ class PaperBroker(Broker, PriceDriven):
             self.ledger.mark_closed(p.id)
         else:
             rest = 1 - x.share
-            self.ledger.update_position(p.id, qty=round(p.qty - x.qty, 10), margin=p.margin * rest,
-                                        funding=p.funding * rest, fee=p.fee * rest)
+            left = round(p.qty - x.qty, 10)
+            self.ledger.update_position(p.id, qty=left, margin=p.margin * rest, funding=p.funding * rest,
+                                        fee=p.fee * rest, tp_levels=rules.tp_shares(p.tp_levels, left))
         return trade
 
     # None değişmez demektir. Boş kademe listesi bütün TP'leri, sıfır SL'yi ya
@@ -326,8 +329,9 @@ class PaperBroker(Broker, PriceDriven):
         qty = rules.round_qty(spec, cmd.margin * cmd.leverage / cmd.trigger)
         smallest = rules.min_notional(spec, cmd.trigger)
         if qty * cmd.trigger < smallest - rules.TOLERANCE:
-            raise RuleError(f"{cmd.symbol} için en küçük işlem büyüklüğü tetik fiyatında yaklaşık {smallest:.2f} "
-                            f"dolar. {cmd.leverage:g}x kaldıraçla en az {smallest / cmd.leverage:.2f} dolar marjin gerekir.")
+            raise RuleError(f"{cmd.symbol} için en küçük işlem büyüklüğü tetik fiyatında yaklaşık "
+                            f"{numbers.num(smallest, 2)} dolar. {numbers.num(cmd.leverage)}x kaldıraçla en az "
+                            f"{numbers.num(smallest / cmd.leverage, 2)} dolar marjin gerekir.")
         rules.check_sl(cmd.side, cmd.trigger, cmd.sl)
         rules.check_trail(cmd.trail_pct)
         levels = rules.check_tp_levels(cmd.side, cmd.trigger, list(cmd.tp_levels))
@@ -387,7 +391,7 @@ class PaperBroker(Broker, PriceDriven):
 
             changes: dict = {}
             if len(levels) != len(p.tp_levels):
-                changes["tp_levels"] = tuple(levels)
+                changes["tp_levels"] = rules.tp_shares(tuple(levels), self.ledger.position(p.id).qty)
             top = _better(p.side, p.best_price, best)
             if top != p.best_price:
                 changes.update(best_price=top, best_time=time)

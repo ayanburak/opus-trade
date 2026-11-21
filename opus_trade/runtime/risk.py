@@ -22,6 +22,7 @@ description: Hesabın günlük zarar sınırı, acil durdurması ve sabit risk s
 
 from datetime import datetime, time
 
+from ..domain import numbers
 from ..domain.clock import HOME_TZ, Clock
 from ..domain.trading import AccountState, Command, RISKY
 from ..storage.ledger import Ledger
@@ -68,6 +69,6 @@ class RiskGuard:
         if self.halted:
             return "acil durdurma açık, yeni risk alınmaz"
         if self.breached(state):
-            return f"günlük zarar sınırı olan {self.daily_loss:g} dolara ulaşıldı, bugün yeni risk alınmaz"
+            return f"günlük zarar sınırı olan {numbers.num(self.daily_loss)} dolara ulaşıldı, bugün yeni risk alınmaz"
         hit = breach(cmd, state, self.limits)
         return f"risk sınırı: {hit.text()}" if hit else None

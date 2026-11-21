@@ -21,13 +21,15 @@ from opus_trade.domain.clock import HOME_TZ
 from opus_trade.domain.fees import BINANCE_STANDARD
 from opus_trade.domain.models import Side, TpLevel
 from opus_trade.domain.profile import ProfileConfig, State
-from opus_trade.domain.trading import OpenPosition, ClosePosition, Ref
+from opus_trade.domain.trading import (AccountEvent, Actor, ClosePosition, EventKind, OpenPosition, Ref,
+                                       Trade)
 from opus_trade.market.models import Candle
 from opus_trade.market.stream import MarketStream
 from opus_trade.registry import Param
 from opus_trade.runtime.bus import EventBus
 from opus_trade.runtime.model_access import ModelAccess
 from opus_trade.runtime.profiles import ProfileError, ProfileService
+from opus_trade.runtime.runner import describe
 from opus_trade.runtime.supervisor import Supervisor
 from opus_trade.storage.database import connect
 from opus_trade.storage.journal import JournalRepo
@@ -116,6 +118,16 @@ def go(coro):
 
 
 # --- Profil servisi ---
+
+def test_command_result_writes_numbers_and_unit_the_turkish_way():
+    """Komutun sonucu panelin Onay kartında olduğu gibi görünür. Sayılar virgüllü, miktar paritenin birimiyle yazılır."""
+    t = Trade(1, 1, 1, 1, "ETHUSDT", Side.LONG, 10, 0.041, 6.6, 1600, 0, 1608.913, 60, "admin", 0.37, 0.07, 0.0, 1610,
+              1599)
+    events = [AccountEvent(EventKind.OPENED, 1, 0, Actor.ADMIN, 2, "ETHUSDT", Side.LONG, price=1608.913),
+              AccountEvent(EventKind.CLOSED, 1, 60, Actor.ADMIN, 1, "ETHUSDT", Side.LONG, price=1608.913, trade=t)]
+    assert describe(events) == ("#2 ETHUSDT long açıldı, giriş 1608,9. #1 ETHUSDT long pozisyonundan 0,041 ETH "
+                                "1608,9 fiyatından kapandı, net +0,30 dolar.")
+
 
 def test_new_version_keeps_the_old_and_is_filled_with_defaults(tmp_path):
     """Ayar değişince eski sürüm silinmez. Sonuçlar sürüme göre ayrılarak incelenir."""

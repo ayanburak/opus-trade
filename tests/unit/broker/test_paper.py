@@ -110,6 +110,20 @@ def test_tp_levels_fill_at_their_price_as_maker(broker):
     assert broker.state().positions == ()
 
 
+def test_tp_shares_follow_partial_close_add_and_filled_level(broker):
+    """Kademe miktarı Binance'teki gibi sabit kalır, yüzdesi pozisyonun bugünkü payını gösterir. Kısmi
+    kapanış, ekleme ve dolan ilk kademe yüzdeyi değiştirmezse panel ve Opus eski yüzdeyi görür."""
+    open_long(broker, tp_levels=(TpLevel(103, 50), TpLevel(106, 50)))
+    run(broker, ClosePosition(Ref(1, SOL, LONG), pct=30))
+    assert broker.state().positions[0].tp_levels == (TpLevel(103, 70.0, 0.49), TpLevel(106, 30.0, None))
+    run(broker, AddToPosition(Ref(1, SOL, LONG), leverage=10, margin=10))
+    [p] = broker.state().positions
+    assert p.qty == 1.69
+    assert p.tp_levels == (TpLevel(103, 29.0, 0.49), TpLevel(106, 71.0, None))
+    broker.on_price(SOL, 104, 100, 103.5, T + 60)
+    assert broker.state().positions[0].tp_levels == (TpLevel(106, 100.0, None),)
+
+
 def test_closed_trade_best_price_includes_its_exit(broker):
     """TP ile kapanan işlemin en iyi fiyatı TP'den kötü görünürse çıkış karnesi yanlış ders çıkarır."""
     open_long(broker, tp_levels=(TpLevel(106, 100),))

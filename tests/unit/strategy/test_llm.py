@@ -100,7 +100,7 @@ def test_closed_event_is_told_with_its_reason_and_net():
     t = Trade(1, 1, 1, 3, SOL, Side.LONG, 10, 1, 10, 100, NOW, 97.98, NOW, "sl", -2.0, 0.1, 0.0, 101, 97)
     e = AccountEvent(EventKind.CLOSED, 1, NOW, Actor.SYSTEM, 3, SOL, Side.LONG, price=97.98, trade=t, reason="sl")
     assert prompt.wake_text(Wake("account", NOW, e), NOW) == \
-        "#3 SOLUSDT long pozisyonundan 1 birim 97.98 seviyesinde SL ile kapandı, net -2.10 dolar."
+        "#3 SOLUSDT long pozisyonundan 1 SOL 97,98 seviyesinde SL ile kapandı, net -2,10 dolar."
 
 
 # --- Strateji ---

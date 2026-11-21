@@ -22,6 +22,7 @@ description: Riski artıran komutlara konan sınırlar.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from ..domain import numbers
 from ..domain.models import Side
 from ..domain.trading import RISKY, AccountState, AddToPosition, Command, OpenPosition, PlaceOrder
 
@@ -87,7 +88,7 @@ class MaxLeverage(Limit):
         return ask.leverage > self.value
 
     def text(self) -> str:
-        return f"{_where(self.symbol)}kaldıraç en fazla {self.value:g}x"
+        return f"{_where(self.symbol)}kaldıraç en fazla {numbers.num(self.value)}x"
 
 
 # total True ise sınır bütün açık pozisyonların ve bekleyen emirlerin
@@ -106,7 +107,7 @@ class MaxMargin(Limit):
 
     def text(self) -> str:
         what = "toplam marjin" if self.total else "pozisyon başına marjin"
-        return f"{_where(self.symbol)}{what} en fazla {self.value:g} dolar"
+        return f"{_where(self.symbol)}{what} en fazla {numbers.num(self.value)} dolar"
 
 
 # Büyüklük marjin çarpı kaldıraçtır. Kaldıraç ve marjin sınırları ayrı ayrı
@@ -120,7 +121,7 @@ class MaxNotional(Limit):
         return ask.margin * ask.leverage > self.value + 1e-9
 
     def text(self) -> str:
-        return f"{_where(self.symbol)}işlem büyüklüğü en fazla {self.value:g} dolar"
+        return f"{_where(self.symbol)}işlem büyüklüğü en fazla {numbers.num(self.value)} dolar"
 
 
 @dataclass(frozen=True)

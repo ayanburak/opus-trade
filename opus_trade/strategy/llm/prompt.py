@@ -40,7 +40,7 @@ from . import actions
 from .hours import hours_text
 from .texts import TZ_LABEL, clock, date_text, event_text, fire_text, levels_text, price
 
-TEMPLATE_VERSION = 1
+TEMPLATE_VERSION = 2
 
 VIEWS = ["yukselis", "dusus", "yatay", "belirsiz"]
 
@@ -119,7 +119,9 @@ eklenir ve likidasyon fiyatını değiştirir.
 - Bir pozisyona tek bir TP ya da birden çok TP kademesi koyabilirsin. Her kademe bir fiyat ve pozisyonun yüzdesi \
 taşır. Yüzdelerin toplamı en fazla 100 olur, toplam 100 ise son kademe kalanın tamamını kapatır. Bir kademenin \
 miktarı pozisyon miktarının o yüzdesidir, miktar adımına aşağı yuvarlanır ve en az bir miktar adımı olmalıdır. \
-Küçük bir pozisyonda kademe sayısını azaltırsın ya da tek TP kullanırsın, yoksa istek reddedilir.
+Küçük bir pozisyonda kademe sayısını azaltırsın ya da tek TP kullanırsın, yoksa istek reddedilir. Kademenin \
+miktarı kurulurken sabitlenir. Pozisyon kısmen kapanınca, ekleme yapılınca ya da bir kademe dolunca hesap \
+bölümündeki yüzdeler kademenin kalan pozisyondaki güncel payını gösterir.
 - İz süren stop: Pozisyonun açıldığından beri gördüğü en iyi fiyattan verdiğin yüzde kadar geride durur ve fiyat \
 lehine gittikçe SL'yi kendiliğinden taşır. Sonradan eklersen de bu en iyi fiyattan hesaplanır, her pozisyonun \
 gördüğü en iyi fiyat sana bildirilir. Hesaplanan seviye fiyatın gerisinde kalacaksa, yani stop hemen \

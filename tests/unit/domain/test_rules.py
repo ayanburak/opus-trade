@@ -114,6 +114,30 @@ def test_split_tp_leaves_last_level_as_the_remainder():
     assert out[1].qty is None
 
 
+def test_tp_shares_follow_the_position_after_it_shrinks():
+    """Kısmi kapanıştan sonra kademe miktarı aynı kalır, yüzdesi kalan pozisyondaki payı olur.
+    Eski yüzde görünürse panel ve Opus kademenin yarısını kapatacağını sanır, oysa çoğunu kapatır."""
+    out = rules.tp_shares((TpLevel(103, 50, 0.069), TpLevel(106, 50, None)), 0.098)
+    assert out == (TpLevel(103, 70.41, 0.069), TpLevel(106, 29.59, None))
+
+
+def test_tp_shares_give_back_the_same_qty_when_resubmitted():
+    """Güncel yüzdeyle kademe yeniden kurulunca aynı miktar çıkmalı. 0,33/0,97 yüzde 34,0206'dır, aşağı
+    yuvarlanıp 34,02 yazılsaydı split_tp 0,32 kurar ve kademe bir adım küçülürdü."""
+    out = rules.tp_shares((TpLevel(103, 50, 0.33), TpLevel(106, 50, None)), 0.97)
+    again = rules.split_tp(SOL, [TpLevel(k.price, k.pct) for k in out], 0.97)
+    assert again[0].qty == 0.33
+
+
+def test_tp_shares_drop_levels_the_position_no_longer_reaches():
+    """Pozisyon ilk kademeden küçülünce ilk kademe hepsini kapatır, sonrakiler hiç dolamaz ve düşer.
+    Bütün kademeler miktarlıyken de yüzdelerin toplamı yüzü geçmez, yoksa yeniden gönderim reddedilir."""
+    out = rules.tp_shares((TpLevel(103, 50, 0.5), TpLevel(106, 30, 0.3), TpLevel(109, 20, None)), 0.4)
+    assert out == (TpLevel(103, 100.0, 0.5),)
+    out = rules.tp_shares((TpLevel(103, 20, 0.2), TpLevel(106, 10, 0.1)), 0.3)
+    assert sum(k.pct for k in out) <= 100
+
+
 def test_split_tp_rejects_level_smaller_than_one_step():
     """Bir adımdan küçük kademe borsada açılamaz. Emir kurulurken reddedilmezse tetik anında giriş kaçardı."""
     with pytest.raises(RuleError, match="en küçük miktar adımının altında"):
@@ -130,3 +154,18 @@ def test_trailed_sl_keeps_the_tighter_of_trail_and_existing_sl():
     """İz var olan SL'yi yalnızca fiyata yaklaştırabilir, hiçbir zaman uzaklaştırmaz."""
     assert rules.trailed_sl(Side.LONG, best=110, pct=5, sl=100, price=106) == pytest.approx(104.5)
     assert rules.trailed_sl(Side.LONG, best=110, pct=5, sl=105, price=106) == 105
+
+
+# --- Mesajlar ---
+
+def test_rule_messages_write_numbers_the_turkish_way():
+    """Kural mesajı panelde ve Opus'ta olduğu gibi görünür, sayılar virgüllü olmalı."""
+    with pytest.raises(RuleError, match="Long için SL 101, referans fiyat 100,5 altında olmalı"):
+        rules.check_sl(Side.LONG, 100.5, 101)
+
+
+def test_size_says_qty_rounds_to_zero_instead_of_zero_dollars():
+    """Miktar sıfıra yuvarlanınca büyüklük 0,00 dolar demek kafa karıştırır, en küçük miktar söylenir."""
+    with pytest.raises(RuleError, match="miktar sıfıra yuvarlanıyor, en küçük miktar 0,01 SOL") as e:
+        rules.size(SOL, 1, 0.5, 100, TAKER, 100)
+    assert "0,00 dolar" not in str(e.value)

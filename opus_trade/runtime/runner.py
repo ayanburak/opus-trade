@@ -36,6 +36,7 @@ from dataclasses import replace
 from typing import Callable
 
 from ..broker.base import Broker, PriceDriven
+from ..domain import numbers
 from ..domain.clock import Clock
 from ..domain.errors import RuleError
 from ..domain.profile import Profile, State, Version
@@ -71,16 +72,16 @@ def describe(events: list[AccountEvent]) -> str:
         head = f"#{e.number} {e.symbol} {e.side}"
         match e.kind:
             case EventKind.OPENED:
-                parts.append(f"{head} açıldı, giriş {e.price:g}.")
+                parts.append(f"{head} açıldı, giriş {numbers.price(e.price)}.")
             case EventKind.ADDED:
-                parts.append(f"{head} pozisyonuna ekleme yapıldı, ortalama giriş {e.price:g}.")
+                parts.append(f"{head} pozisyonuna ekleme yapıldı, ortalama giriş {numbers.price(e.price)}.")
             case EventKind.CLOSED:
-                parts.append(f"{head} pozisyonundan {e.trade.qty:g} birim {e.price:g} fiyatından kapandı, net "
-                             f"{e.trade.net:+.2f} dolar.")
+                parts.append(f"{head} pozisyonundan {numbers.qty(e.trade.qty, e.symbol)} {numbers.price(e.price)} "
+                             f"fiyatından kapandı, net {numbers.num(e.trade.net, 2, sign=True)} dolar.")
             case EventKind.PROTECTION:
                 parts.append(f"{head} pozisyonunun koruması güncellendi.")
             case EventKind.ORDER_PLACED:
-                parts.append(f"{head} emri kaydedildi, tetik {e.price:g}.")
+                parts.append(f"{head} emri kaydedildi, tetik {numbers.price(e.price)}.")
             case EventKind.ORDER_CANCELLED:
                 parts.append(f"{head} emri iptal edildi.")
     return " ".join(parts) or "Açık pozisyon ve bekleyen emir yoktu."
@@ -351,7 +352,7 @@ class ProfileRunner:
                     a = self.alerts.add(op["symbol"], op["price"], self.prices[op["symbol"]], op["note"],
                                         str(Actor.STRATEGY), now)
                     self.state.add_alert(self.pid, a)
-                    results.append(ActionResult(label, True, f"alarm #{a.number} {a.symbol} {a.price:g} kuruldu."))
+                    results.append(ActionResult(label, True, f"alarm #{a.number} {a.symbol} {numbers.price(a.price)} kuruldu."))
                 else:
                     a = self.alerts.cancel(op["number"])
                     self.state.resolve_alert(self.pid, a.number, "cancelled", now)

@@ -2,7 +2,7 @@
 file: rules.py
 importable: TOLERANCE, slipped, round_qty, min_notional, liq_price, unrealized_pnl, funding_payment,
             order_is_maker, check_leverage, check_sl, check_trail, trail_level, trailed_sl,
-            check_tp_levels, split_tp, size, close_fill
+            check_tp_levels, split_tp, tp_shares, size, close_fill
 
 Binance USDⓈ-M vadelinin izole marjinli hesap kuralları, saf fonksiyonlar
 olarak. Hiçbiri durum tutmaz, veritabanına ya da ağa dokunmaz. Kâğıt broker
@@ -23,6 +23,7 @@ description: Kaldıraç, büyüklük, kayma, likidasyon, TP kademesi ve iz süre
 
 import math
 
+from . import numbers
 from .errors import RuleError
 from .models import Side, SymbolSpec, TpLevel, Sizing
 
@@ -92,7 +93,7 @@ def order_is_maker(side: Side, trigger: float, price: float) -> bool:
 
 def check_leverage(spec: SymbolSpec, leverage: float) -> None:
     if not 1 <= leverage <= spec.max_leverage:
-        raise RuleError(f"{spec.symbol} için kaldıraç 1 ile {spec.max_leverage} arasında olmalı, {leverage:g} verildi.")
+        raise RuleError(f"{spec.symbol} için kaldıraç 1 ile {spec.max_leverage} arasında olmalı, {numbers.num(leverage)} verildi.")
 
 
 # ref bir pozisyonda güncel fiyat ya da giriş fiyatı, bir emirde tetik
@@ -101,9 +102,9 @@ def check_sl(side: Side, ref: float, sl: float | None) -> None:
     if sl is None:
         return
     if side is Side.LONG and sl >= ref:
-        raise RuleError(f"Long için SL {sl:g}, referans fiyat {ref:g} altında olmalı.")
+        raise RuleError(f"Long için SL {numbers.num(sl)}, referans fiyat {numbers.num(ref)} altında olmalı.")
     if side is Side.SHORT and sl <= ref:
-        raise RuleError(f"Short için SL {sl:g}, referans fiyat {ref:g} üstünde olmalı.")
+        raise RuleError(f"Short için SL {numbers.num(sl)}, referans fiyat {numbers.num(ref)} üstünde olmalı.")
 
 
 def check_trail(pct: float | None) -> None:
@@ -143,9 +144,9 @@ def trailed_sl(side: Side, best: float, pct: float, sl: float | None, price: flo
     if (level >= price) if side is Side.LONG else (level <= price):
         least = (1 - price / best) * 100 if side is Side.LONG else (price / best - 1) * 100
         raise RuleError(
-            f"İz süren stop yüzde {pct:g} verildi. Pozisyonun gördüğü en iyi fiyat {best:g}, stop {level:g} "
-            f"seviyesine düşüyor ve güncel fiyat {price:g} bunu zaten geçmiş. "
-            f"Bu pozisyonda iz yüzde {least:.2f}'den büyük olmalı.")
+            f"İz süren stop yüzde {numbers.num(pct)} verildi. Pozisyonun gördüğü en iyi fiyat {numbers.num(best)}, "
+            f"stop {numbers.num(level)} seviyesine düşüyor ve güncel fiyat {numbers.num(price)} bunu zaten geçmiş. "
+            f"Bu pozisyonda iz yüzde {numbers.num(least, 2)} değerinden büyük olmalı.")
     if sl is None or (level > sl if side is Side.LONG else level < sl):
         return level
     return sl
@@ -175,10 +176,10 @@ def check_tp_levels(side: Side, ref: float, levels: list[TpLevel]) -> list[TpLev
             raise RuleError("Her TP kademesinin fiyatı ve yüzdesi sıfırdan büyük olmalı.")
         if (side is Side.LONG and k.price <= ref) or (side is Side.SHORT and k.price >= ref):
             where = "üstünde" if side is Side.LONG else "altında"
-            raise RuleError(f"{side} için TP {k.price:g}, referans fiyat {ref:g} {where} olmalı.")
+            raise RuleError(f"{side} için TP {numbers.num(k.price)}, referans fiyat {numbers.num(ref)} {where} olmalı.")
         total += k.pct
     if total > 100 + TOLERANCE:
-        raise RuleError(f"TP kademelerinin yüzdeleri toplamı en fazla 100 olabilir, {total:g} verildi.")
+        raise RuleError(f"TP kademelerinin yüzdeleri toplamı en fazla 100 olabilir, {numbers.num(total)} verildi.")
     return sorted(levels, key=lambda k: k.price, reverse=side is Side.SHORT)
 
 
@@ -199,10 +200,44 @@ def split_tp(spec: SymbolSpec, levels: list[TpLevel], qty: float) -> list[TpLeve
             continue
         q = round_qty(spec, qty * k.pct / 100)
         if q == 0:
-            raise RuleError(f"TP kademesi {k.price:g} için yüzde {k.pct:g}, en küçük miktar adımının altında kalıyor. "
+            raise RuleError(f"TP kademesi {numbers.num(k.price)} için yüzde {numbers.num(k.pct)}, en küçük miktar adımının altında kalıyor. "
                             f"Kademeyi büyüt ya da kademe sayısını azalt.")
         out.append(TpLevel(k.price, k.pct, q))
     return out
+
+
+# Kademenin miktarı kurulurken sabitlenir, Binance'teki yalnızca kapatan emir
+# gibi. Pozisyon kısmen kapanınca, bir kademe dolunca ya da ekleme yapılınca
+# miktar aynı kalır ama pozisyonun başka bir payına denk gelir. Yüzde burada o
+# güne çekilir, panel ve Opus eski yüzdeyi görmesin.
+#
+# Yüzde yukarı yuvarlanır. Panel ya da Opus bu yüzdeyle kademeyi yeniden
+# kurarsa split_tp aşağı yuvarladığı için aynı miktar çıkar, aşağı yuvarlanmış
+# bir yüzde bir adım eksik miktar verirdi. Toplam yine de yüzü geçmez.
+# Pozisyon küçülüp kapsamadığı kademeler düşer, onlar hiç dolamaz.
+def tp_shares(levels: tuple[TpLevel, ...], qty: float) -> tuple[TpLevel, ...]:
+    """Açık pozisyonun kademelerinin yüzdesini pozisyonun bugünkü miktarına göre yeniden yazar.
+
+    Args:
+        levels: Miktarı belli kademeler, son kademe kalanın tamamıysa qty None.
+        qty: Pozisyonun bugünkü miktarı.
+
+    Returns:
+        Fiyatı ve miktarı aynı, yüzdesi güncel kademeler.
+    """
+    out, left, used = [], qty, 0.0
+    for k in levels:
+        if left <= TOLERANCE:
+            break
+        if k.qty is None:
+            out.append(TpLevel(k.price, round(100 - used, 2), None))
+            break
+        take = min(k.qty, left)
+        pct = min(math.ceil(take / qty * 10000 - 1e-6) / 100, round(100 - used, 2))
+        out.append(TpLevel(k.price, pct, k.qty))
+        used += pct
+        left -= take
+    return tuple(out)
 
 
 # --- Büyüklük ---
@@ -235,14 +270,17 @@ def size(spec: SymbolSpec, leverage: float, margin: float, entry: float, fee_rat
     if needed(qty) > cash + TOLERANCE:
         most = round_qty(spec, cash / (entry / leverage + entry * fee_rate))
         if needed(qty) > cash * (1 + _CASH_SLACK) or most <= 0:
-            raise RuleError(f"Yetersiz nakit. Nakit {cash:.2f} dolar, bu işlem için {needed(qty):.2f} dolar gerekiyor.")
+            raise RuleError(f"Yetersiz nakit. Nakit {numbers.num(cash, 2)} dolar, bu işlem için {numbers.num(needed(qty), 2)} dolar "
+                            f"gerekiyor.")
         qty = most
     smallest = min_notional(spec, entry)
     if qty * entry < smallest - TOLERANCE:
+        got = (f"miktar sıfıra yuvarlanıyor, en küçük miktar {numbers.qty(spec.qty_step, spec.symbol)}" if qty == 0
+               else f"büyüklük {numbers.num(qty * entry, 2)} dolar oluyor")
         raise RuleError(
-            f"{spec.symbol} için en küçük işlem büyüklüğü yaklaşık {smallest:.2f} dolar. Bu marjin ve kaldıraçla "
-            f"büyüklük {qty * entry:.2f} dolar oluyor. {leverage:g}x kaldıraçla en az "
-            f"{smallest / leverage:.2f} dolar marjin gerekir.")
+            f"{spec.symbol} için en küçük işlem büyüklüğü yaklaşık {numbers.num(smallest, 2)} dolar. Bu marjin ve "
+            f"kaldıraçla {got}. {numbers.num(leverage)}x kaldıraçla en az {numbers.num(smallest / leverage, 2)} "
+            f"dolar marjin gerekir.")
     return Sizing(qty, qty * entry / leverage, qty * entry * fee_rate)
 
 

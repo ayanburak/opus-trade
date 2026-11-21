@@ -45,13 +45,13 @@ from dataclasses import dataclass
 
 import httpx
 
+from ..domain import numbers
 from ..domain.clock import Clock
 from ..domain.trading import AccountEvent, Actor, EventKind
 from ..storage.journal import JournalRepo
 from ..storage.notifications import NotificationRepo
 from ..storage.profiles import ProfileRepo
 from ..strategy.llm.texts import clock as clock_text
-from ..strategy.llm.texts import price
 from .bus import EventBus
 
 log = logging.getLogger(__name__)
@@ -215,10 +215,10 @@ class Notifier:
         match e.kind:
             case EventKind.OPENED:
                 return [_Note("important", "opened", pid, f"{head} açıldı",
-                              f"Giriş {price(e.price)}, açan {_ACTORS.get(str(e.actor), str(e.actor))}.")]
+                              f"Giriş {numbers.price(e.price)}, açan {_ACTORS.get(str(e.actor), str(e.actor))}.")]
             case EventKind.CLOSED:
                 t = e.trade
-                net = f"Çıkış {price(e.price)}, net {t.net:+.2f} dolar."
+                net = f"Çıkış {numbers.price(e.price)}, net {numbers.num(t.net, 2, sign=True)} dolar."
                 if t.reason == "liquidation":
                     return [_Note("critical", "liquidation", pid, f"{head} likide oldu", net)]
                 if t.reason in ("tp", "sl"):
@@ -226,7 +226,7 @@ class Notifier:
                 return [_Note("important", "closed", pid, f"{head} kapandı",
                               f"{net} Kapatan {_ACTORS.get(str(e.actor), str(e.actor))}.")]
             case EventKind.ORDER_FILLED:
-                return [_Note("important", "order_filled", pid, f"{head} emri doldu", f"Fiyat {price(e.price)}.")]
+                return [_Note("important", "order_filled", pid, f"{head} emri doldu", f"Fiyat {numbers.price(e.price)}.")]
             case EventKind.ORDER_EXPIRED:
                 return [_Note("info", "order_expired", pid, f"{head} emrinin süresi doldu")]
             case EventKind.ORDER_FAILED:
@@ -270,13 +270,13 @@ class Notifier:
             return self._error(pid, item["decide_error"], item.get("limit", False))
         if "daily_loss" in item:
             return [_Note("critical", "daily_loss", pid, "Günlük zarar sınırı aşıldı",
-                          f"Sınır {item['daily_loss']:g} dolar. Bugün yeni risk alınmıyor, açık pozisyonlar "
+                          f"Sınır {numbers.num(item['daily_loss'])} dolar. Bugün yeni risk alınmıyor, açık pozisyonlar "
                           f"korunuyor.")]
         if "version" in item:
             return [_Note("info", "version", pid, f"Sürüm {item['version']} yürürlükte")]
         if item.get("fire") is not None and item["fire"].kind == "alert":
             a = item["fire"].data
-            return [_Note("info", "alert", pid, f"{a.symbol} {price(a.price)} alarmı tetiklendi",
+            return [_Note("info", "alert", pid, f"{a.symbol} {numbers.price(a.price)} alarmı tetiklendi",
                           f"Kuran {_ACTORS.get(a.actor, a.actor)}." + (f" Not: {a.note}" if a.note else ""))]
         if item.get("stream") == "down":
             return [_Note("critical", "stream_down", None, "Piyasa akışı koptu",
