@@ -28,7 +28,7 @@ export const LAYERS: LayerSpec[] = [
   { key: "liq", label: "likidasyon", color: "--dim", style: "dotted" },
   { key: "order", label: "emir", color: "--order", style: "dashed" },
   { key: "alarm", label: "alarm", color: "--alarm", style: "sparse" },
-  { key: "marks", label: "işlem işaretleri", color: "--up", style: "marks" },
+  { key: "marks", label: "işlem işaretleri", color: "--accent", style: "marks" },
 ];
 
 /** Düzenlenebilen grafikte sürüklenebilen katmanlar. Giriş ve likidasyon yöneticinin taşıyabileceği bir seviye değildir. */

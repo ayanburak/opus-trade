@@ -134,7 +134,7 @@ function Equity({ points, start }: { points: EquityPoint[]; start: number | null
       rightPriceScale: { borderColor: v("--line") }, timeScale: { borderColor: v("--line"), timeVisible: true },
       localization: { locale: "tr-TR", priceFormatter: (p: number) => num(p, 2) },
     });
-    const line = c.addLineSeries({ color: v("--up"), lineWidth: 2 });
+    const line = c.addLineSeries({ color: v("--accent"), lineWidth: 2 });
     line.setData(points.map((p) => ({ time: chartTime(p.time) as UTCTimestamp, value: p.equity })));
     line.createPriceLine({ price: start ?? points[0].equity, color: v("--dim"), lineStyle: LineStyle.Dashed, lineWidth: 1,
                            axisLabelVisible: false, title: "başlangıç" });

@@ -27,7 +27,7 @@
   --field: #0F1217; --edge: #262B36; --hover: #1E2430; --pill: #252B37;
   --text: #E7E9EE; --body: #D5DAE3; --soft: #C7CDD8; --muted: #98A1B0; --dim: #7D8696; --axis: #6F7888;
   --nav: #A4ACBA; --link: #8DB4FF;
-  --up: #8DB4FF; --down: #F2A65A;
+  --accent: #8DB4FF; --up: #0ECB81; --down: #F6465D; --up-bg: #0E2A20; --down-bg: #2E141A;
   --primary: #2B4A80; --primary-text: #EAF1FF;
   --danger-bg: #2A1714; --danger-edge: #5A2E25; --danger-text: #F2A08F;
   --warn-bg: #241C10; --warn-edge: #3B2C14; --warn-title: #F7D6A6; --warn-text: #CDB58F; --warn-chip: #2A2113; --warn: #F5C27A;

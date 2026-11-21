@@ -57,11 +57,11 @@
 .jcard.failed .jsum { color: var(--danger-text); }
 .jtop { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 12px; }
 .tag { padding: 2px 8px; border-radius: 999px; background: var(--pill); color: var(--soft); font-size: 11px; font-weight: 600; }
-.tag.up { background: var(--run-bg); color: var(--up); }
-.tag.down { background: var(--warn-chip); color: var(--down); }
+.tag.up { background: var(--up-bg); color: var(--up); }
+.tag.down { background: var(--down-bg); color: var(--down); }
 .confidence { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--muted); font-family: var(--mono); }
 .confidence i { width: 44px; height: 4px; border-radius: 999px; background: var(--field); overflow: hidden; display: inline-block; }
-.confidence b { display: block; height: 100%; background: var(--up); border-radius: 999px; }
+.confidence b { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
 .jsum { margin: 0; color: var(--body); line-height: 1.5; }
 .results { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .results li { padding-left: 14px; position: relative; color: var(--soft); }
