@@ -36,40 +36,9 @@
 
 /* Grafik kartı ilk açılışta ekranın altına kadar iner: üst satır, gövdenin üst boşluğu ve alttaki 12 piksel çıkar. */
 .chart-card { overflow: hidden; display: flex; flex-direction: column; height: calc(100dvh - var(--top-h) - 32px); min-height: 420px; }
-.chart-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
-.chart-head .seg { flex-wrap: wrap; }
-.chart-head .seg button { font-size: 12px; padding: 6px 10px; }
-.chart-wrap { position: relative; flex: 1; min-height: 0; }
 
 /* Tam ekranda grafik kartı sekmeyi kaplar, grafik kalan yüksekliği alır. */
-html.locked { overflow: hidden; }
 .chart-card.full { position: fixed; inset: 0; z-index: 40; height: auto; border-radius: 0; border: 0; }
-
-/* Filtre menüsü. */
-.filter { position: relative; }
-.filter-btn { padding: 6px 12px; border-radius: 999px; font-size: 12px; }
-.filter-btn.on { color: var(--text); border-color: var(--muted); }
-.filter-menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 200px; padding: 6px; display: flex; flex-direction: column; border-radius: 12px; border: 1px solid var(--edge); background: var(--bar); box-shadow: 0 12px 32px rgba(0, 0, 0, .45); }
-.filter-menu label { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; color: var(--soft); font-size: 13px; cursor: pointer; }
-.filter-menu label:hover { background: var(--hover); color: var(--text); }
-.filter-menu input { margin: 0; accent-color: var(--up); }
-.filter-menu .filter-all { margin-bottom: 4px; border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; font-weight: 600; }
-.chart { height: 100%; }
-.chart-error { position: absolute; inset: 12px 18px auto; z-index: 3; }
-.chart-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); z-index: 2; pointer-events: none; }
-.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 18px 14px; color: var(--muted); font-size: 12px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
-.legend span.off { opacity: .35; }
-
-/* Katmanın örnek çizgisi. Renk color ile verilir, çizgi biçimi sınıftan gelir. */
-.swatch { width: 14px; height: 0; display: inline-block; border-top: 2px solid currentColor; }
-.swatch.dotted { border-top-style: dotted; }
-.swatch.dashed { border-top-style: dashed; }
-.swatch.sparse { border-top: 0; height: 2px; background: radial-gradient(circle, currentColor 1px, transparent 1.2px) 0 0 / 5px 2px repeat-x; }
-.swatch.marks { width: 0; border-top: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 8px solid currentColor; }
-
-.expand { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border-radius: 8px; border: 1px solid var(--edge); background: transparent; color: var(--soft); }
-.expand:hover { background: var(--hover); color: var(--text); }
 
 .tabs-card { overflow: hidden; }
 .tabbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 12px 14px; border-bottom: 1px solid var(--line); }

@@ -1,6 +1,6 @@
 /**
  * file: stream.ts
- * importable: StreamEvent, useStream, useConnected
+ * importable: StreamEvent, subscribe, useStream, useConnected
  *
  * Sayfanın canlı akışı. Bütün sekme için tek bir EventSource açılır, her
  * bileşen useStream ile kendi dinleyicisini ekler. Bağlantı koparsa tarayıcı
@@ -54,14 +54,19 @@ export function useConnected(): boolean {
   return useSyncExternalStore((cb) => (watchers.add(cb), () => watchers.delete(cb)), () => connected);
 }
 
+/**
+ * Akıştaki her olayda listener'ı çağırır, akış kapalıysa açar.
+ * @returns Aboneliği kapatan fonksiyon.
+ */
+export function subscribe(listener: Listener): () => void {
+  open();
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
+
 /** Akıştaki her olayda handler'ı çağırır. Handler her çizimde değişse de abonelik bir kez açılır. */
 export function useStream(handler: Listener): void {
   const ref = useRef(handler);
   ref.current = handler;
-  useEffect(() => {
-    open();
-    const l: Listener = (e) => ref.current(e);
-    listeners.add(l);
-    return () => void listeners.delete(l);
-  }, []);
+  useEffect(() => subscribe((e) => ref.current(e)), []);
 }

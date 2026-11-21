@@ -1,17 +1,35 @@
 /**
  * file: Layers.tsx
- * importable: Filter, Legend
+ * importable: Filter, Legend, useHiddenLayers
  *
- * Grafiğin katmanlarını gösteren iki parça. Filtrele düğmesi açılır menüsüyle
- * katmanları tek tek gizler. Açıklama satırı her katmanın rengini ve çizgisini
- * gösterir, gizli katman soluk görünür. İkisi de model.ts LAYERS listesinden
- * çizilir.
+ * Grafiğin katmanlarını gösteren iki parça ve seçimin saklanması. Filtrele
+ * düğmesi açılır menüsüyle katmanları tek tek gizler. Açıklama satırı her
+ * katmanın rengini ve çizgisini gösterir, gizli katman soluk görünür. İkisi de
+ * layers.ts LAYERS listesinden çizilir. Seçim tarayıcıda saklanır.
  *
- * description: Grafiğin filtre menüsü ve açıklama satırı.
+ * description: Grafiğin filtre menüsü, açıklama satırı ve filtre seçimi.
  */
 
+// NOTE: Panel ve herkese açık sayfa aynı alan adında çalışır, tarayıcıdaki
+// saklama alanını paylaşırlar. Her sayfa seçimini kendi anahtarıyla saklar.
+
 import { useEffect, useRef, useState } from "react";
-import { LAYERS, LINE_DIM, type Layer, type LayerSpec } from "./model";
+import { LAYERS, LINE_DIM, readHidden, type Layer, type LayerSpec } from "./layers";
+
+/**
+ * Gizli katmanlar ve onları değiştiren fonksiyon. Seçim tarayıcıda key altında saklanır. Tarayıcı izin vermezse
+ * seçim yalnızca o ziyaret boyunca geçerli olur.
+ */
+export function useHiddenLayers(key: string): [Set<Layer>, (hidden: Set<Layer>) => void] {
+  const [hidden, setHidden] = useState(() => {
+    try { return readHidden(localStorage.getItem(key)); } catch { return readHidden(null); }
+  });
+  const change = (h: Set<Layer>) => {
+    setHidden(h);
+    try { localStorage.setItem(key, JSON.stringify([...h])); } catch { /* tarayıcı saklamaya izin vermiyor */ }
+  };
+  return [hidden, change];
+}
 
 // Örnek çizgi grafikteki çizgiyle aynı oranda soluktur, işaretler soluklaşmaz.
 function Swatch({ layer }: { layer: LayerSpec }) {
@@ -44,17 +62,17 @@ export function Filter({ hidden, onChange }: Props) {
   };
   const allShown = hidden.size === 0;
 
-  // Esc yalnızca menüyü kapatır, tam ekrandaki grafiğe ulaşmaz.
+  // Esc yalnızca menüyü kapatır. preventDefault tam ekranın onu yok saymasını sağlar.
   return (
     <div className="filter" ref={box} onKeyDown={(e) => {
-      if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); button.current?.focus(); }
+      if (e.key === "Escape" && open) { e.preventDefault(); setOpen(false); button.current?.focus(); }
     }}>
       <button ref={button} className={`btn filter-btn${allShown ? "" : " on"}`} aria-expanded={open} aria-controls="layer-menu"
               onClick={() => setOpen((o) => !o)}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
              strokeLinejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" /></svg>
         Filtrele
-        {!allShown && <span className="count">{LAYERS.length - hidden.size}</span>}
+        {!allShown && <span className="filter-count">{LAYERS.length - hidden.size}</span>}
       </button>
       {open && (
         <div id="layer-menu" className="filter-menu" role="group" aria-label="Grafikte görünenler">
