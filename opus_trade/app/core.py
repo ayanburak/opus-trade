@@ -122,7 +122,7 @@ async def _main(cfg: AppConfig) -> None:
                                                    timeout_graceful_shutdown=5))
             server.install_signal_handlers = lambda: None
             tasks.append(asyncio.create_task(server.serve()))
-        log.info("Çekirdek başladı, %d profil kuruldu.", len(core.supervisor.runners))
+        log.info("Çekirdek başladı.")
         await stop.wait()
         if server:
             server.should_exit = True

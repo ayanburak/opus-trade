@@ -1,15 +1,15 @@
 /**
  * file: types.ts
- * importable: Profile, Account, Decision, ToolRecord, Entry, LiveTool
+ * importable: Profile, Account, ToolRecord, Entry, LiveTool
  *
  * Herkese açık API'nin cevaplarının biçimleri. Alanlar sunucudaki beyaz
- * listeyle aynıdır, opus_trade/api/public.py. Hesap, işlem ve mum biçimleri
- * shared/types'tadır.
+ * listeyle aynıdır, opus_trade/api/public.py. Hesap, işlem, mum ve karar
+ * biçimleri shared/types'tadır.
  *
  * description: Herkese açık API cevaplarının türleri.
  */
 
-import type { AccountState, ActionResult, Alert, Wake } from "../shared/types";
+import type { AccountState, ActionResult, Alert, Decision, Wake } from "../shared/types";
 
 export type State = "draft" | "running" | "paused" | "stopped" | "archived";
 
@@ -24,18 +24,6 @@ export interface Account {
   prices: Record<string, number>;
   triggers: Record<string, unknown>[];
   alerts: Alert[];
-}
-
-/** Opus'un kararı. Alan adları karar şemasındaki Türkçe adlardır. */
-export interface Decision {
-  analiz?: string;
-  pariteler?: Record<string, { gorus: string; degerlendirme: string }>;
-  ozet?: string;
-  gorus?: string;
-  guven?: number;
-  eylemler?: unknown[];
-  not_defteri?: string;
-  sonraki_cagri_dk?: number;
 }
 
 /** Kararın içinde saklanan araç çağrısının kısa kaydı. */

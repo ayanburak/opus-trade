@@ -261,6 +261,7 @@ class Supervisor(StreamListener):
                 self.refresh(p.id)
             except Exception:
                 log.exception("[%s] Profil kurulamadı.", p.short)
+        log.info("%d profil kuruldu.", len(self.runners))
         await self.stream.watch({s for r in self.runners.values() for s in r.symbols})
         self.last_candle = self.clock.time()
         tasks = [asyncio.create_task(self._ticker()), asyncio.create_task(self._funding())]

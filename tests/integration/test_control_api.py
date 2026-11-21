@@ -199,9 +199,11 @@ async def test_version_results_split_by_exit_time(api):
 
 @run
 async def test_registry_tells_which_strategy_reads_messages(api):
-    """Panel Opus'a yaz kartını bu bayrağa göre gösterir. Kural stratejisinde kart görünmemeli."""
+    """Panel Opus'a yaz kartını ve not defteri sekmesini bu bayraklara göre gösterir. Kural stratejisinde ikisi de görünmemeli."""
     reg = {s["key"]: s["accepts_messages"] for s in (await api.call("GET", "/registry"))["strategies"]}
     assert reg["llm"] is True and reg["liquidation_reversal"] is False and reg["echo"] is True
+    model = {s["key"]: s["uses_model"] for s in (await api.call("GET", "/registry"))["strategies"]}
+    assert model["llm"] is True and model["liquidation_reversal"] is False
 
 
 @run
@@ -311,3 +313,64 @@ async def test_usage_sums_calls_from_journal(api):
     assert len(out["days"]) == 60
     w = out["window"]["profiles"][str(pid)]
     assert (w["calls"], w["input"], w["output"], w["cost_usd"]) == (1, 1200, 80, 0.25)
+
+
+def test_startup_log_counts_profiles_after_they_are_built(tmp_path, caplog):
+    """Açılış kaydındaki profil sayısı profiller kurulduktan sonra yazılır, çalışan profil 0 sayılmaz."""
+    async def go():
+        first = Api(tmp_path)
+        p = await first.call("POST", "/profiles", json={"name": "Test", "short": "T", "config": ECHO})
+        await first.call("POST", f"/profiles/{p['id']}/start")
+        again = Api(tmp_path)
+        with caplog.at_level("INFO", logger="opus_trade.runtime.supervisor"):
+            task = asyncio.create_task(again.core.supervisor.run())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    asyncio.run(go())
+    assert "1 profil kuruldu." in caplog.messages
+
+
+def test_admin_edits_notebook_and_strategy_reads_it_next(tmp_path, monkeypatch):
+    """Panelden düzeltilen not defteri bir sonraki kararda stratejiye gider, eski metin olayda kalır."""
+    monkeypatch.setattr(Echo, "uses_model", True)
+
+    async def go(api):
+        pid, r = await api.running(ECHO)
+        api.core.journal.set_memory(pid, {"notebook": "DÖNEM: eski\nDirenç 57.600"})
+        await api.call("POST", f"/profiles/{pid}/memory", json={"notebook": "Direnç 57.600", "before": "DÖNEM: eski\nDirenç 57.600"})
+        await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "look_now"})
+        await api.step(r, 1)
+        assert Echo.seen[-1].memory["notebook"] == "Direnç 57.600"
+        ev = [e for e in api.core.state.system_events(pid) if e["kind"] == "memory_edit"]
+        assert len(ev) == 1 and "DÖNEM: eski" in ev[0]["detail"]
+    asyncio.run(go(Api(tmp_path)))
+
+
+def test_notebook_edit_is_refused_while_deciding_or_without_model(tmp_path, monkeypatch):
+    """Karar sürerken yazma reddedilir, yoksa çağrının sonu düzeltmeyi siler. Kural profilinde defter yoktur."""
+    async def go(api):
+        rule = await api.call("POST", "/profiles", json={"name": "Kural", "short": "K", "config": RULE})
+        err = await api.call("POST", f"/profiles/{rule['id']}/memory", ok=False, json={"notebook": "x", "before": ""})
+        assert "not defteri tutmaz" in err["detail"]
+        monkeypatch.setattr(Echo, "uses_model", True)
+        pid, r = await api.running(ECHO)
+        api.core.journal.set_memory(pid, {"notebook": "Opus'un"})
+        r.busy = True
+        err = await api.call("POST", f"/profiles/{pid}/memory", ok=False,
+                             json={"notebook": "yönetici", "before": "Opus'un"})
+        assert "karar veriyor" in err["detail"] and api.core.journal.memory(pid) == {"notebook": "Opus'un"}
+    asyncio.run(go(Api(tmp_path)))
+
+
+def test_notebook_edit_is_refused_when_a_decision_rewrote_it(tmp_path, monkeypatch):
+    """Panel düzenlerken gelen karar defteri yeniden yazdıysa eski metinle yapılan kayıt Opus'un yeni defterini ezmemeli."""
+    monkeypatch.setattr(Echo, "uses_model", True)
+
+    async def go(api):
+        pid, _ = await api.running(ECHO)
+        api.core.journal.set_memory(pid, {"notebook": "yeni karar"})
+        err = await api.call("POST", f"/profiles/{pid}/memory", ok=False,
+                             json={"notebook": "yönetici", "before": "eski"})
+        assert "değişti" in err["detail"] and api.core.journal.memory(pid) == {"notebook": "yeni karar"}
+    asyncio.run(go(Api(tmp_path)))

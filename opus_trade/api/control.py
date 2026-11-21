@@ -4,8 +4,8 @@ importable: Core, create_app
 
 Çekirdeğin kontrol API'si. create_app() bir Core alır ve FastAPI uygulamasını
 kurar. Admin paneli bütün işlerini bu uçlardan yapar: profiller ve sürümler,
-kayıt defterleri, hesap, günlük, işlemler, özkaynak, müdahaleler, model
-erişimi, bildirimler, sistemin durumu ve olayları, abonelik tüketimi ve
+kayıt defterleri, hesap, günlük, not defteri, işlemler, özkaynak, müdahaleler,
+model erişimi, bildirimler, sistemin durumu ve olayları, abonelik tüketimi ve
 canlı akış. Uygulama yalnızca çekirdeğin Unix
 soketinde dinler, dışarıya hiç açılmaz.
 
@@ -97,11 +97,13 @@ def _plain(x: Any) -> Any:
     return x
 
 
-# Strateji kaydında accepts_messages da gelir, panel Opus'a yaz kartını yalnızca
-# mesaj okuyabilen stratejide gösterir. Tetikleyicilerde bu bayrak yoktur, False döner.
+# Strateji kaydında accepts_messages ve uses_model da gelir. Panel Opus'a yaz kartını
+# yalnızca mesaj okuyabilen, not defteri sekmesini yalnızca model kullanan stratejide
+# gösterir. Tetikleyicilerde bu bayraklar yoktur, False döner.
 def _registry(reg) -> list[dict]:
     return [{"key": e.key, "name": e.name, "description": e.description, "params": _plain(list(e.params)),
-             "accepts_messages": bool(getattr(e.cls, "accepts_messages", False))}
+             "accepts_messages": bool(getattr(e.cls, "accepts_messages", False)),
+             "uses_model": bool(getattr(e.cls, "uses_model", False))}
             for e in reg.entries.values()]
 
 
@@ -344,6 +346,29 @@ def create_app(core: Core) -> FastAPI:
 
     # Onay kartı göndermeden önce girişin tahminini buradan alır. Komut bir
     # yönetici komutu gibi kapıdan geçer, reddedilecekse nedeni 400 ile döner.
+    # Not defterini yönetici düzeltir. Opus karar verirken yazma reddedilir:
+    # süren çağrı eski defteri okudu, bitince kendi defterini yazıp düzeltmeyi
+    # silerdi. before panelin düzenlemeye başladığı metindir. Defter o arada
+    # yeni bir kararla değiştiyse yazma reddedilir, yoksa Opus'un yeni defteri
+    # ezilirdi. Eski metin sistem olayının ayrıntısında kalır, geri alınabilir.
+    @app.post("/profiles/{pid}/memory")
+    async def edit_memory(pid: int, notebook: str = Body(...), before: str = Body(...)):
+        p = profile(pid)
+        key = core.repo.version(p.version_id).config.strategy if p.version_id else None
+        entry = STRATEGIES.entries.get(key)
+        if entry is None or not getattr(entry.cls, "uses_model", False):
+            raise ValueError("Bu profilin stratejisi not defteri tutmaz.")
+        r = core.supervisor.runners.get(pid)
+        if r is not None and r.busy:
+            raise ValueError("Opus şu an karar veriyor, karar bitince yeniden dene.")
+        old = core.journal.memory(pid)
+        if old.get("notebook", "") != before:
+            raise ValueError("Defter sen düzenlerken yeni bir kararla değişti, düzeltme kaydedilmedi.")
+        core.journal.set_memory(pid, {**old, "notebook": notebook})
+        core.state.system_event(pid, core.clock.time(), "memory_edit", "Not defteri yönetici tarafından değiştirildi.",
+                                {"before": old.get("notebook", "")})
+        return {"memory": core.journal.memory(pid)}
+
     @app.post("/profiles/{pid}/preview")
     async def preview(pid: int, params: dict = Body(..., embed=True)):
         cmd = command_from(params)

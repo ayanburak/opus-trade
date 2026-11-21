@@ -1,7 +1,7 @@
 /**
  * file: types.ts
  * importable: Side, TpLevel, Position, Order, AccountState, Alert, Trade, EquityPoint, Candle, ToolCall, Wake,
- *   ActionResult
+ *   ActionResult, Decision
  *
  * Hesabın, işlemlerin, mumların ve günlüğün ortak veri biçimleri. Alan adları
  * çekirdeğin JSON anahtarlarıyla aynıdır.
@@ -46,3 +46,15 @@ export interface ToolCall {
 export interface Wake { kind: string; time: number; data: unknown }
 
 export interface ActionResult { label: string; ok: boolean; message: string }
+
+/** Opus'un kararı. Alan adları karar şemasındaki Türkçe adlardır. */
+export interface Decision {
+  analiz?: string;
+  pariteler?: Record<string, { gorus: string; degerlendirme: string }>;
+  ozet?: string;
+  gorus?: string;
+  guven?: number;
+  eylemler?: unknown[];
+  not_defteri?: string;
+  sonraki_cagri_dk?: number;
+}
