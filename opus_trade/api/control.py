@@ -294,12 +294,22 @@ def create_app(core: Core) -> FastAPI:
         # bilmek zorunda kalmaz.
         st = {**_plain(state), "available": state.available,
               "leverages": {s: state.leverage(s) for s in sorted({*r.symbols, *state.leverages})}}
-        # Pozisyonun açık kârı son fiyatla burada hesaplanır, panel hesap
-        # kuralı taşımaz. Fiyat henüz gelmediyse None'dır.
+        # Pozisyonun açık kârı ve büyüklüğü son fiyatla burada hesaplanır,
+        # arayüzler hesap kuralı taşımaz. Fiyat henüz gelmediyse None'dır.
+        # Kapanan parçalar pozisyonun kimliğini taşır, realized onların
+        # netidir. outlook koruma emirleri tetiklenirse ne olacağıdır, emri
+        # olmayan adım likidasyondur.
+        closed = [t for t in core.ledger.trades(state.account_id)
+                  if t.position_id in {p.id for p in state.positions}]
+        outlook = {p.id: _plain(r.broker.outlook(p)) for p in state.positions}
         for x in st["positions"]:
             price = r.prices.get(x["symbol"])
             x["open_pnl"] = (rules.unrealized_pnl(Side(x["side"]), x["entry_price"], x["qty"], price)
                              if price is not None else None)
+            x["notional"] = x["qty"] * price if price is not None else None
+            mine = [t for t in closed if t.position_id == x["id"]]
+            x["realized"], x["realized_count"] = sum(t.net for t in mine), len(mine)
+            x["outlook"] = outlook[x["id"]]
         return {"state": st, "prices": r.prices, "alerts": _plain(r.alerts.alerts),
                 "triggers": [t.snapshot() for t in r.triggers if t.snapshot() is not None],
                 "restrictions": core.interventions.active(pid, core.clock.time())}

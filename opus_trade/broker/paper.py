@@ -43,6 +43,7 @@ description: Binance USDⓈ-M hedge modu kurallarıyla simüle edilen kâğıt h
 # NOTE: İz ile kapanış SL nedeniyle yazılır. İz bir stop emridir ve Opus'un
 # metinleri kapanışı bu nedenle zaten anlatır.
 
+from dataclasses import replace
 from typing import NamedTuple
 
 from ..domain import numbers, rules
@@ -55,7 +56,7 @@ from ..domain.trading import (AccountEvent, AccountState, Actor, AmendOrder, Can
                               Command, EventKind, Order, OrderType, PlaceOrder, Position, Protection, Ref,
                               SetLeverage, Trade)
 from ..storage.ledger import Ledger
-from .base import Broker, ClosePreview, PriceDriven, Preview
+from .base import Broker, ClosePreview, ExitOutlook, PriceDriven, Preview
 
 # Bir girişin isteyebileceği en fazla TP kademesi, Binance'in bölünmüş TP'si.
 _MAX_TP = 4
@@ -494,6 +495,41 @@ class PaperBroker(Broker, PriceDriven):
         x = self._exit(p, self._close_qty(p, cmd.qty), self.price(p.symbol), maker=False)
         return ClosePreview(x.exit, x.qty, x.price_pnl, x.funding, x.fee, x.pnl - x.fee, x.cash_after,
                             0.0 if x.full else round(p.qty - x.qty, 10))
+
+    # TP ve stoplar gerçekte de fiyata en yakından başlayarak işlenir,
+    # _check_tps ve _check_stops ile aynı sıra. Kayma tetik anının fiyatından
+    # değil seviyeden hesaplanır, fiyat seviyeye sıçramadan gelmiş sayılır.
+    # Bir stop likidasyonun ötesindeyse likidasyon önce gelir, o zaman
+    # likidasyon da emri olmayan bir adım olarak sıraya girer.
+    def outlook(self, p: Position) -> tuple[ExitOutlook, ...]:
+        long = p.side is Side.LONG
+        exits = self._exits(p)
+        tps = sorted(((o, o.price, 0) for o in exits if o.type is OrderType.TAKE_PROFIT),
+                     key=lambda x: x[1], reverse=not _above(OrderType.TAKE_PROFIT, rules.is_buy(p.side, True)))
+        stops = [(o, o.price if o.type is OrderType.STOP else rules.trail_level(p.side, o.best, o.trail_pct), 0)
+                 for o in exits if o.type is not OrderType.TAKE_PROFIT]
+        if any((level < p.liq_price) if long else (level > p.liq_price) for _, level, _ in stops):
+            stops.append((None, p.liq_price, 1))
+        stops.sort(key=lambda x: (-x[1] if long else x[1], x[2]))
+        return (*self._walk(p, tps), *self._walk(p, stops))
+
+    # Kapanan pay kadar marjin, komisyon ve fonlama düşer, _close ile aynı.
+    def _walk(self, p: Position, legs: list[tuple[Order | None, float, int]]) -> list[ExitOutlook]:
+        out, current = [], p
+        for o, level, _ in legs:
+            if current is None:
+                out.append(ExitOutlook(o.id if o else None, level, 0.0, 0.0))
+                continue
+            if o is None:
+                x = self._exit(current, current.qty, level, maker=False, liquidation=True)
+            else:
+                x = self._exit(current, o.qty or current.qty, level, maker=False)
+            out.append(ExitOutlook(o.id if o else None, level, x.qty, x.pnl - x.fee))
+            rest = 1 - x.share
+            current = None if x.full else replace(current, qty=round(current.qty - x.qty, 10),
+                                                  margin=current.margin * rest, funding=current.funding * rest,
+                                                  fee=current.fee * rest)
+        return out
 
     # Kapanışın hesabı deftere yazmaz. Gerçek kapanış ve önizleme bunu
     # kullanır, kapatma kartının tahmini gerçek kapanıştan ayrışamaz. fill

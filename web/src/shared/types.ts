@@ -1,6 +1,6 @@
 /**
  * file: types.ts
- * importable: Side, OrderType, Protection, Position, Order, AccountState, Alert, Trade, EquityPoint, Candle, ToolCall,
+ * importable: Side, OrderType, Protection, ExitOutlook, Position, Order, AccountState, Alert, Trade, EquityPoint, Candle, ToolCall,
  *   Wake, ActionResult, Decision
  *
  * Hesabın, işlemlerin, mumların ve günlüğün ortak veri biçimleri. Alan adları
@@ -19,10 +19,21 @@ export type OrderType = "market" | "limit" | "stop" | "take_profit" | "trailing_
 /** Bekleyen girişin dolunca kuracağı koruma. qty yoksa girişin dolan miktarının tamamıdır. */
 export interface Protection { type: OrderType; price: number | null; trail_pct: number | null; qty: number | null }
 
-/** Parite ve yön başına tek pozisyon. Kaldıracı yoktur, paritenin ayarı AccountState.leverages'tadır. */
+/**
+ * Bir koruma emri tetiklenirse ne olacağının çekirdekteki tahmini. net kapanınca işlemin net'i olacak tutardır.
+ * order_id null ise adım likidasyondur, bir stop likidasyonun ötesinde kaldığı için sıraya girmiştir.
+ */
+export interface ExitOutlook { order_id: number | null; level: number; qty: number; net: number }
+
+/**
+ * Parite ve yön başına tek pozisyon. Kaldıracı yoktur, paritenin ayarı AccountState.leverages'tadır. realized
+ * pozisyonun kapanan parçalarının net toplamıdır. outlook TP'ler ve stoplar ayrı ayrı, fiyata yakından uzağa
+ * sıralı tahminlerdir. open_pnl ve notional son fiyat gelmediyse null'dır.
+ */
 export interface Position {
   id: number; symbol: string; side: Side; qty: number; margin: number; entry_price: number; entry_time: number;
   best_price: number; worst_price: number; liq_price: number; fee: number; funding: number; open_pnl: number | null;
+  notional: number | null; realized: number; realized_count: number; outlook: ExitOutlook[];
 }
 
 /**

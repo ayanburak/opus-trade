@@ -504,3 +504,25 @@ def test_notebook_edit_is_refused_when_a_decision_rewrote_it(tmp_path, monkeypat
                              json={"notebook": "yönetici", "before": "eski"})
         assert "değişti" in err["detail"] and api.core.journal.memory(pid) == {"notebook": "yeni karar"}
     asyncio.run(go(Api(tmp_path)))
+
+
+@run
+async def test_account_carries_the_position_detail(api):
+    """Masadaki pozisyon detayı hesap ucundan gelir: kapanan parçaların net'i ve sayısı, büyüklük ve her koruma
+    emrinin tahmini. Arayüz bunları kendisi hesaplamaz, giriş emri tahmine girmez."""
+    pid, r = await api.running(RULE)
+    entry = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1,
+             "protection": [{"type": "stop", "price": 97}]}
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": entry})
+    close = {"type": "close", "symbol": SOL, "side": "long", "qty": 0.5}
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": close})
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {
+        "type": "order", "order_type": "limit", "symbol": SOL, "side": "long", "qty": 0.2, "price": 80}})
+    acc = await api.call("GET", f"/profiles/{pid}/account")
+    [t] = await api.call("GET", f"/profiles/{pid}/trades")
+    [p] = acc["state"]["positions"]
+    sl = next(o for o in acc["state"]["orders"] if o["reduce"])
+    assert (p["realized_count"], p["realized"]) == (1, t["net"])
+    assert p["notional"] == p["qty"] * acc["prices"][SOL]
+    [x] = p["outlook"]
+    assert (x["order_id"], x["level"], x["qty"]) == (sl["id"], 97, p["qty"]) and x["net"] < 0

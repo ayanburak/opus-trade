@@ -1,12 +1,13 @@
 """
 file: base.py
-importable: Broker, PriceDriven, Preview, ClosePreview
+importable: Broker, PriceDriven, Preview, ClosePreview, ExitOutlook
 
 Broker bir hesabın soyut sınıfıdır. state() hesabın o anki halini döndürür,
 execute() bir komutu uygular ve olan değişiklikleri AccountEvent olarak
 döndürür, kurala aykırı komutta RuleError fırlatır. preview() bir giriş
 emrini hesaba dokunmadan aynı kurallardan geçirir ve tahmini sonucunu verir,
-preview_close() aynısını kapatma için yapar. Kapı, strateji ve admin paneli
+preview_close() aynısını kapatma için yapar. outlook() pozisyonun koruma
+emirleri tetiklenirse ne olacağını söyler. Kapı, strateji ve admin paneli
 yalnızca bunu bilir, hesabın kâğıt mı canlı mı olduğunu bilmez.
 
 PriceDriven fiyat ve fonlamayla kendi kendine işleyen hesaplar içindir:
@@ -23,7 +24,7 @@ description: Broker ve fiyatla işleyen hesap için soyut sınıflar.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from ..domain.trading import AccountEvent, AccountState, Actor, ClosePosition, Command, PlaceOrder
+from ..domain.trading import AccountEvent, AccountState, Actor, ClosePosition, Command, PlaceOrder, Position
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,19 @@ class ClosePreview:
     net: float
     cash_after: float
     remaining: float
+
+
+@dataclass(frozen=True)
+class ExitOutlook:
+    """Bir koruma emri tetiklenirse ne olacağının tahmini. level emrin seviyesidir, izde en iyi fiyattan bugün
+    hesaplanan seviyedir. qty kapatacağı, net kapanıştan sonra işlemin net'i olacak tutardır. Önündeki emirler
+    pozisyonu çoktan kapatmışsa qty ve net sıfırdır. order_id None ise adım likidasyondur, bir stop likidasyonun
+    ötesinde kaldığı için sıraya girmiştir."""
+
+    order_id: int | None
+    level: float
+    qty: float
+    net: float
 
 
 class Broker(ABC):
@@ -103,6 +117,14 @@ class Broker(ABC):
 
         Raises:
             RuleError: Miktar geçersizse ya da pozisyon artık yoksa.
+        """
+
+    @abstractmethod
+    def outlook(self, p: Position) -> tuple[ExitOutlook, ...]:
+        """Pozisyonun koruma emirleri tetiklenirse ne olacağını hesaba dokunmadan tahmin eder.
+
+        TP'ler fiyata en yakından başlayarak sırayla, stoplar da aynı biçimde ayrı bir sırayla dolmuş sayılır. Her emir
+        kendinden öncekilerin kapattığından kalan pozisyonu kapatır. Kapanış execute() ile aynı kurallardan geçer.
         """
 
 

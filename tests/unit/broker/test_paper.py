@@ -555,3 +555,51 @@ def test_close_all_closes_and_cancels_everything(broker):
     run(broker, CloseAll())
     s = broker.state()
     assert (s.positions, s.orders) == ((), ())
+
+
+def _guarded(broker):
+    run(broker, buy(3, protection=(Protection(TP, price=110, qty=1), Protection(TP, price=120),
+                                   Protection(STOP, price=97, qty=2), Protection(TRAIL, trail_pct=2, qty=1))))
+    return {o.price or o.trail_pct: o.id for o in exits(broker)}
+
+
+def test_outlook_predicts_the_tp_closes(broker):
+    """Tahmin TP'lerin gerçek kapanışıyla aynıdır: sıra fiyata yakından, miktarsız TP kalanı kapatır, kayma ve
+    komisyon dahil. Paneldeki "dolarsa" tutarı gerçekte yazılan net'ten ayrışamaz."""
+    ids = _guarded(broker)
+    got = {x.order_id: x for x in broker.outlook(pos(broker))}
+    price(broker, 110)
+    price(broker, 120)
+    t1, t2 = broker.ledger.trades(broker.account_id)
+    assert (got[ids[110]].qty, got[ids[120]].qty) == (1, 2)
+    assert (got[ids[110]].net, got[ids[120]].net) == (pytest.approx(t1.net), pytest.approx(t2.net))
+
+
+def test_outlook_predicts_the_stop_closes(broker):
+    """Stoplar TP'lerden ayrı, kendi sıralarıyla tahmin edilir. İzin seviyesi emrin en iyi fiyatından bugün hesaplanır,
+    fiyata en yakın stop önce kapatır."""
+    ids = _guarded(broker)
+    got = {x.order_id: x for x in broker.outlook(pos(broker))}
+    assert got[ids[2]].level == pytest.approx(98)
+    mark(broker, 96)
+    t1, t2 = broker.ledger.trades(broker.account_id)
+    assert (got[ids[2]].qty, got[ids[97]].qty) == (1, 2)
+    assert (got[ids[2]].net, got[ids[97]].net) == (pytest.approx(t1.net), pytest.approx(t2.net))
+    assert None not in got
+
+
+def test_outlook_puts_the_liquidation_before_a_stop_beyond_it(broker):
+    """Likidasyonun ötesindeki SL hiçbir zaman dolmaz. Tahmin önce likidasyonu koyar, SL'nin tutarı sıfır olur."""
+    run(broker, buy(3, protection=(Protection(STOP, price=90),)))
+    liq, sl = broker.outlook(pos(broker))
+    mark(broker, 89)
+    t = broker.ledger.trades(broker.account_id)[0]
+    assert (liq.order_id, liq.qty, sl.qty) == (None, 3, 0)
+    assert (t.reason, liq.net) == ("liquidation", pytest.approx(t.net))
+
+
+def test_outlook_of_a_stop_after_a_full_close_is_zero(broker):
+    """Önündeki emir pozisyonun tamamını kapatıyorsa sonraki emir hiçbir şey kapatmaz, tutarı iki kez sayılmaz."""
+    run(broker, buy(1, protection=(Protection(STOP, price=95), Protection(STOP, price=90))))
+    got = sorted(broker.outlook(pos(broker)), key=lambda x: -x.level)
+    assert (got[0].qty, got[1].qty, got[1].net) == (1, 0, 0)

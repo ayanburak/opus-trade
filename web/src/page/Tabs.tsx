@@ -2,7 +2,7 @@
  * file: Tabs.tsx
  * importable: Tabs
  *
- * Grafiğin altındaki sekmeler: açık pozisyonlar, bekleyen emirler, Opus'un
+ * Grafiğin altındaki sekmeler: açık pozisyonlar ve tıklanınca açılan detayları, bekleyen emirler, Opus'un
  * alarmları, kapanmış işlemler ve özkaynak eğrisi. Dar ekranda günlük de
  * buraya ilk sekme olarak gelir, journal verilirse gösterilir ve ilk açılan odur.
  *
@@ -10,13 +10,14 @@
  */
 
 import { createChart, LineStyle, type UTCTimestamp } from "lightweight-charts";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Account } from "../api/types";
 import { chartTime } from "../shared/chart";
 import { dayClock, duration, money, num, qty, signed } from "../shared/format";
 import { REASONS, orderName } from "../shared/labels";
 import type { EquityPoint, Order, Trade } from "../shared/types";
 import { exitText, exitsOf, requestText } from "../shared/orders";
+import { PositionDetail } from "../shared/position/PositionDetail";
 
 type Tab = "journal" | "positions" | "orders" | "alerts" | "trades" | "equity";
 
@@ -24,9 +25,13 @@ const exits = (os: Order[]) => (os.length ? os.map((o) => <div key={o.id}>{exitT
 
 const Side = ({ side }: { side: string }) => <span className={`strong ${side === "long" ? "up" : "down"}`}>{side}</span>;
 
+// Satıra tıklanınca altında detay kartı açılır. Açık kart hesap her
+// yenilendiğinde canlı kalır, pozisyonun kimliğiyle tutulur.
 function Positions({ account }: { account: Account }) {
+  const [open, setOpen] = useState<Set<number>>(new Set());
   const ps = account.state.positions;
   if (!ps.length) return <div className="empty">Açık pozisyon yok.</div>;
+  const toggle = (id: number) => setOpen((s) => { const n = new Set(s); if (!n.delete(id)) n.add(id); return n; });
   return (
     <table className="grid" style={{ minWidth: 820 }}>
       <thead><tr><th>Pozisyon</th><th className="num">Miktar</th><th className="num">Giriş</th><th className="num">Güncel</th>
@@ -35,8 +40,13 @@ function Positions({ account }: { account: Account }) {
         {ps.map((p) => {
           const { tp, stop } = exitsOf(account.state.orders, p);
           return (
-            <tr key={p.id}>
-              <td className="nowrap">{p.symbol} <Side side={p.side} /> · {account.state.leverages[p.symbol] ?? "—"}x</td>
+            <Fragment key={p.id}>
+            <tr>
+              <td className="nowrap">
+                <button className="pd-toggle" aria-expanded={open.has(p.id)} onClick={() => toggle(p.id)}>
+                  {p.symbol} <Side side={p.side} /> · {account.state.leverages[p.symbol] ?? "—"}x
+                </button>
+              </td>
               <td className="num">{qty(p.qty)}</td>
               <td className="num">{num(p.entry_price)}</td>
               <td className="num">{num(account.prices[p.symbol])}</td>
@@ -45,6 +55,13 @@ function Positions({ account }: { account: Account }) {
               <td className="num dim">{num(p.liq_price)}</td>
               <td className={`num ${p.open_pnl == null ? "" : p.open_pnl >= 0 ? "up" : "down"}`}>{signed(p.open_pnl)}</td>
             </tr>
+            {open.has(p.id) && (
+              <tr className="pd-row"><td colSpan={8}>
+                <PositionDetail position={p} orders={account.state.orders} price={account.prices[p.symbol]}
+                                leverage={account.state.leverages[p.symbol]} />
+              </td></tr>
+            )}
+            </Fragment>
           );
         })}
       </tbody>
