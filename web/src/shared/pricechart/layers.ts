@@ -17,12 +17,17 @@ import type { Alert, Order, Position, Trade } from "../types";
 /** Grafikte ayrı ayrı gizlenebilen katmanlar. */
 export type Layer = "entry" | "tp" | "sl" | "liq" | "order" | "alarm" | "marks";
 
-/** Katmanın açıklama satırındaki adı, rengini veren CSS değişkeni ve çizgi biçimi. marks fiyat çizgisi değil işarettir. */
-export interface LayerSpec { key: Layer; label: string; color: string; style: "solid" | "dotted" | "dashed" | "sparse" | "marks" }
+/**
+ * Katmanın açıklama satırındaki adı, rengini veren CSS değişkeni ve çizgi biçimi. marks fiyat çizgisi değil işarettir.
+ * colors verilmişse katmanın çizgileri bu renklerden birini alır, açıklama satırı hepsini gösterir.
+ */
+export interface LayerSpec {
+  key: Layer; label: string; color: string; colors?: string[]; style: "solid" | "dotted" | "dashed" | "sparse" | "marks";
+}
 
 /** Grafiğin katmanları. Açıklama satırı ve filtre menüsü bu sırayla çizilir. */
 export const LAYERS: LayerSpec[] = [
-  { key: "entry", label: "giriş", color: "--entry", style: "solid" },
+  { key: "entry", label: "giriş", color: "--entry", colors: ["--long", "--short"], style: "solid" },
   { key: "tp", label: "TP", color: "--tp", style: "solid" },
   { key: "sl", label: "SL", color: "--sl", style: "solid" },
   { key: "liq", label: "likidasyon", color: "--dim", style: "dotted" },
@@ -67,10 +72,11 @@ export function readHidden(raw: string | null): Set<Layer> {
 
 /**
  * Grafikteki bir fiyat çizgisi. key çizimler arasında aynı çizgiyi tanır. Çizgi ait olduğu pozisyonu, emri ya da
- * alarmı taşır, tp kaçıncı TP kademesi olduğudur. Düzenlenebilen grafik sürüklemeyi bunlarla öneriye çevirir.
+ * alarmı taşır, tp kaçıncı TP kademesi olduğudur. Düzenlenebilen grafik sürüklemeyi bunlarla öneriye çevirir. color
+ * verilmişse çizgi katmanın rengi yerine onu alır, giriş çizgisi pozisyonun yönünü böyle gösterir.
  */
 export interface PriceLine {
-  key: string; layer: Layer; price: number; title: string;
+  key: string; layer: Layer; price: number; title: string; color?: string;
   position?: Position; tp?: number; order?: Order; alert?: Alert;
 }
 
@@ -79,7 +85,8 @@ export function priceLines(symbol: string, positions: Position[], orders: Order[
                            hidden: ReadonlySet<Layer>): PriceLine[] {
   const out: PriceLine[] = [];
   for (const p of positions.filter((x) => x.symbol === symbol)) {
-    out.push({ key: `e${p.id}`, layer: "entry", price: p.entry_price, title: `#${p.number} ${p.side} giriş`, position: p });
+    out.push({ key: `e${p.id}`, layer: "entry", price: p.entry_price, title: `#${p.number} ${p.side} giriş`, position: p,
+              color: p.side === "long" ? "--long" : "--short" });
     p.tp_levels.forEach((l, i) => out.push({ key: `t${p.id}-${i}`, layer: "tp", price: l.price,
                                               title: `#${p.number} TP %${num(l.pct, 0)}`, position: p, tp: i }));
     if (p.sl != null) out.push({ key: `s${p.id}`, layer: "sl", price: p.sl, title: `#${p.number} SL`, position: p });

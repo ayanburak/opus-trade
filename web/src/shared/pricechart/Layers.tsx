@@ -32,9 +32,12 @@ export function useHiddenLayers(key: string): [Set<Layer>, (hidden: Set<Layer>) 
 }
 
 // Örnek çizgi grafikteki çizgiyle aynı oranda soluktur, işaretler soluklaşmaz.
+// Renkleri yöne göre değişen katman her rengini ayrı örnekle gösterir.
 function Swatch({ layer }: { layer: LayerSpec }) {
   const pct = layer.style === "marks" ? 100 : Math.round((1 - LINE_DIM) * 100);
-  return <i className={`swatch ${layer.style}`} style={{ color: `color-mix(in srgb, var(${layer.color}) ${pct}%, var(--card))` }} />;
+  return <>{(layer.colors ?? [layer.color]).map((c) => (
+    <i key={c} className={`swatch ${layer.style}`} style={{ color: `color-mix(in srgb, var(${c}) ${pct}%, var(--card))` }} />
+  ))}</>;
 }
 
 interface Props {

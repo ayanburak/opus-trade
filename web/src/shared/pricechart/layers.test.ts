@@ -37,6 +37,13 @@ describe("grafik katmanları", () => {
     expect(lines.map((l) => [l.layer, l.price])).toEqual([["entry", 100], ["tp", 110], ["sl", 95], ["liq", 80], ["order", 120], ["alarm", 130]]);
   });
 
+  it("giriş çizgisi pozisyonun yönünü renginden belli eder, diğer çizgiler katmanın rengini alır", () => {
+    const short = { ...pos, id: 4, side: "short" } as Position;
+    const lines = priceLines("BTCUSDT", [pos, short], [order], [], new Set());
+    expect(lines.filter((l) => l.layer === "entry").map((l) => l.color)).toEqual(["--long", "--short"]);
+    expect(lines.filter((l) => l.layer !== "entry").every((l) => l.color === undefined)).toBe(true);
+  });
+
   it("çizgi kaynağını taşır, böylece sürüklenen çizgi doğru pozisyona, emre ya da alarma bağlanır", () => {
     const lines = priceLines("BTCUSDT", [pos], [order], [alert], new Set());
     const tp = lines.find((l) => l.layer === "tp")!;

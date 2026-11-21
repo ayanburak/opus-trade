@@ -33,7 +33,7 @@
   --warn-bg: #241C10; --warn-edge: #3B2C14; --warn-title: #F7D6A6; --warn-text: #CDB58F; --warn-chip: #2A2113; --warn: #F5C27A;
   --critical: #E8894A; --critical-text: #1A0F06;
   --run-bg: #16304F; --run: #9CC4FF; --pause-bg: #2B2E36; --pause: #C7CDD8; --arch-bg: #1C1F25; --arch: #7D8696;
-  --entry: #C7CDD8; --tp: #7FD3A0; --sl: #E8806B; --order: #F5C27A; --alarm: #B9A6FF;
+  --entry: #C7CDD8; --long: #0ECB81; --short: #F6465D; --tp: #7FD3A0; --sl: #E8806B; --order: #F5C27A; --alarm: #B9A6FF;
   --mono: "JetBrains Mono", ui-monospace, monospace;
   color-scheme: dark;
 }

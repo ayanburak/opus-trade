@@ -141,7 +141,7 @@ export function PriceChart({ symbol, interval, load, subscribe, positions, order
     drawn.current.forEach((d) => s.removePriceLine(d.line));
     drawn.current = priceLines(symbol, positions, orders, alerts, hidden).map((spec) => {
       const layer = LAYERS.find((l) => l.key === spec.layer)!;
-      return { spec, line: s.createPriceLine({ price: spec.price, color: dimColor(css(layer.color), card, LINE_DIM), lineWidth: 2,
+      return { spec, line: s.createPriceLine({ price: spec.price, color: dimColor(css(spec.color ?? layer.color), card, LINE_DIM), lineWidth: 2,
                                                lineStyle: STYLES[layer.style], axisLabelVisible: true, title: spec.title }) };
     });
   }, [symbol, positions, orders, alerts, hidden]);
