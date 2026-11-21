@@ -29,6 +29,7 @@ import { status, summary } from "./page/model";
 import { Tabs } from "./page/Tabs";
 import { INTERVALS } from "./shared/chart";
 import { money, num, pct, signed } from "./shared/format";
+import { gate, movesAccount } from "./shared/live";
 import { Expand, useFullscreen } from "./shared/pricechart/fullscreen";
 import { Filter, Legend, useHiddenLayers } from "./shared/pricechart/Layers";
 import { PriceChart } from "./shared/pricechart/PriceChart";
@@ -37,6 +38,7 @@ import type { Candle, EquityPoint, Trade } from "./shared/types";
 import { useHeightVar } from "./shared/useHeightVar";
 
 const POLL_MS = 30_000;
+const LIVE_MS = 3_000;
 const PAGE = 50;
 const WIDE = "(min-width: 1180px)";
 const DOCS = import.meta.env.BASE_URL + "details/";
@@ -152,8 +154,14 @@ export function App() {
     return () => clearInterval(id);
   }, [all, loadProfile]);
 
+  // Pozisyonu olan paritenin mumu gelince hesap en fazla üç saniyede bir yenilenir, live.ts.
+  const accountRef = useRef(account);
+  accountRef.current = account;
+  const [tick] = useState(() => gate(LIVE_MS));
   useStream((e) => {
-    if ("journal" in e) {
+    if (movesAccount(e, accountRef.current?.state.positions ?? [])) {
+      if (tick()) void loadAccount();
+    } else if ("journal" in e) {
       setThinking(false); setTools([]);
       void loadJournal(); void loadProfile(); void loadAccount();
     } else if ("tool" in e) {
