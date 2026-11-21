@@ -62,6 +62,16 @@ class MarketData(ABC):
         """
 
     @abstractmethod
+    async def mark_candles(self, symbol: str, start: int, end: int) -> list[Candle]:
+        """Mark fiyatının start ile end arasında açılan dakikalık mumlarını eskiden yeniye döndürür.
+
+        Hacim alanları sıfırdır, mark fiyatının hacmi yoktur.
+
+        Raises:
+            MarketDataError: Veri alınamazsa.
+        """
+
+    @abstractmethod
     async def daily_stats(self, symbol: str) -> DailyStats:
         """Son yirmi dört saatin değişimini, uçlarını ve dolar hacmini döndürür."""
 

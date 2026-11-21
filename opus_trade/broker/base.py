@@ -96,14 +96,29 @@ class Broker(ABC):
 class PriceDriven(ABC):
     @abstractmethod
     def on_price(self, symbol: str, high: float, low: float, last: float, time: int) -> list[AccountEvent]:
-        """Son kontrolden bu yana görülen en yüksek ve en düşük fiyatla hesabı işler.
+        """Son işlem fiyatının son kontrolden bu yana aralığıyla TP'leri ve bekleyen emirleri işler.
 
         Args:
             symbol: Fiyatı gelen parite.
             high: Aralığın en yüksek fiyatı.
             low: Aralığın en düşük fiyatı.
-            last: Son fiyat, piyasa emirleri ve özkaynak bununla hesaplanır.
+            last: Son fiyat, piyasa emirleri bununla gerçekleşir.
             time: Unix saniye.
+        """
+
+    @abstractmethod
+    def on_mark(self, symbol: str, high: float, low: float, mark: float, time: int,
+                fill: float | None) -> list[AccountEvent]:
+        """Mark fiyatının son kontrolden bu yana aralığıyla SL'yi, iz süren stopu ve likidasyonu işler.
+
+        Args:
+            symbol: Fiyatı gelen parite.
+            high: Aralığın en yüksek mark fiyatı.
+            low: Aralığın en düşük mark fiyatı.
+            mark: Güncel mark fiyatı, özkaynak bununla hesaplanır.
+            time: Unix saniye.
+            fill: SL'nin gerçekleşeceği son işlem fiyatı. None ise SL kendi seviyesinden gerçekleşir, o anın son
+                fiyatı bilinmediğinde, örneğin kapalı geçen dakikalar işlenirken.
         """
 
     @abstractmethod

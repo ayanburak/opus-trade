@@ -51,6 +51,21 @@ def test_candles_with_range_fetch_every_minute_across_pages():
     assert len(calls) == 3
 
 
+def test_mark_candles_come_from_the_mark_endpoint_across_pages():
+    """Kapalı geçen dakikalarda SL mark mumlarıyla işlenir. Yanlış uçtan gelen son fiyat mumu SL'yi iğneyle
+    çalıştırır, eksik sayfa ise bir dakikanın SL'sini kaçırır."""
+    minutes = [T0 + i * 60 for i in range(1600)]
+    calls, paths = [], set()
+    inner = _klines_handler(minutes, calls)
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        paths.add(req.url.path)
+        return inner(req)
+    out = run(handler, lambda b: b.mark_candles("BTCUSDT", start=T0, end=T0 + 1600 * 60))
+    assert [c.time for c in out] == minutes
+    assert paths == {"/fapi/v1/markPriceKlines"} and len(calls) == 2 and calls[0]["interval"] == "1m"
+
+
 def test_candle_fields_keep_quote_volume_and_trade_count():
     """Toplayıcı ve araştırma dolar hacmini ve işlem sayısını kullanır. Sütunlar kayarsa veri sessizce bozulur."""
     out = run(_klines_handler([T0], []), lambda b: b.candles("BTCUSDT", "1m", start=T0, end=T0 + 60))

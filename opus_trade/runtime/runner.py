@@ -140,6 +140,7 @@ class ProfileRunner:
         self.feed = feed or (lambda: ({}, []))
         self.delivered = delivered or (lambda ids: None)
         self.prices: dict[str, float] = {}
+        self.marks: dict[str, float] = {}
         self.busy = False
         self.retiring = False
         self.retry_at = 0
@@ -227,12 +228,24 @@ class ProfileRunner:
         if closed:
             self.state.set_setting(f"price_seen:{self.pid}:{candle.symbol}", candle.time)
 
+    # Mark fiyatı saniyede bir tek değer olarak gelir, aralığın iki ucu da odur.
+    # SL o anın son fiyatından dolar.
+    def on_mark(self, symbol: str, mark: float, time: int) -> None:
+        if symbol not in self.symbols:
+            return
+        self.marks[symbol] = mark
+        if isinstance(self.broker, PriceDriven):
+            self._account(self.broker.on_mark(symbol, mark, mark, mark, time, self.prices.get(symbol)))
+
     def on_liquidation(self, liq: Liquidation) -> None:
         for t in self.triggers:
             self._fire(t.on_liquidation(liq))
 
     # Program kapalıyken ya da akış kopukken geçen dakikalar REST'ten çekilip
-    # sırayla işlenir. Kaçan bir dakikadaki SL ya da TP böylece kaybolmaz.
+    # sırayla işlenir. Kaçan bir dakikadaki SL ya da TP böylece kaybolmaz. Her
+    # dakikada önce mark mumu, sonra son fiyat mumu işlenir, yani SL önce gelir.
+    # O dakikanın hangi anında tetiklendiği bilinmediği için SL kendi
+    # seviyesinden dolar.
     async def catch_up(self) -> None:
         if not isinstance(self.broker, PriceDriven):
             return
@@ -243,7 +256,11 @@ class ProfileRunner:
             if seen is None or seen + 60 >= end:
                 continue
             candles = await self.market.candles(s, "1m", start=seen + 60, end=end)
+            marks = {m.time: m for m in await self.market.mark_candles(s, start=seen + 60, end=end)}
             for c in candles:
+                if m := marks.get(c.time):
+                    self._account(self.broker.on_mark(s, m.high, m.low, m.close, c.time + 59, None))
+                    self.marks[s] = m.close
                 self._account(self.broker.on_price(s, c.high, c.low, c.close, c.time + 59))
                 self.prices[s] = c.close
             if candles:
@@ -327,7 +344,8 @@ class ProfileRunner:
         trades = self.ledger.trades(self.broker.account_id)
         nets = [t.net for t in trades]
         return Context(now=now, wakes=wakes, state=self.broker.state(), prices=dict(self.prices),
-                       symbols=self.symbols, market=self.market, memory=self.journal.memory(self.pid),
+                       marks=dict(self.marks), symbols=self.symbols, market=self.market,
+                       memory=self.journal.memory(self.pid),
                        history=self.journal.recent(self.pid, self.history),
                        admin=admin,
                        alerts=self.alerts.alerts,
@@ -352,7 +370,8 @@ class ProfileRunner:
                     a = self.alerts.add(op["symbol"], op["price"], self.prices[op["symbol"]], op["note"],
                                         str(Actor.STRATEGY), now)
                     self.state.add_alert(self.pid, a)
-                    results.append(ActionResult(label, True, f"alarm #{a.number} {a.symbol} {numbers.price(a.price)} kuruldu."))
+                    results.append(ActionResult(label, True,
+                                                f"alarm #{a.number} {a.symbol} {numbers.price(a.price)} kuruldu."))
                 else:
                     a = self.alerts.cancel(op["number"])
                     self.state.resolve_alert(self.pid, a.number, "cancelled", now)

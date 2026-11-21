@@ -67,6 +67,7 @@ class Context:
         wakes: Bu uyanmanın nedenleri, eskiden yeniye.
         state: Hesabın hali.
         prices: Paritelerin son fiyatları.
+        marks: Paritelerin mark fiyatları. SL, iz süren stop ve likidasyon buna bakar.
         symbols: Profilin işlem yapabildiği pariteler.
         market: Piyasa verisi.
         memory: Stratejinin önceki uyanmadan bıraktığı hafıza.
@@ -84,6 +85,7 @@ class Context:
     prices: dict[str, float]
     symbols: tuple[str, ...]
     market: MarketData
+    marks: dict[str, float] = field(default_factory=dict)
     memory: dict[str, Any] = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
     admin: dict[str, list[str]] = field(default_factory=dict)

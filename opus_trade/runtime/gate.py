@@ -3,9 +3,9 @@ file: gate.py
 importable: Gate, RestrictionSource, Restriction
 
 Gate hesabı değiştiren her komutun geçtiği tek kapıdır. Komuttaki fiyatları
-önce paritenin fiyat adımına oturtur. submit() komutu sırayla risk korumasına ve yalnızca stratejinin komutlarında kesin kısıtlara
-göre denetler, geçerse broker'a iletir, olan değişiklikleri olay yoluna yayar
-ve döndürür. Reddedilen komutta RuleError fırlatır, mesajı reddin nedenidir.
+önce paritenin fiyat adımına oturtur. submit() komutu sırayla risk korumasına
+ve yalnızca stratejinin komutlarında kesin kısıtlara göre denetler, geçerse
+broker'a iletir, olan değişiklikleri olay yoluna yayar ve döndürür. Reddedilen komutta RuleError fırlatır, mesajı reddin nedenidir.
 
 description: Bir hesabın komutlarını denetleyip broker'a ileten kapı.
 """

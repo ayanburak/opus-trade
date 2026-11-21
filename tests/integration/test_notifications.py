@@ -51,9 +51,9 @@ async def test_account_events_get_the_right_level(api):
     """SL ile kapanış önemli, likidasyon kritiktir. Likidasyon önemli sayılırsa sessiz saatlerde hiç çalmaz."""
     pid, r = await api.running(FLAKY)
     await open_long(api, pid, sl=95)
-    r.on_candle(candle(T + 60, 94), False)
+    r.on_mark(SOL, 94, T + 60)
     await open_long(api, pid)
-    r.on_candle(candle(T + 120, 80), False)
+    r.on_mark(SOL, 80, T + 120)
     got = [(n["level"], n["kind"]) for n in await notes(api)]
     assert got == [("important", "opened"), ("important", "sl"), ("important", "opened"),
                    ("critical", "liquidation")]

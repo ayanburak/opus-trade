@@ -3,8 +3,9 @@ file: paper.py
 importable: PaperBroker
 
 PaperBroker kâğıt hesaptır. Komutları domain.rules'taki Binance kurallarıyla
-uygular, durumunu Ledger'a yazar ve fiyat geldikçe on_price() ile TP, SL, iz
-süren stop, likidasyon ve emir tetiklerini, on_funding() ile fonlamayı işler.
+uygular, durumunu Ledger'a yazar. Son işlem fiyatı geldikçe on_price() ile TP
+ve emir tetiklerini, mark fiyatı geldikçe on_mark() ile SL, iz süren stop ve
+likidasyonu, on_funding() ile fonlamayı işler.
 Her komut ve her fiyat kontrolü tek bir işlemde yazılır, yarıda kalan bir
 değişiklik deftere geçmez.
 
@@ -13,11 +14,11 @@ description: Binance USDⓈ-M kurallarıyla simüle edilen kâğıt hesap.
 
 # NOTE: Fiyat kontrolü tek bir fiyatla değil son kontrolden bu yana görülen en
 # yüksek ve en düşük fiyatla yapılır, iki güncelleme arasındaki iğneler de
-# yakalanır. Aralığın içinde fiyatın önce hangi uca gittiği bilinmediği için
-# temkinli sıra izlenir: önce zarar tarafı, sonra TP kademeleri, en son en iyi
-# fiyat ve iz süren stop. Böylece aynı aralıktaki yükseliş kendi stopunu aynı
-# anda tetikleyemez. Zarar tarafında SL ile likidasyondan fiyatın önce vardığı
-# seçilir, ikisi eşitse SL.
+# yakalanır. Her emir Binance'teki gibi kendi fiyatına bakar: TP ve emir
+# tetiği son işlem fiyatına, SL, iz ve likidasyon mark fiyatına, Burak'ın
+# 21.11 kararı. Aynı dakika sonradan işlenirken önce mark, sonra son fiyat
+# işlenir, yani SL TP'den önce gelir. Zarar tarafında SL ile likidasyondan
+# fiyatın önce vardığı seçilir, ikisi eşitse SL.
 #
 # NOTE: Piyasa komutları son gelen fiyatla uygulanır. Bir paritenin fiyatı
 # henüz gelmediyse komut reddedilir, eski sistemde açılışın ilk saniyelerinde
@@ -92,11 +93,14 @@ class PaperBroker(Broker, PriceDriven):
         self.fees = fees
         self.clock = clock
         self.prices: dict[str, float] = {}
+        self.marks: dict[str, float] = {}
 
     # --- Durum ---
 
+    # Açık kâr Binance'teki gibi mark fiyatıyla hesaplanır. Mark henüz
+    # gelmediyse son fiyat, o da yoksa giriş fiyatı kullanılır.
     def _mark(self, p: Position) -> float:
-        return self.prices.get(p.symbol, p.entry_price)
+        return self.marks.get(p.symbol, self.prices.get(p.symbol, p.entry_price))
 
     def state(self) -> AccountState:
         cash = self.ledger.cash(self.account_id)
@@ -360,27 +364,64 @@ class PaperBroker(Broker, PriceDriven):
     def on_price(self, symbol: str, high: float, low: float, last: float, time: int) -> list[AccountEvent]:
         self.prices[symbol] = last
         with self.ledger.atomic():
-            events = [*self._check_positions(symbol, high, low, time), *self._check_orders(symbol, high, low, time)]
+            events = [*self._check_tp(symbol, high, low, time), *self._check_orders(symbol, high, low, time)]
             for e in events:
                 self.ledger.log_event(e)
         return events
 
-    def _check_positions(self, symbol: str, high: float, low: float, time: int) -> list[AccountEvent]:
+    def on_mark(self, symbol: str, high: float, low: float, mark: float, time: int,
+                fill: float | None) -> list[AccountEvent]:
+        self.marks[symbol] = mark
+        with self.ledger.atomic():
+            events = self._check_stops(symbol, high, low, time, fill)
+            for e in events:
+                self.ledger.log_event(e)
+        return events
+
+    # SL, iz süren stop ve likidasyon Binance'teki gibi mark fiyatına bakar.
+    # Likidasyon kendi seviyesinden olur ve marjinin tamamı gider. SL bir
+    # stop-market emridir, tetiklendiği anın son fiyatından kaymayla dolar. Son
+    # fiyat SL'nin ötesine sıçradıysa dolum da oradadır. fill None ise o anın
+    # son fiyatı bilinmez ve SL kendi seviyesinden dolar.
+    #
+    # Pozisyonun gördüğü en iyi ve en kötü fiyat da mark fiyatıdır, iz süren
+    # stop en iyi fiyattan hesaplanır. Bu aralıkta yükselen iz ancak bir sonraki
+    # fiyatla tetikleyebilir, aynı aralık hem stopu taşıyıp hem tetiklemez.
+    def _check_stops(self, symbol: str, high: float, low: float, time: int,
+                     fill: float | None) -> list[AccountEvent]:
         events = []
         for p in self.ledger.positions(self.account_id, symbol):
             long = p.side is Side.LONG
             worst, best = (low, high) if long else (high, low)
-            crossed = (lambda s: worst <= s) if long else (lambda s: worst >= s)
-            reached = (lambda s: best >= s) if long else (lambda s: best <= s)
-
             stops = ([("sl", p.sl)] if p.sl else []) + [("liquidation", p.liq_price)]
             kind, level = (max if long else min)(stops, key=lambda x: x[1])
-            if crossed(level):
-                t = self._close(p, p.qty, level, time, kind, maker=False)
+            if (worst <= level) if long else (worst >= level):
+                at = fill if kind == "sl" and fill is not None else level
+                t = self._close(p, p.qty, at, time, kind, maker=False)
                 events.append(self._event(EventKind.CLOSED, Actor.SYSTEM, p, time, price=t.exit_price, trade=t,
                                           reason=kind))
                 continue
+            changes: dict = {}
+            top = _better(p.side, p.best_price, best)
+            if top != p.best_price:
+                changes.update(best_price=top, best_time=time)
+            bottom = _worse(p.side, p.worst_price, worst)
+            if bottom != p.worst_price:
+                changes.update(worst_price=bottom, worst_time=time)
+            if p.trail_pct:
+                trail = rules.trail_level(p.side, top, p.trail_pct)
+                if not p.sl or (trail > p.sl if long else trail < p.sl):
+                    changes["sl"] = trail
+            if changes:
+                self.ledger.update_position(p.id, **changes)
+        return events
 
+    # TP kademeleri son işlem fiyatına bakar ve seviyesinden dolar.
+    def _check_tp(self, symbol: str, high: float, low: float, time: int) -> list[AccountEvent]:
+        events = []
+        for p in self.ledger.positions(self.account_id, symbol):
+            best = high if p.side is Side.LONG else low
+            reached = (lambda x: best >= x) if p.side is Side.LONG else (lambda x: best <= x)
             levels, closed = list(p.tp_levels), False
             while levels and reached(levels[0].price):
                 lv = levels.pop(0)
@@ -392,24 +433,9 @@ class PaperBroker(Broker, PriceDriven):
                 closed = t.qty >= current.qty
                 if closed:
                     break
-            if closed:
-                continue
-
-            changes: dict = {}
-            if len(levels) != len(p.tp_levels):
-                changes["tp_levels"] = rules.tp_shares(tuple(levels), self.ledger.position(p.id).qty)
-            top = _better(p.side, p.best_price, best)
-            if top != p.best_price:
-                changes.update(best_price=top, best_time=time)
-            bottom = _worse(p.side, p.worst_price, worst)
-            if bottom != p.worst_price:
-                changes.update(worst_price=bottom, worst_time=time)
-            if p.trail_pct:
-                level = rules.trail_level(p.side, top, p.trail_pct)
-                if not p.sl or (level > p.sl if long else level < p.sl):
-                    changes["sl"] = level
-            if changes:
-                self.ledger.update_position(p.id, **changes)
+            if not closed and len(levels) != len(p.tp_levels):
+                self.ledger.update_position(p.id, tp_levels=rules.tp_shares(tuple(levels),
+                                                                            self.ledger.position(p.id).qty))
         return events
 
     def _check_orders(self, symbol: str, high: float, low: float, time: int) -> list[AccountEvent]:

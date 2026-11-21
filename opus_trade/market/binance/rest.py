@@ -141,6 +141,11 @@ class BinanceRest(MarketData):
                                     symbol=symbol, interval=interval)
         return [_candle(symbol, k) for k in raw]
 
+    # Mark mumu Binance'te kline biçimindedir, hacim alanları sıfır gelir.
+    async def mark_candles(self, symbol: str, start: int, end: int) -> list[Candle]:
+        raw = await self._pages("/fapi/v1/markPriceKlines", start, end, 60, _KLINE_LIMIT, symbol=symbol, interval="1m")
+        return [_candle(symbol, k) for k in raw]
+
     async def exchange_info(self) -> dict:
         return await self._get("/fapi/v1/exchangeInfo")
 

@@ -8,7 +8,8 @@ istatistikleri istenen aralık için üretir ve her isteği calls listesine
 yazar. Bir sembolü fail kümesine eklemek o sembolün isteklerini
 MarketDataError ile düşürür. oldest verilirse ondan eski bir başlangıç da
 Binance'teki gibi MarketDataError alır. minutes paritelerin dakikalık
-mumlarıdır, candles() aralıktakileri döndürür. catalog() masanın paritelerini
+mumlarıdır, candles() aralıktakileri döndürür. marks mark fiyatının dakikalık
+mumlarıdır, mark_candles() aralıktakileri döndürür. catalog() masanın paritelerini
 tests/fixtures'daki exchangeInfo kopyasından ve paketin kademe tablosundan kurar,
 testler Binance'e çıkmaz.
 
@@ -56,6 +57,7 @@ class FakeMarket(MarketData):
         self.premiums: list[Premium] = []
         self.oldest: int | None = None
         self.minutes: dict[str, list[Candle]] = {}
+        self.marks: dict[str, list[Candle]] = {}
 
     def _record(self, name: str, symbol: str, start: int | None, end: int | None) -> None:
         self.calls.append((name, symbol, start, end))
@@ -87,6 +89,9 @@ class FakeMarket(MarketData):
     # Yalnızca kapalı süre işlenirken istenen dakikalık mumlar verilir.
     async def candles(self, symbol, interval, limit=500, start=None, end=None):
         return [c for c in self.minutes.get(symbol, []) if start <= c.time < end]
+
+    async def mark_candles(self, symbol, start, end):
+        return [c for c in self.marks.get(symbol, []) if start <= c.time < end]
 
     async def funding_history(self, symbol, start=None, end=None, limit=1000):
         return []

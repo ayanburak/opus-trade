@@ -101,7 +101,8 @@ async def _card(market: MarketData, liq_db: Path, symbol: str, last: float, now:
     p = prem[0]
     lines = [
         f"## {symbol}",
-        f"Fiyat {price(last)}. 24 saatte yüzde {day.change_pct:+.2f}, 7 günde yüzde {change_7d:+.2f}. "
+        f"Fiyat {price(last)}, mark fiyatı {price(p.mark)}. 24 saatte yüzde {day.change_pct:+.2f}, 7 günde "
+        f"yüzde {change_7d:+.2f}. "
         f"24 saatlik hacim {day.quote_volume / 1e6:.0f} milyon dolar. Günlük oynaklık, ATR14, yüzde "
         f"{g1d['atr14'] / g1d['close'] * 100:.2f}.",
         f"Fonlama tahmini yüzde {p.est_funding * 100:.4f}, sıradaki fonlama {clock(p.next_funding)}.",

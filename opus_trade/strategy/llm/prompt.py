@@ -40,7 +40,7 @@ from . import actions
 from .hours import hours_text
 from .texts import TZ_LABEL, clock, date_text, event_text, fire_text, levels_text, price
 
-TEMPLATE_VERSION = 3
+TEMPLATE_VERSION = 4
 
 VIEWS = ["yukselis", "dusus", "yatay", "belirsiz"]
 
@@ -124,12 +124,16 @@ miktarı pozisyon miktarının o yüzdesidir, miktar adımına aşağı yuvarlan
 Küçük bir pozisyonda kademe sayısını azaltırsın ya da tek TP kullanırsın, yoksa istek reddedilir. Kademenin \
 miktarı kurulurken sabitlenir. Pozisyon kısmen kapanınca, ekleme yapılınca ya da bir kademe dolunca hesap \
 bölümündeki yüzdeler kademenin kalan pozisyondaki güncel payını gösterir.
-- İz süren stop: Pozisyonun açıldığından beri gördüğü en iyi fiyattan verdiğin yüzde kadar geride durur ve fiyat \
-lehine gittikçe SL'yi kendiliğinden taşır. Yüzde 0.1 ile 10 arasında olur. Sonradan eklersen de bu en iyi fiyattan hesaplanır, her pozisyonun \
-gördüğü en iyi fiyat sana bildirilir. Hesaplanan seviye fiyatın gerisinde kalacaksa, yani stop hemen \
-tetiklenecekse, istek reddedilir. SL ile birlikte kullanılabilir, hangisi fiyata daha yakınsa o geçerlidir.
-- TP, SL, iz süren stop ve likidasyon fiyat oraya değdiği an uygulanır, senin çağrılmanı beklemez. Bir mum içinde \
-hem TP hem SL görülürse SL uygulanır.
+- İz süren stop: Pozisyonun açıldığından beri gördüğü en iyi mark fiyatından verdiğin yüzde kadar geride durur \
+ve fiyat lehine gittikçe SL'yi kendiliğinden taşır. Yüzde 0.1 ile 10 arasında olur. Sonradan eklersen de bu en \
+iyi fiyattan hesaplanır, her pozisyonun gördüğü en iyi mark fiyatı sana bildirilir. Hesaplanan seviye fiyatın \
+gerisinde kalacaksa, yani stop hemen tetiklenecekse, istek reddedilir. SL ile birlikte kullanılabilir, hangisi \
+fiyata daha yakınsa o geçerlidir.
+- TP son işlem fiyatı oraya değdiği an uygulanır. SL, iz süren stop ve likidasyon ise mark fiyatına bakar, mark \
+fiyatı oraya değdiği an uygulanır. Mark fiyatı Binance'in birçok borsanın fiyatından hesapladığı adil fiyattır, \
+yalnızca bu borsada görülen kısa iğneler onu oynatmaz. Grafikteki mumlar son işlem fiyatıdır, bir iğnenin SL'ye \
+değmesi SL'yi çalıştırmayabilir. SL tetiklendiği andaki son işlem fiyatından gerçekleşir, fiyat sıçradıysa \
+seviyesinden kötü olabilir. Hiçbiri senin çağrılmanı beklemez. Bir mum içinde hem TP hem SL görülürse SL uygulanır.
 - Bekleyen emir: Bir tetik fiyatı verirsin, fiyat oraya değince yeni bir pozisyon açılır. Tetik güncel fiyatın \
 altındaysa fiyat düşüp değince, üstündeyse yükselip değince gerçekleşir. İstersen bir geçerlilik süresi \
 verirsin, o süre içinde gerçekleşmezse emir iptal olur. Nakit, emir gerçekleştiği anda kontrol edilir.
@@ -247,11 +251,13 @@ def _account(ctx: Context) -> str:
         a.append("\nAçık pozisyonlar:")
         for x in s.positions:
             last = ctx.prices.get(x.symbol, x.entry_price)
-            upnl = (last - x.entry_price) * x.qty * x.side.sign
+            mark = ctx.marks.get(x.symbol, last)
+            upnl = (mark - x.entry_price) * x.qty * x.side.sign
             trail = f", iz süren stop yüzde {x.trail_pct:g}" if x.trail_pct else ""
             a.append(f"- #{x.number} {x.symbol} {x.side} {x.leverage:g}x, miktar {x.qty:g}, marjin {x.margin:.2f}, "
                      f"büyüklük {x.qty * x.entry_price:.2f}, giriş {price(x.entry_price)}, güncel {price(last)}, "
-                     f"gördüğü en iyi fiyat {price(x.best_price)}, açılış {clock(x.entry_time)}, "
+                     f"mark {price(mark)}, gördüğü en iyi mark fiyatı {price(x.best_price)}, "
+                     f"açılış {clock(x.entry_time)}, "
                      f"TP {levels_text(x.tp_levels)}, SL {price(x.sl)}{trail}, likidasyon {price(x.liq_price)}, "
                      f"açık kâr/zarar {upnl:+.2f}, fonlama {-x.funding:+.4f}")
     else:

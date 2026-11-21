@@ -21,19 +21,24 @@ from opus_trade.market.stream import StreamListener
 KLINE = {"stream": "btcusdt@kline_1m", "data": {"e": "kline", "s": "BTCUSDT", "k": {
     "t": 1_790_000_040_000, "s": "BTCUSDT", "o": "1", "h": "2", "l": "0.5", "c": "1.5", "v": "10", "q": "15",
     "n": 7, "V": "4", "x": True}}}
+MARK = {"stream": "btcusdt@markPrice@1s", "data": {"e": "markPriceUpdate", "E": 1_790_000_045_000, "s": "BTCUSDT",
+                                                   "p": "1.4", "i": "1.39", "r": "0.0001", "T": 1_790_006_400_000}}
 LIQ = {"stream": "!forceOrder@arr", "data": {"e": "forceOrder", "o": {
     "s": "ETHUSDT", "S": "SELL", "ap": "2000", "z": "3", "l": "1", "T": 1_790_000_001_000}}}
 
 
 class Recorder(StreamListener):
     def __init__(self):
-        self.connects, self.candles, self.liquidations = 0, [], []
+        self.connects, self.candles, self.liquidations, self.marks = 0, [], [], []
 
     async def on_connect(self):
         self.connects += 1
 
     async def on_candle(self, candle, closed):
         self.candles.append((candle, closed))
+
+    async def on_mark(self, symbol, mark, time):
+        self.marks.append((symbol, mark, time))
 
     async def on_liquidation(self, liq):
         self.liquidations.append(liq)
@@ -63,17 +68,18 @@ def test_messages_are_translated_and_ack_is_ignored():
     """SELL likidasyonu bir long'un kapanmasıdır, miktar toplam gerçekleşendir. Ters çeviri dalganın yönünü tersine çevirirdi."""
     async def main():
         seen = {"paths": [], "received": []}
-        server = await _serve([{"result": None, "id": 1}, KLINE, LIQ], seen)
+        server = await _serve([{"result": None, "id": 1}, KLINE, MARK, LIQ], seen)
         stream, rec = BinanceStream(url=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"), Recorder()
         await stream.watch({"BTCUSDT"})
         task = asyncio.create_task(stream.run(rec))
-        await _until(lambda: rec.candles and rec.liquidations)
+        await _until(lambda: rec.candles and rec.marks and rec.liquidations)
         task.cancel()
         server.close()
         return seen, rec
 
     seen, rec = asyncio.run(main())
-    assert seen["paths"][0] == "/stream?streams=!forceOrder@arr/btcusdt@kline_1m"
+    assert seen["paths"][0] == "/stream?streams=!forceOrder@arr/btcusdt@kline_1m/btcusdt@markPrice@1s"
+    assert rec.marks == [("BTCUSDT", 1.4, 1_790_000_045)]
     candle, closed = rec.candles[0]
     assert candle.symbol == "BTCUSDT" and candle.time == 1_790_000_040 and closed
     liq = rec.liquidations[0]
@@ -97,7 +103,8 @@ def test_watch_while_connected_subscribes_the_difference():
 
     received = asyncio.run(main())["received"]
     assert [(m["method"], m["params"]) for m in received] == [
-        ("SUBSCRIBE", ["ethusdt@kline_1m"]), ("UNSUBSCRIBE", ["btcusdt@kline_1m"])]
+        ("SUBSCRIBE", ["ethusdt@kline_1m", "ethusdt@markPrice@1s"]),
+        ("UNSUBSCRIBE", ["btcusdt@kline_1m", "btcusdt@markPrice@1s"])]
 
 
 def test_silent_connection_is_replaced():

@@ -4,10 +4,10 @@ importable: STREAM_URL, BinanceStream
 
 BinanceStream, MarketStream'in Binance vadeli birleşik akışıyla yazılmış
 uygulamasıdır. Tek bağlantıdan bütün piyasanın likidasyonlarını ve watch()
-ile verilen paritelerin dakikalık mumlarını dinler. Bağlantı koparsa ya da
+ile verilen paritelerin dakikalık mumlarını ve saniyelik mark fiyatını dinler. Bağlantı koparsa ya da
 uzun süre veri gelmezse yeniden bağlanır.
 
-description: Binance vadeli piyasasının canlı mum ve likidasyon akışı.
+description: Binance vadeli piyasasının canlı mum, mark fiyatı ve likidasyon akışı.
 """
 
 # NOTE: Eski /ws/ yolu bağlantıyı kabul ediyor ama hiç veri göndermiyor,
@@ -19,8 +19,9 @@ description: Binance vadeli piyasasının canlı mum ve likidasyon akışı.
 # sabitlenir, başarılı bir mesaj gelince başa döner. on_connect beklenirken
 # gelen mesajlar bağlantının tamponunda bekler, kaybolmaz.
 #
-# XXX: Binance tek bağlantıda en fazla iki yüz akışa izin verir. Bugün on
-# pariteden az dinleniyor, sınır yaklaşırsa bağlantı bölünmelidir.
+# XXX: Binance tek bağlantıda en fazla iki yüz akışa izin verir. Her parite
+# iki akış tutar, mum ve mark fiyatı. Bugün on pariteden az dinleniyor, sınır
+# yaklaşırsa bağlantı bölünmelidir.
 
 import asyncio
 import json
@@ -61,8 +62,8 @@ def _force_order(d: dict) -> Liquidation:
                        price=float(o["ap"]), qty=float(o["z"]))
 
 
-def _kline_stream(symbol: str) -> str:
-    return f"{symbol.lower()}@kline_1m"
+def _streams(symbols) -> list[str]:
+    return sorted(f"{s.lower()}{suffix}" for s in symbols for suffix in ("@kline_1m", "@markPrice@1s"))
 
 
 # İstenen parite kümesi _symbols'ta, açık bağlantının dinlediği küme
@@ -91,11 +92,11 @@ class BinanceStream(MarketStream):
         for method, items in (("SUBSCRIBE", added), ("UNSUBSCRIBE", removed)):
             if items:
                 self._next_id += 1
-                await self._ws.send(json.dumps({"method": method, "params": sorted(map(_kline_stream, items)),
+                await self._ws.send(json.dumps({"method": method, "params": _streams(items),
                                                 "id": self._next_id}))
 
     def _address(self, symbols: set[str]) -> str:
-        return f"{self._url}?streams=" + "/".join([_LIQUIDATIONS] + sorted(map(_kline_stream, symbols)))
+        return f"{self._url}?streams=" + "/".join([_LIQUIDATIONS] + _streams(symbols))
 
     async def run(self, listener: StreamListener) -> None:
         wait = 1
@@ -134,3 +135,5 @@ class BinanceStream(MarketStream):
             await listener.on_liquidation(_force_order(data))
         elif data.get("e") == "kline":
             await listener.on_candle(*_kline(data))
+        elif data.get("e") == "markPriceUpdate":
+            await listener.on_mark(data["s"], float(data["p"]), data["E"] // 1000)

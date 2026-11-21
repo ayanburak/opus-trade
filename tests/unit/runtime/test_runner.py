@@ -255,20 +255,36 @@ def test_paused_profile_still_hits_tp_but_strategy_is_not_woken(tmp_path):
 
 
 def test_position_opened_mid_minute_ignores_earlier_prices_of_that_minute(tmp_path):
-    """Dakikalık mum dakika boyunca birikmiş dibi taşır. Bu dip pozisyondan önce görüldüyse SL'yi tetiklememeli,
-    yoksa pozisyon açıldığı saniyede gerçekte hiç görmediği bir fiyattan kapanır. Sonradan gelen yeni dip ise
-    tetiklemeli."""
+    """Dakikalık mum dakika boyunca birikmiş tepeyi taşır. Bu tepe pozisyondan önce görüldüyse TP'yi
+    tetiklememeli, yoksa pozisyon açıldığı saniyede gerçekte hiç görmediği bir fiyattan kapanır. Sonradan gelen
+    yeni tepe ise tetiklemeli."""
+    w = World(tmp_path)
+    Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10, (TpLevel(105, 100),))], ["aç"])]
+    p, r = w.running()
+    m = T // 60 * 60
+    r.on_candle(Candle(SOL, m, 100, 110, 100, 100, 1, 1, 1, 1), False)
+    go(w.step(r))
+    assert len(r.broker.state().positions) == 1
+    r.on_candle(Candle(SOL, m, 100, 110, 99, 100, 1, 1, 1, 1), False)
+    assert len(r.broker.state().positions) == 1
+    r.on_candle(Candle(SOL, m, 100, 111, 99, 106, 1, 1, 1, 1), False)
+    assert r.broker.state().positions == ()
+
+
+def test_mark_price_drives_the_sl_and_fills_at_the_last_price(tmp_path):
+    """Canlı mark fiyatı SL'ye değince pozisyon o anın son fiyatından kapanır. Son fiyattaki iğne tek başına SL'yi
+    çalıştırmaz."""
     w = World(tmp_path)
     Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10, (), 95)], ["aç"])]
     p, r = w.running()
     m = T // 60 * 60
-    r.on_candle(Candle(SOL, m, 100, 100, 90, 100, 1, 1, 1, 1), False)
+    r.on_candle(Candle(SOL, m, 100, 100, 100, 100, 1, 1, 1, 1), False)
     go(w.step(r))
+    r.on_candle(Candle(SOL, m, 100, 100, 90, 94.5, 1, 1, 1, 1), False)
     assert len(r.broker.state().positions) == 1
-    r.on_candle(Candle(SOL, m, 100, 101, 90, 100, 1, 1, 1, 1), False)
-    assert len(r.broker.state().positions) == 1
-    r.on_candle(Candle(SOL, m, 100, 101, 89, 96, 1, 1, 1, 1), False)
-    assert r.broker.state().positions == ()
+    r.on_mark(SOL, 94.9, T + 5)
+    [t] = r.ledger.trades(r.broker.account_id)
+    assert t.reason == "sl" and t.exit_price == pytest.approx(94.5 * (1 - 0.0002))
 
 
 def test_alert_set_mid_minute_ignores_earlier_prices_of_that_minute(tmp_path):
@@ -295,6 +311,7 @@ def test_missed_minutes_are_replayed_after_a_gap(tmp_path):
     base = T // 60 * 60
     w.market.minutes[SOL] = [Candle(SOL, base + 60 * k, 100, 100, 94 if k == 3 else 99, 99, 1, 1, 1, 1)
                              for k in range(1, 10)]
+    w.market.marks[SOL] = w.market.minutes[SOL]
     w.clock.t = base + 600
     go(r.catch_up())
     go(w.step(r))

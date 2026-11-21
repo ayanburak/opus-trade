@@ -81,12 +81,31 @@ def test_command_before_first_price_is_refused(broker):
 
 # --- Eşleştiricinin sırası ---
 
-def test_sl_wins_when_sl_and_tp_are_both_inside_one_candle(broker):
-    """Mumun içinde fiyatın önce hangi uca gittiği bilinmez. Temkinli sıra zarar tarafını önce sayar."""
+def test_sl_wins_when_sl_and_tp_are_both_inside_one_minute(broker):
+    """Sonradan işlenen dakikada fiyatın önce hangi uca gittiği bilinmez. Önce mark işlenir, SL kendi seviyesinden
+    dolar ve aynı dakikanın TP'si artık kapatacak pozisyon bulamaz."""
     open_long(broker, tp_levels=(TpLevel(105, 100),), sl=98)
-    events = broker.on_price(SOL, 106, 97, 100, T + 60)
+    events = broker.on_mark(SOL, 106, 97, 100, T + 60, None)
     assert [e.reason for e in events] == ["sl"]
     assert events[0].trade.exit_price == pytest.approx(98 * (1 - 0.0002))
+    assert broker.on_price(SOL, 106, 97, 100, T + 60) == []
+
+
+def test_last_price_spike_does_not_trigger_sl(broker):
+    """SL mark fiyatına bakar. Yalnızca bu borsada görülen bir iğne, mark fiyatı gelmedikçe SL'yi çalıştırmaz."""
+    open_long(broker, sl=98)
+    assert broker.on_price(SOL, 100, 96, 99, T + 60) == []
+    assert broker.on_mark(SOL, 99.5, 98.5, 99, T + 61, 99) == []
+    assert broker.state().positions[0].sl == 98
+
+
+def test_sl_fills_at_the_last_price_of_its_moment(broker):
+    """SL bir stop-market emridir. Mark seviyeye değdiği an son fiyattan kaymayla dolar, son fiyat SL'nin ötesine
+    sıçradıysa dolum da oradadır."""
+    open_long(broker, sl=98)
+    events = broker.on_mark(SOL, 97.9, 97.9, 97.9, T + 60, 97.2)
+    assert events[0].reason == "sl"
+    assert events[0].trade.exit_price == pytest.approx(97.2 * (1 - 0.0002))
 
 
 def test_liquidation_comes_before_an_sl_placed_beyond_it(broker):
@@ -94,11 +113,20 @@ def test_liquidation_comes_before_an_sl_placed_beyond_it(broker):
     open_long(broker, leverage=50, sl=95)
     pos = broker.state().positions[0]
     cash_before = broker.state().cash
-    events = broker.on_price(SOL, 100, 94, 94, T + 60)
+    events = broker.on_mark(SOL, 100, 94, 94, T + 60, 94)
     assert events[0].reason == "liquidation"
     assert events[0].trade.exit_price == pytest.approx(pos.liq_price)
     assert events[0].trade.pnl == pytest.approx(-pos.margin)
     assert broker.state().cash == pytest.approx(cash_before)
+
+
+def test_equity_uses_the_mark_price(broker):
+    """Açık kâr Binance'teki gibi mark fiyatıyla hesaplanır, son fiyatın iğnesi özkaynağı oynatmaz."""
+    open_long(broker)
+    broker.on_price(SOL, 100, 90, 90, T + 60)
+    broker.on_mark(SOL, 99, 99, 99, T + 61, 90)
+    [p] = broker.state().positions
+    assert broker.state().equity == pytest.approx(broker.state().cash + p.margin + (99 - p.entry_price) * p.qty)
 
 
 def test_tp_levels_fill_at_their_price_as_maker(broker):
@@ -133,11 +161,11 @@ def test_closed_trade_best_price_includes_its_exit(broker):
 
 
 def test_trailing_stop_does_not_trigger_in_the_candle_that_raises_it(broker):
-    """Aynı mumdaki yükseliş kendi stopunu tetikleyemez, iz bir sonraki fiyatla çalışır."""
+    """Aynı aralıktaki yükseliş kendi stopunu tetikleyemez, iz bir sonraki mark fiyatıyla çalışır."""
     open_long(broker, trail_pct=1)
-    assert broker.on_price(SOL, 110, 100.5, 109, T + 60) == []
+    assert broker.on_mark(SOL, 110, 100.5, 109, T + 60, 109) == []
     assert broker.state().positions[0].sl == pytest.approx(108.9)
-    events = broker.on_price(SOL, 109.5, 108.5, 108.6, T + 120)
+    events = broker.on_mark(SOL, 109.5, 108.5, 108.6, T + 120, None)
     assert events[0].reason == "sl"
     assert events[0].trade.exit_price == pytest.approx(108.9 * (1 - 0.0002))
 

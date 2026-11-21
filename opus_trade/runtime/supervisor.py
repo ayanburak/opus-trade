@@ -224,6 +224,10 @@ class Supervisor(StreamListener):
         for pid, r in list(self.runners.items()):
             self._guard(pid, lambda r=r: r.on_candle(candle, closed))
 
+    async def on_mark(self, symbol: str, mark: float, time: int) -> None:
+        for pid, r in list(self.runners.items()):
+            self._guard(pid, lambda r=r: r.on_mark(symbol, mark, time))
+
     async def on_liquidation(self, liq: Liquidation) -> None:
         for pid, r in list(self.runners.items()):
             self._guard(pid, lambda r=r: r.on_liquidation(liq))

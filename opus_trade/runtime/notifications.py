@@ -226,7 +226,8 @@ class Notifier:
                 return [_Note("important", "closed", pid, f"{head} kapandı",
                               f"{net} Kapatan {_ACTORS.get(str(e.actor), str(e.actor))}.")]
             case EventKind.ORDER_FILLED:
-                return [_Note("important", "order_filled", pid, f"{head} emri doldu", f"Fiyat {numbers.price(e.price)}.")]
+                return [_Note("important", "order_filled", pid, f"{head} emri doldu",
+                              f"Fiyat {numbers.price(e.price)}.")]
             case EventKind.ORDER_EXPIRED:
                 return [_Note("info", "order_expired", pid, f"{head} emrinin süresi doldu")]
             case EventKind.ORDER_FAILED:

@@ -308,7 +308,8 @@ class Interventions:
             if "price" not in c:
                 return f"Yönetici #{c['cancel']} numaralı alarmı kaldırdı."
             moved = f"#{c['cancel']} numaralı alarmı kaldırıp " if c.get("cancel") is not None else ""
-            return f"Yönetici {moved}{c['symbol']} {numbers.price(c['price'])} seviyesine alarm kurdu. Not: {c['note'] or 'yok'}"
+            return (f"Yönetici {moved}{c['symbol']} {numbers.price(c['price'])} seviyesine alarm kurdu. "
+                    f"Not: {c['note'] or 'yok'}")
         if k == "restrict":
             text = limit_from(c["limit"]).text()
             until = f", {_clock(c['until'])} saatine kadar" if c.get("until") else ", kaldırılana kadar"
