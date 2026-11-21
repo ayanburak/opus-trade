@@ -199,3 +199,16 @@ def test_failed_command_leaves_no_partial_change(broker):
         run(broker, CloseAll())
     assert len(broker.state().positions) == 2
     assert broker.state().cash == cash
+
+
+# --- Önizleme ---
+
+@pytest.mark.parametrize("trigger, sl", [(0, None), (-5, None), (100, None), (95, 96)])
+def test_order_preview_rejects_what_placing_the_order_rejects(broker, trigger, sl):
+    """Önizleme emrin kontrollerini atlarsa panel reddedilecek bir emre tahmin gösterir ya da tetik 0'da sıfıra bölüp
+    çöker. Sıfır, negatif ve fiyata eşit tetik ile tetiğin yanlış tarafındaki SL önizlemede de reddedilmeli."""
+    cmd = PlaceOrder(SOL, LONG, trigger=trigger, leverage=10, margin=10, sl=sl)
+    with pytest.raises(RuleError):
+        broker.preview(cmd)
+    with pytest.raises(RuleError):
+        run(broker, cmd)

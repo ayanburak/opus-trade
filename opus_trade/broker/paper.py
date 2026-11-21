@@ -182,6 +182,7 @@ class PaperBroker(Broker, PriceDriven):
 
     def preview(self, cmd: OpenPosition | PlaceOrder) -> Preview:
         if isinstance(cmd, PlaceOrder):
+            self._check_order(cmd)
             price = cmd.trigger
             maker = rules.order_is_maker(cmd.side, cmd.trigger, self._price(cmd.symbol)) and not cmd.taker
         else:
@@ -272,7 +273,9 @@ class PaperBroker(Broker, PriceDriven):
     # Emir kurulurken pozisyon açılırken yapılacak kontroller tetik fiyatıyla
     # yapılır, hiç açılamayacak bir emir tetik anında değil şimdi reddedilir.
     # Nakit emir dolunca kontrol edilir, arada azalmışsa emir başarısız olur.
-    def _place(self, cmd: PlaceOrder, now: int) -> Order:
+    # Emir verme ve önizleme bu kontrolleri buradan alır, önizleme reddedilecek
+    # bir emre tahmin vermez.
+    def _check_order(self, cmd: PlaceOrder) -> tuple[float, list]:
         spec, price = self.catalog.get(cmd.symbol), self._price(cmd.symbol)
         rules.check_leverage(spec, cmd.leverage)
         if cmd.margin <= 0:
@@ -290,6 +293,10 @@ class PaperBroker(Broker, PriceDriven):
         rules.split_tp(spec, levels, qty)
         if cmd.valid_min is not None and cmd.valid_min <= 0:
             raise RuleError("Geçerlilik süresi sıfırdan büyük olmalı.")
+        return price, levels
+
+    def _place(self, cmd: PlaceOrder, now: int) -> Order:
+        price, levels = self._check_order(cmd)
         return self.ledger.insert_order(Order(
             id=0, account_id=self.account_id, number=self.ledger.free_number(self.account_id), symbol=cmd.symbol,
             side=cmd.side, trigger=cmd.trigger, below=cmd.trigger < price,
