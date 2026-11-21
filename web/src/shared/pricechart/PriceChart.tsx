@@ -1,6 +1,6 @@
 /**
  * file: PriceChart.tsx
- * importable: PriceChart, Candles, Subscribe
+ * importable: PriceChart
  *
  * Herkese açık sayfanın ve panelin ortak fiyat grafiği, Lightweight Charts ile.
  * Mumlar sayfanın verdiği load ile yüklenir, canlı akıştaki candle olaylarıyla
@@ -36,10 +36,10 @@ import { DRAGGABLE, LAYERS, LINE_DIM, dimColor, markers, priceLines, type Layer,
 import "./chart.css";
 
 /** Seçili parite ve aralığın mumlarını yükler. */
-export type Candles = (symbol: string, interval: string) => Promise<Candle[]>;
+type Candles = (symbol: string, interval: string) => Promise<Candle[]>;
 
 /** Canlı akışa abone olur, aboneliği kapatan fonksiyonu döndürür. */
-export type Subscribe = (listener: (e: Record<string, unknown>) => void) => () => void;
+type Subscribe = (listener: (e: Record<string, unknown>) => void) => () => void;
 
 interface Props {
   symbol: string;
