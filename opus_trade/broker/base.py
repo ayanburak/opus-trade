@@ -1,11 +1,12 @@
 """
 file: base.py
-importable: Broker, PriceDriven, Preview
+importable: Broker, PriceDriven, Preview, ClosePreview
 
 Broker bir hesabın soyut sınıfıdır. state() hesabın o anki halini döndürür,
 execute() bir komutu uygular ve olan değişiklikleri AccountEvent olarak
-döndürür, kurala aykırı komutta RuleError fırlatır. preview() bir giriş
-komutunu hesaba dokunmadan aynı kurallardan geçirir ve tahmini sonucunu verir. Kapı, strateji ve admin
+döndürür, kurala aykırı komutta RuleError fırlatır. preview() bir giriş ya da
+ekleme komutunu hesaba dokunmadan aynı kurallardan geçirir ve tahmini sonucunu verir, preview_close() aynısını
+kapatma için yapar. Kapı, strateji ve admin
 paneli yalnızca bunu bilir, hesabın kâğıt mı canlı mı olduğunu bilmez.
 
 PriceDriven fiyat ve fonlamayla kendi kendine işleyen hesaplar içindir:
@@ -22,12 +23,17 @@ description: Broker ve fiyatla işleyen hesap için soyut sınıflar.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from ..domain.trading import AccountEvent, AccountState, Actor, Command, OpenPosition, PlaceOrder
+from ..domain.trading import (AccountEvent, AccountState, Actor, AddToPosition, ClosePosition, Command, OpenPosition,
+                              PlaceOrder)
 
 
 @dataclass(frozen=True)
 class Preview:
-    """Bir girişin tahmini. Emirde giriş tetik fiyatıdır, nakit bugünkü nakittir."""
+    """Bir girişin tahmini. Emirde giriş tetik fiyatıdır, nakit bugünkü nakittir.
+
+    Eklemede giriş, büyüklük, marjin ve komisyon yalnızca eklenen kısmındır. Likidasyon eklemeden sonraki pozisyonundur,
+    avg_entry ve leverage de eklemeden sonraki ortalama giriş ve kaldıraçtır. Girişte bu ikisi None kalır.
+    """
 
     entry: float
     qty: float
@@ -36,6 +42,23 @@ class Preview:
     fee: float
     liq_price: float
     cash_after: float
+    avg_entry: float | None = None
+    leverage: float | None = None
+
+
+@dataclass(frozen=True)
+class ClosePreview:
+    """Bir kapanışın tahmini. pnl fonlama düşülmüş fiyat kârıdır, fee açılış komisyonunun kapanan payıyla kapanış
+    komisyonudur. net, kapanıştan sonra işlemin net'iyle aynıdır. remaining kapanıştan sonra kalan miktardır."""
+
+    exit: float
+    qty: float
+    price_pnl: float
+    funding: float
+    fee: float
+    net: float
+    cash_after: float
+    remaining: float
 
 
 class Broker(ABC):
@@ -54,11 +77,19 @@ class Broker(ABC):
         """
 
     @abstractmethod
-    def preview(self, cmd: OpenPosition | PlaceOrder) -> Preview:
-        """Giriş komutunu uygulamadan execute() ile aynı kurallardan geçirir ve tahmini sonucunu döndürür.
+    def preview(self, cmd: OpenPosition | PlaceOrder | AddToPosition) -> Preview:
+        """Giriş ya da ekleme komutunu uygulamadan execute() ile aynı kurallardan geçirir ve tahmini sonucunu döndürür.
 
         Raises:
-            RuleError: Komut hesap kurallarına aykırıysa.
+            RuleError: Komut hesap kurallarına aykırıysa ya da eklenecek pozisyon artık yoksa.
+        """
+
+    @abstractmethod
+    def preview_close(self, cmd: ClosePosition) -> ClosePreview:
+        """Kapatma komutunu uygulamadan execute() ile aynı kurallardan geçirir ve tahmini sonucunu döndürür.
+
+        Raises:
+            RuleError: Yüzde geçersizse, kapanacak miktar en küçük adımın altındaysa ya da pozisyon artık yoksa.
         """
 
 

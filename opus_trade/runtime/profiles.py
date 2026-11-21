@@ -7,7 +7,8 @@ kâğıt hesabıyla ve ilk sürümüyle kurar. update_config() yeni bir sürüm
 ekler. start(), pause(), stop() ve archive() durumunu değiştirir. clone()
 bir profilin ayarlarını ve hafızasını yeni bir kâğıt profile kopyalar.
 reset_account() kâğıt hesabı kapatıp yeni bir hesap açar. publish()
-herkese açık sayfadaki profili seçer. Kurala aykırı her istek Türkçe
+herkese açık sayfadaki profili seçer. set_test() profili test profili
+olarak işaretler ya da işareti kaldırır. Kurala aykırı her istek Türkçe
 mesajlı ProfileError fırlatır. Bir profil değişince kurulurken verilen
 on_change çağrılır, çalıştırıcıları yöneten taraf onu dinler.
 
@@ -169,8 +170,20 @@ class ProfileService:
         self.on_change(p.id)
         return self.repo.get(p.id)
 
+    # Test profili gerçeği yansıtmaz, herkese açık sayfada sergilenmez.
     def publish(self, profile_id: int | None) -> None:
         if profile_id is not None:
             p = self._get(profile_id)
             self._editable(p)
+            if p.test:
+                raise ProfileError(f"{p.name} test profili, yayınlanamaz.")
         self.repo.publish(profile_id)
+
+    def set_test(self, profile_id: int, test: bool) -> Profile:
+        p = self._get(profile_id)
+        self._editable(p)
+        if test and p.published:
+            raise ProfileError(f"{p.name} yayında, test profili yapılmadan önce yayından kaldırılmalı.")
+        p = self.repo.update(p.id, test=int(test))
+        self.on_change(p.id)
+        return p

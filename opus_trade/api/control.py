@@ -38,7 +38,7 @@ from ..domain.models import Side
 from ..domain.clock import Clock
 from ..domain.errors import RuleError
 from ..domain.profile import ProfileConfig
-from ..domain.trading import Actor, OpenPosition, PlaceOrder
+from ..domain.trading import Actor, AddToPosition, ClosePosition, OpenPosition, PlaceOrder
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
 from ..storage.notifications import NotificationRepo
@@ -273,6 +273,11 @@ def create_app(core: Core) -> FastAPI:
         profile(pid)
         return _plain(core.service.reset_account(pid))
 
+    @app.post("/profiles/{pid}/test")
+    async def set_test(pid: int, test: bool = Body(..., embed=True)):
+        profile(pid)
+        return _plain(core.service.set_test(pid, test))
+
     @app.post("/publish")
     async def publish(profile_id: int | None = Body(None, embed=True)):
         core.service.publish(profile_id)
@@ -371,10 +376,12 @@ def create_app(core: Core) -> FastAPI:
 
     @app.post("/profiles/{pid}/preview")
     async def preview(pid: int, params: dict = Body(..., embed=True)):
-        cmd = command_from(params)
-        if not isinstance(cmd, (OpenPosition, PlaceOrder)):
-            raise ValueError("Önizleme yalnızca pozisyon açma ve emir için yapılır.")
-        return _plain(runner(pid).gate.preview(cmd, Actor.ADMIN, core.clock.time()))
+        cmd, gate, now = command_from(params), runner(pid).gate, core.clock.time()
+        if isinstance(cmd, ClosePosition):
+            return _plain(gate.preview_close(cmd, Actor.ADMIN, now))
+        if not isinstance(cmd, (OpenPosition, PlaceOrder, AddToPosition)):
+            raise ValueError("Önizleme yalnızca pozisyon açma, emir, ekleme ve kapatma için yapılır.")
+        return _plain(gate.preview(cmd, Actor.ADMIN, now))
 
     @app.post("/profiles/{pid}/interventions/{iid}/withdraw")
     async def withdraw(pid: int, iid: int):

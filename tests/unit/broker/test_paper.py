@@ -21,7 +21,7 @@ from opus_trade.domain.catalog import Catalog
 from opus_trade.domain.errors import RuleError
 from opus_trade.domain.fees import BINANCE_STANDARD as FEES
 from opus_trade.domain.models import Side, TpLevel
-from opus_trade.domain.trading import (Actor, CloseAll, ClosePosition, EventKind, OpenPosition,
+from opus_trade.domain.trading import (Actor, AddToPosition, CloseAll, ClosePosition, EventKind, OpenPosition,
                                        PlaceOrder, Ref)
 from opus_trade.storage.database import connect
 from opus_trade.storage.ledger import MIGRATIONS, Ledger
@@ -202,6 +202,58 @@ def test_failed_command_leaves_no_partial_change(broker):
 
 
 # --- Önizleme ---
+
+def test_add_preview_matches_the_real_add_and_writes_nothing(broker):
+    """Ekleme kartının tahmini gerçek eklemeyle aynı kod yolundan gelmeli. Ayrışırsa panel yanlış ortalama giriş,
+    kaldıraç ya da likidasyon gösterir. Önizleme nakde ve pozisyona dokunmamalı."""
+    open_long(broker)
+    broker.on_price(SOL, 104, 104, 104, T + 60)
+    cmd = AddToPosition(Ref(1, SOL, LONG), leverage=5, margin=20)
+    before = broker.state()
+    pre = broker.preview(cmd)
+    assert broker.state() == before
+    run(broker, cmd)
+    [p] = broker.state().positions
+    assert (pre.avg_entry, pre.leverage, pre.liq_price) == (p.entry_price, p.leverage, p.liq_price)
+    assert abs(pre.cash_after - broker.state().cash) < 1e-9
+    assert pre.qty == round(p.qty - before.positions[0].qty, 10) and pre.entry == 104 * 1.0002
+
+
+def test_add_preview_rejects_a_missing_position(broker):
+    """Pozisyon kart açıkken kapanmış olabilir. Önizleme bunu tahmin göstermeden reddetmeli."""
+    with pytest.raises(RuleError):
+        broker.preview(AddToPosition(Ref(1, SOL, LONG), leverage=10, margin=10))
+
+
+def test_close_preview_matches_the_real_close_and_writes_nothing(broker):
+    """Kapatma kartının tahmini gerçek kapanışla aynı kod yolundan gelmeli. Net, işlemin net'iyle aynı olmalı ki kartta
+    görülen rakam İşlemler sekmesinde aynen görünsün. Fonlama ödenmiş olmalı, yoksa net'ten düşülmesi sınanmaz.
+    Önizleme nakde ve pozisyona dokunmamalı."""
+    open_long(broker)
+    broker.on_funding(SOL, 0.001, 100, T + 30)
+    broker.on_price(SOL, 106, 106, 106, T + 60)
+    cmd = ClosePosition(Ref(1, SOL, LONG), pct=30)
+    before = broker.state()
+    pre = broker.preview_close(cmd)
+    assert broker.state() == before
+    [e] = run(broker, cmd)
+    t = e.trade
+    assert (pre.exit, pre.qty, pre.net) == (t.exit_price, t.qty, t.net)
+    assert abs(pre.cash_after - broker.state().cash) < 1e-9
+    assert pre.remaining == broker.state().positions[0].qty and pre.price_pnl > 0 and pre.funding > 0
+
+
+@pytest.mark.parametrize("pct", [0, 101, 0.01])
+def test_close_preview_rejects_what_closing_rejects(broker, pct):
+    """Geçersiz yüzde ya da en küçük adımın altında kalan miktar önizlemede de reddedilmeli, yoksa kart gönderilince
+    reddedilecek bir kapanışa tahmin gösterir."""
+    open_long(broker)
+    cmd = ClosePosition(Ref(1, SOL, LONG), pct=pct)
+    with pytest.raises(RuleError):
+        broker.preview_close(cmd)
+    with pytest.raises(RuleError):
+        run(broker, cmd)
+
 
 @pytest.mark.parametrize("trigger, sl", [(0, None), (-5, None), (100, None), (95, 96)])
 def test_order_preview_rejects_what_placing_the_order_rejects(broker, trigger, sl):

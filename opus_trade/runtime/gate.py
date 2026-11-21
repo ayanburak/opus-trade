@@ -22,9 +22,9 @@ description: Bir hesabın komutlarını denetleyip broker'a ileten kapı.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from ..broker.base import Broker, Preview
+from ..broker.base import Broker, ClosePreview, Preview
 from ..domain.errors import RuleError
-from ..domain.trading import AccountEvent, Actor, Command, OpenPosition, PlaceOrder
+from ..domain.trading import AccountEvent, Actor, AddToPosition, ClosePosition, Command, OpenPosition, PlaceOrder
 from .bus import EventBus
 from .limits import Limit, breach
 from .risk import RiskGuard
@@ -70,14 +70,23 @@ class Gate:
                 rid = next(r.id for r in found if r.limit is hit)
                 raise RuleError(f"Reddedildi, yöneticinin #{rid} numaralı kesin kısıtı geçerli: {hit.text()}.")
 
-    def preview(self, cmd: OpenPosition | PlaceOrder, actor: Actor, now: int) -> Preview:
-        """Giriş komutunu göndermeden kapının ve hesabın denetiminden geçirir, tahmini sonucunu döndürür.
+    def preview(self, cmd: OpenPosition | PlaceOrder | AddToPosition, actor: Actor, now: int) -> Preview:
+        """Giriş ya da ekleme komutunu göndermeden kapının ve hesabın denetiminden geçirir, tahmini sonucunu döndürür.
 
         Raises:
             RuleError: Risk koruması, bir kesin kısıt ya da hesap kuralları komutu reddederse.
         """
         self._check(cmd, actor, now)
         return self.broker.preview(cmd)
+
+    def preview_close(self, cmd: ClosePosition, actor: Actor, now: int) -> ClosePreview:
+        """Kapatma komutunu göndermeden kapının ve hesabın denetiminden geçirir, tahmini sonucunu döndürür.
+
+        Raises:
+            RuleError: Risk koruması, bir kesin kısıt ya da hesap kuralları komutu reddederse.
+        """
+        self._check(cmd, actor, now)
+        return self.broker.preview_close(cmd)
 
     async def submit(self, cmd: Command, actor: Actor, now: int) -> list[AccountEvent]:
         """Komutu denetleyip uygular ve olan değişiklikleri döndürür.

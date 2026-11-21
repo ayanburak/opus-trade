@@ -78,3 +78,4 @@ class Profile:
     version_id: int | None
     published: bool
     created_at: int
+    test: bool = False

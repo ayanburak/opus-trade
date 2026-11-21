@@ -41,6 +41,25 @@ async def test_profile_lifecycle_routes(api):
 
 
 @run
+async def test_test_profile_is_marked_and_never_published(api):
+    """Test profili Genel bakışın toplamlarından işaretle ayrılır. İşaret profil bilgisinde ve genel bakışta görünmeli.
+    Test profili herkese açık sayfada yayınlanamamalı, yayındaki profil de yayından kalkmadan test yapılamamalı.
+    Var olan profiller test değil olarak başlamalı."""
+    pid, _ = await api.running(RULE)
+    assert (await api.call("GET", f"/profiles/{pid}"))["test"] is False
+    await api.call("POST", "/publish", json={"profile_id": pid})
+    bad = await api.call("POST", f"/profiles/{pid}/test", ok=False, json={"test": True})
+    assert "yayından kaldırılmalı" in bad["detail"]
+    await api.call("POST", "/publish", json={"profile_id": None})
+    assert (await api.call("POST", f"/profiles/{pid}/test", json={"test": True}))["test"] is True
+    [row] = (await api.call("GET", "/overview"))["profiles"]
+    assert row["test"] is True
+    bad = await api.call("POST", "/publish", ok=False, json={"profile_id": pid})
+    assert "test profili" in bad["detail"]
+    assert (await api.call("POST", f"/profiles/{pid}/test", json={"test": False}))["test"] is False
+
+
+@run
 async def test_rule_strategy_takes_only_firm_actions(api):
     """Kural stratejisi yönetici mesajı okuyamaz, ona metin gitmez. Grafikten gelen işlem ise uygulanır."""
     pid, r = await api.running(RULE)
@@ -270,6 +289,43 @@ async def test_preview_matches_the_real_entry(api):
     assert abs(pre["cash_after"] - acc["state"]["cash"]) < 1e-9
     bad = await api.call("POST", f"/profiles/{pid}/preview", ok=False, json={"params": {**spec, "sl": 90}})
     assert "SL" in bad["detail"] or "stop" in bad["detail"].lower()
+
+
+@run
+async def test_add_preview_goes_through_the_gate(api):
+    """Panelin ekleme kartı önizlemeyi bu uçtan alır. Uç eklemeyi kabul etmeli ve tahmin gerçek eklemeyle aynı olmalı.
+    Emir iptali gibi önizlemesi olmayan komut anlaşılır bir hatayla reddedilmeli."""
+    pid, r = await api.running(RULE)
+    entry = {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": entry})
+    spec = {"type": "add", "number": 1, "symbol": SOL, "side": "long", "leverage": 10, "margin": 20}
+    pre = await api.call("POST", f"/profiles/{pid}/preview", json={"params": spec})
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": spec})
+    acc = await api.call("GET", f"/profiles/{pid}/account")
+    [p] = acc["state"]["positions"]
+    assert (pre["avg_entry"], pre["leverage"], pre["liq_price"]) == (p["entry_price"], p["leverage"], p["liq_price"])
+    assert abs(pre["cash_after"] - acc["state"]["cash"]) < 1e-9
+    bad = await api.call("POST", f"/profiles/{pid}/preview", ok=False,
+                         json={"params": {"type": "cancel_order", "number": 1, "symbol": SOL, "side": "long"}})
+    assert "Önizleme" in bad["detail"]
+
+
+@run
+async def test_close_preview_matches_the_real_close(api):
+    """Kapatma kartı çıkışı, kârı, komisyonu ve neti bu uçtan alır. Net, kapanınca İşlemler sekmesinde görünen net'le
+    aynı olmalı, nakit de tahmin edilen nakit olmalı. Önizleme pozisyona dokunmamalı."""
+    pid, r = await api.running(RULE)
+    entry = {"type": "open", "symbol": SOL, "side": "long", "leverage": 10, "margin": 10}
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": entry})
+    spec = {"type": "close", "number": 1, "symbol": SOL, "side": "long", "pct": 50}
+    pre = await api.call("POST", f"/profiles/{pid}/preview", json={"params": spec})
+    before = (await api.call("GET", f"/profiles/{pid}/account"))["state"]["positions"][0]["qty"]
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": spec})
+    acc = await api.call("GET", f"/profiles/{pid}/account")
+    [t] = await api.call("GET", f"/profiles/{pid}/trades")
+    assert (pre["exit"], pre["qty"]) == (t["exit_price"], t["qty"])
+    assert abs(pre["net"] - t["net"]) < 1e-9 and abs(pre["cash_after"] - acc["state"]["cash"]) < 1e-9
+    assert pre["remaining"] == acc["state"]["positions"][0]["qty"] == round(before - t["qty"], 10)
 
 
 @run

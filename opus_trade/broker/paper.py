@@ -32,6 +32,8 @@ description: Binance USDⓈ-M kurallarıyla simüle edilen kâğıt hesap.
 # kapatır, kapanış fiyatı katılmasa TP ile kapanan bir işlemin en iyi fiyatı
 # TP'nin altında görünürdü.
 
+from typing import NamedTuple
+
 from ..domain import rules
 from ..domain.catalog import Catalog
 from ..domain.clock import Clock
@@ -42,11 +44,26 @@ from ..domain.trading import (AccountEvent, AccountState, Actor, AddToPosition, 
                               Command, EventKind, OpenPosition, Order, PlaceOrder, Position, Ref, Trade,
                               UpdateProtection)
 from ..storage.ledger import Ledger
-from .base import Broker, PriceDriven, Preview
+from .base import Broker, ClosePreview, PriceDriven, Preview
 
 # Bir emir tetiğinin güncel fiyattan en az bu oranda uzak olması gerekir. Daha
 # yakın bir tetik ilk fiyatta dolardı ve aslında bir piyasa emridir.
 _MIN_TRIGGER_GAP = 1e-5
+
+
+class _Exit(NamedTuple):
+    """Bir kapanışın deftere yazılmadan önceki hesabı. pnl fonlamayı içerir, fee açılış payıyla kapanış komisyonudur."""
+
+    qty: float
+    full: bool
+    share: float
+    margin: float
+    funding: float
+    exit: float
+    price_pnl: float
+    pnl: float
+    fee: float
+    cash_after: float
 
 
 def _better(side: Side, a: float, b: float) -> float:
@@ -134,13 +151,7 @@ class PaperBroker(Broker, PriceDriven):
                 return [self._event(EventKind.ADDED, actor, p, now, price=p.entry_price)]
             case ClosePosition():
                 p = self._resolve(cmd.ref, Position)
-                if not 0 < cmd.pct <= 100:
-                    raise RuleError("Kapatma yüzdesi sıfırdan büyük ve en fazla 100 olmalı.")
-                spec = self.catalog.get(p.symbol)
-                qty = p.qty if cmd.pct >= 99.9 else rules.round_qty(spec, p.qty * cmd.pct / 100)
-                if qty <= 0:
-                    raise RuleError(f"Kapatılacak miktar {p.symbol} için en küçük adımın altında kalıyor.")
-                t = self._close(p, qty, self._price(p.symbol), now, str(actor), maker=False)
+                t = self._close(p, self._close_qty(p, cmd.pct), self._price(p.symbol), now, str(actor), maker=False)
                 return [self._event(EventKind.CLOSED, actor, p, now, price=t.exit_price, trade=t, reason=str(actor))]
             case UpdateProtection():
                 p = self._protect(self._resolve(cmd.ref, Position), cmd)
@@ -180,7 +191,13 @@ class PaperBroker(Broker, PriceDriven):
         levels = rules.split_tp(spec, rules.check_tp_levels(side, entry, list(tp_levels)), s.qty)
         return spec, entry, cash, s, levels
 
-    def preview(self, cmd: OpenPosition | PlaceOrder) -> Preview:
+    def preview(self, cmd: OpenPosition | PlaceOrder | AddToPosition) -> Preview:
+        if isinstance(cmd, AddToPosition):
+            p = self._resolve(cmd.ref, Position)
+            spec, entry, cash, s, qty, avg, total = self._add_plan(p, cmd.leverage, cmd.margin)
+            return Preview(entry, s.qty, s.qty * entry, s.margin, s.fee,
+                           rules.liq_price(spec, p.side, avg, qty, total), cash - s.margin - s.fee,
+                           avg_entry=avg, leverage=round(avg * qty / total, 2))
         if isinstance(cmd, PlaceOrder):
             self._check_order(cmd)
             price = cmd.trigger
@@ -208,7 +225,8 @@ class PaperBroker(Broker, PriceDriven):
     # düşünülür, piyasa fiyatından taker olarak gerçekleşir. Giriş fiyatı
     # miktara göre ağırlıklı ortalanır, kaldıraç toplam büyüklüğün toplam
     # marjine oranı olur. TP kademelerine dokunulmaz.
-    def _add(self, p: Position, leverage: float, margin: float, now: int) -> Position:
+    # Önizleme de bunu kullanır, ekleme kartının tahmini gerçek eklemeden ayrışamaz.
+    def _add_plan(self, p: Position, leverage: float, margin: float):
         spec = self.catalog.get(p.symbol)
         rules.check_leverage(spec, leverage)
         entry = rules.slipped(spec, self._price(p.symbol), buy=p.side is Side.LONG)
@@ -216,39 +234,62 @@ class PaperBroker(Broker, PriceDriven):
         s = rules.size(spec, leverage, margin, entry, self.fees.taker, cash)
         qty = round(p.qty + s.qty, 10)
         avg = (p.entry_price * p.qty + entry * s.qty) / qty
-        total = p.margin + s.margin
+        return spec, entry, cash, s, qty, avg, p.margin + s.margin
+
+    def _add(self, p: Position, leverage: float, margin: float, now: int) -> Position:
+        spec, entry, cash, s, qty, avg, total = self._add_plan(p, leverage, margin)
         self.ledger.set_cash(self.account_id, cash - s.margin - s.fee)
         return self.ledger.update_position(p.id, qty=qty, entry_price=avg, margin=total,
                                            leverage=round(avg * qty / total, 2),
                                            liq_price=rules.liq_price(spec, p.side, avg, qty, total), fee=p.fee + s.fee)
 
-    def _close(self, p: Position, qty: float, price: float, now: int, reason: str, maker: bool) -> Trade:
+    def _close_qty(self, p: Position, pct: float) -> float:
+        if not 0 < pct <= 100:
+            raise RuleError("Kapatma yüzdesi sıfırdan büyük ve en fazla 100 olmalı.")
+        qty = p.qty if pct >= 99.9 else rules.round_qty(self.catalog.get(p.symbol), p.qty * pct / 100)
+        if qty <= 0:
+            raise RuleError(f"Kapatılacak miktar {p.symbol} için en küçük adımın altında kalıyor.")
+        return qty
+
+    def preview_close(self, cmd: ClosePosition) -> ClosePreview:
+        p = self._resolve(cmd.ref, Position)
+        x = self._exit(p, self._close_qty(p, cmd.pct), self._price(p.symbol), "admin", maker=False)
+        return ClosePreview(x.exit, x.qty, x.price_pnl, x.funding, x.fee, x.pnl - x.fee, x.cash_after,
+                            0.0 if x.full else round(p.qty - x.qty, 10))
+
+    # Kapanışın hesabı deftere yazmaz. Gerçek kapanış ve önizleme bunu
+    # kullanır, kapatma kartının tahmini gerçek kapanıştan ayrışamaz.
+    def _exit(self, p: Position, qty: float, price: float, reason: str, maker: bool) -> "_Exit":
         spec = self.catalog.get(p.symbol)
         qty = min(qty, p.qty)
         if p.qty - qty < spec.qty_step - 1e-12:
             qty = p.qty
-        full = qty >= p.qty
         share = qty / p.qty
         margin, funding, open_fee = p.margin * share, p.funding * share, p.fee * share
         cash = self.ledger.cash(self.account_id)
         if reason == "liquidation":
-            exit_, pnl, close_fee = price, -margin - funding, 0.0
+            exit_, price_pnl, close_fee, cash_after = price, -margin, 0.0, cash
         else:
             exit_, price_pnl, close_fee = rules.close_fill(spec, p.side, p.entry_price, qty, price, maker,
                                                            self.fees.rate(maker))
-            self.ledger.set_cash(self.account_id, cash + margin + price_pnl - close_fee)
-            pnl = price_pnl - funding
+            cash_after = cash + margin + price_pnl - close_fee
+        return _Exit(qty, qty >= p.qty, share, margin, funding, exit_, price_pnl, price_pnl - funding,
+                     open_fee + close_fee, cash_after)
+
+    def _close(self, p: Position, qty: float, price: float, now: int, reason: str, maker: bool) -> Trade:
+        x = self._exit(p, qty, price, reason, maker)
+        self.ledger.set_cash(self.account_id, x.cash_after)
         trade = self.ledger.insert_trade(Trade(
             id=0, account_id=self.account_id, position_id=p.id, number=p.number, symbol=p.symbol, side=p.side,
-            leverage=p.leverage, qty=qty, margin=margin, entry_price=p.entry_price, entry_time=p.entry_time,
-            exit_price=exit_, exit_time=now, reason=reason, pnl=pnl, fee=open_fee + close_fee, funding=funding,
-            best_price=_better(p.side, p.best_price, exit_), worst_price=_worse(p.side, p.worst_price, exit_),
+            leverage=p.leverage, qty=x.qty, margin=x.margin, entry_price=p.entry_price, entry_time=p.entry_time,
+            exit_price=x.exit, exit_time=now, reason=reason, pnl=x.pnl, fee=x.fee, funding=x.funding,
+            best_price=_better(p.side, p.best_price, x.exit), worst_price=_worse(p.side, p.worst_price, x.exit),
             tp_levels=p.tp_levels, sl=p.sl))
-        if full:
+        if x.full:
             self.ledger.mark_closed(p.id)
         else:
-            rest = 1 - share
-            self.ledger.update_position(p.id, qty=round(p.qty - qty, 10), margin=p.margin * rest,
+            rest = 1 - x.share
+            self.ledger.update_position(p.id, qty=round(p.qty - x.qty, 10), margin=p.margin * rest,
                                         funding=p.funding * rest, fee=p.fee * rest)
         return trade
 

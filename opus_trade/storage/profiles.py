@@ -18,7 +18,7 @@ from ..domain.profile import Area, Profile, ProfileConfig, State, Version
 def _profile(r: sqlite3.Row) -> Profile:
     return Profile(id=r["id"], name=r["name"], short=r["short"], area=Area(r["area"]), state=State(r["state"]),
                    account_id=r["account_id"], version_id=r["version_id"], published=bool(r["published"]),
-                   created_at=r["created_at"])
+                   created_at=r["created_at"], test=bool(r["test"]))
 
 
 def _version(r: sqlite3.Row) -> Version:
