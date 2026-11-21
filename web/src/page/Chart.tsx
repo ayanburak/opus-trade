@@ -19,7 +19,7 @@ import { useStream } from "../api/stream";
 import { chartTime, digits, intervalSeconds, mergeBar, type Bar } from "../shared/chart";
 import { num } from "../shared/format";
 import type { Alert, Candle, Order, Position, Trade } from "../shared/types";
-import { markers } from "./model";
+import { LAYERS, LINE_DIM, dimColor, markers, priceLines, type Layer, type LayerSpec } from "./model";
 
 interface Props {
   symbol: string;
@@ -28,6 +28,7 @@ interface Props {
   orders: Order[];
   alerts: Alert[];
   trades: Trade[];
+  hidden: ReadonlySet<Layer>;
   onPrice: (price: number) => void;
 }
 
@@ -35,27 +36,11 @@ function css(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
-interface LineSpec { price: number; color: string; title: string; style: LineStyle }
+const STYLES: Record<LayerSpec["style"], LineStyle> = {
+  solid: LineStyle.Solid, dotted: LineStyle.Dotted, dashed: LineStyle.Dashed, sparse: LineStyle.SparseDotted, marks: LineStyle.Solid,
+};
 
-function linesFor(symbol: string, positions: Position[], orders: Order[], alerts: Alert[]): LineSpec[] {
-  const out: LineSpec[] = [];
-  for (const p of positions.filter((x) => x.symbol === symbol)) {
-    out.push({ price: p.entry_price, color: css("--entry"), title: `#${p.number} ${p.side} giriş`, style: LineStyle.Solid });
-    p.tp_levels.forEach((l) => out.push({ price: l.price, color: css("--tp"), title: `#${p.number} TP %${num(l.pct, 0)}`,
-                                           style: LineStyle.Solid }));
-    if (p.sl != null) out.push({ price: p.sl, color: css("--sl"), title: `#${p.number} SL`, style: LineStyle.Solid });
-    out.push({ price: p.liq_price, color: css("--dim"), title: `#${p.number} likidasyon`, style: LineStyle.Dotted });
-  }
-  for (const o of orders.filter((x) => x.symbol === symbol)) {
-    out.push({ price: o.trigger, color: css("--order"), title: `#${o.number} ${o.side} emir`, style: LineStyle.Dashed });
-  }
-  for (const a of alerts.filter((x) => x.symbol === symbol)) {
-    out.push({ price: a.price, color: css("--alarm"), title: `alarm #${a.number}`, style: LineStyle.SparseDotted });
-  }
-  return out;
-}
-
-export function Chart({ symbol, interval, positions, orders, alerts, trades, onPrice }: Props) {
+export function Chart({ symbol, interval, positions, orders, alerts, trades, hidden, onPrice }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi>();
   const series = useRef<ISeriesApi<"Candlestick">>();
@@ -118,10 +103,12 @@ export function Chart({ symbol, interval, positions, orders, alerts, trades, onP
     const s = series.current;
     if (!s) return;
     drawn.current.forEach((l) => s.removePriceLine(l));
-    drawn.current = linesFor(symbol, positions, orders, alerts).map((spec) =>
-      s.createPriceLine({ price: spec.price, color: spec.color, lineWidth: 2, lineStyle: spec.style, axisLabelVisible: true,
-                          title: spec.title }));
-  }, [symbol, positions, orders, alerts]);
+    drawn.current = priceLines(symbol, positions, orders, alerts, hidden).map((line) => {
+      const spec = LAYERS.find((l) => l.key === line.layer)!;
+      return s.createPriceLine({ price: line.price, color: dimColor(css(spec.color), css("--card"), LINE_DIM), lineWidth: 2, lineStyle: STYLES[spec.style],
+                                 axisLabelVisible: true, title: line.title });
+    });
+  }, [symbol, positions, orders, alerts, hidden]);
 
   // İşaret çubuğun zamanına oturtulur, yoksa Lightweight Charts onu çizmez.
   useEffect(() => {
@@ -129,11 +116,11 @@ export function Chart({ symbol, interval, positions, orders, alerts, trades, onP
     if (!s || first == null) return;
     const sec = intervalSeconds(interval);
     const tone = { up: css("--up"), down: css("--down") };
-    s.setMarkers(markers(trades, symbol, first).map((m): SeriesMarker<Time> => ({
+    s.setMarkers(hidden.has("marks") ? [] : markers(trades, symbol, first).map((m): SeriesMarker<Time> => ({
       time: chartTime(Math.floor(m.time / sec) * sec) as UTCTimestamp, position: m.position, shape: m.shape,
       color: tone[m.tone], text: m.text,
     })));
-  }, [trades, symbol, interval, first]);
+  }, [trades, symbol, interval, first, hidden]);
 
   return (
     <div className="chart-wrap">

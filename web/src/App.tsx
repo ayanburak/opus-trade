@@ -2,7 +2,7 @@
  * file: App.tsx
  * importable: App
  *
- * Herkese açık sayfa. Yayındaki profilin üst satırı, grafiği, sekmeleri ve
+ * Herkese açık sayfa. Üst satır, yayındaki profilin grafiği, sekmeleri ve
  * günlüğü. Veri yalnızca herkese açık API'den gelir. Canlı akıştaki olaylar
  * ilgili parçayı yeniden yükler: karar günlüğü, hesap olayı hesabı ve
  * işlemleri, araç çağrısı düşünme kartını. Program kapalıysa kapalı ekranı
@@ -17,23 +17,67 @@
 //
 // NOTE: Geniş ekranda günlük sağdaki sütundadır. 1180 pikselden dar ekranda
 // sekmelerin ilki olur, böylece grafik ve tablolar daralmaz.
+//
+// NOTE: Tam ekran tarayıcının tam ekranı değildir. Grafik kartı sekmenin
+// tamamını kaplar, arkadaki sayfa kaymaz, Esc kartı küçültür.
+//
+// NOTE: Gizli katmanlar ziyaretçinin tarayıcısında saklanır. Tarayıcı izin
+// vermezse filtre yalnızca o ziyaret boyunca geçerli olur.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { ApiError, get } from "./api/client";
 import { useConnected, useStream } from "./api/stream";
 import type { Account, Entry, LiveTool, Profile } from "./api/types";
 import { Chart } from "./page/Chart";
 import { Journal } from "./page/Journal";
-import { status, summary } from "./page/model";
+import { Filter, Legend } from "./page/Layers";
+import { readHidden, status, summary, type Layer } from "./page/model";
 import { Tabs } from "./page/Tabs";
 import { INTERVALS } from "./shared/chart";
 import { money, num, pct, signed } from "./shared/format";
+import logo from "./shared/logo.svg";
 import type { EquityPoint, Trade } from "./shared/types";
 
 const POLL_MS = 30_000;
 const PAGE = 50;
 const WIDE = "(min-width: 1180px)";
 const DOCS = import.meta.env.BASE_URL + "details/";
+const NAME = "Opus Trade";
+const HIDDEN_KEY = "opus-chart-hidden";
+
+function loadHidden(): Set<Layer> {
+  try { return readHidden(localStorage.getItem(HIDDEN_KEY)); } catch { return new Set(); }
+}
+
+function saveHidden(h: Set<Layer>) {
+  try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...h])); } catch { /* tarayıcı saklamaya izin vermiyor */ }
+}
+
+// Üst satırın yüksekliği CSS'teki --top-h'ye yazılır. Grafik kartı ve günlük
+// sütunu ekranı bu yüksekliğin altından doldurur, satır kırılınca da doğru kalır.
+function useTopHeight(): RefObject<HTMLElement> {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty("--top-h", `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return ref;
+}
+
+function Expand({ full, onClick }: { full: boolean; onClick: () => void }) {
+  const label = full ? "Küçült" : "Tam ekran";
+  return (
+    <button className="expand" aria-label={label} title={label} aria-pressed={full} onClick={onClick}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+           strokeLinejoin="round" aria-hidden="true">
+        <path d={full ? "M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6" : "M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6"} />
+      </svg>
+    </button>
+  );
+}
 
 function useWide(): boolean {
   return useSyncExternalStore((cb) => {
@@ -83,6 +127,9 @@ export function App() {
   const [symbol, setSymbol] = useState<string | null>(null);
   const [interval, setIv] = useState("15m");
   const [price, setPrice] = useState<number | null>(null);
+  const [hidden, setHidden] = useState(loadHidden);
+  const [full, setFull] = useState(false);
+  const top = useTopHeight();
   const now = useNow();
   const wide = useWide();
   const connected = useConnected();
@@ -156,9 +203,19 @@ export function App() {
   const shown = price ?? (symbol ? account?.prices[symbol] : undefined) ?? null;
 
   useEffect(() => {
-    if (!profile) return;
-    document.title = `${symbol ?? ""} ${num(shown)} · ${pct(s.ret)} · ${profile.name}`;
-  }, [profile, symbol, shown, s.ret]);
+    if (!symbol || shown == null) return;
+    document.title = `${symbol.replace(/USDT$/, "")} ${num(shown)} ${pct(s.ret)}`;
+  }, [symbol, shown, s.ret]);
+
+  const changeHidden = (h: Set<Layer>) => { setHidden(h); saveHidden(h); };
+
+  useEffect(() => {
+    if (!full) return;
+    document.documentElement.classList.add("locked");
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    window.addEventListener("keydown", esc);
+    return () => { document.documentElement.classList.remove("locked"); window.removeEventListener("keydown", esc); };
+  }, [full]);
 
   const journal = (
     <Journal entries={entries} trades={trades} thinking={thinking || !!profile?.busy} tools={tools} more={more}
@@ -167,10 +224,13 @@ export function App() {
 
   return (
     <div className="site">
-      <header className="top">
+      <header className="top" ref={top}>
         <div className="who">
-          <h1>{profile?.name ?? "Opus Trading Masası"}</h1>
-          {st && <div className={`status ${st.tone}`}><i />{st.text}{!connected && !down && " · canlı akış bağlanıyor"}</div>}
+          <img src={logo} width="34" height="34" alt="" />
+          <div>
+            <h1>{NAME}</h1>
+            {st && <div className="status">{st.busy && <i />}{st.text}{!connected && !down && " · canlı akış bağlanıyor"}</div>}
+          </div>
         </div>
         <div className="stats">
           <Stat label="Fiyat" value={num(shown)} />
@@ -190,7 +250,7 @@ export function App() {
         : (
           <main className={wide ? "desk wide" : "desk"}>
             <div className="main-col">
-              <section className="card chart-card">
+              <section className={full ? "card chart-card full" : "card chart-card"}>
                 <div className="chart-head">
                   <div className="seg" role="tablist" aria-label="Parite">
                     {(profile?.symbols ?? []).map((x) => (
@@ -198,6 +258,7 @@ export function App() {
                         {x.replace(/USDT$/, "")}</button>
                     ))}
                   </div>
+                  <Filter hidden={hidden} onChange={changeHidden} />
                   <div className="seg push" role="tablist" aria-label="Aralık">
                     {INTERVALS.map(([k, label]) => (
                       <button key={k} role="tab" aria-selected={k === interval} onClick={() => setIv(k)}>{label}</button>
@@ -206,15 +267,12 @@ export function App() {
                 </div>
                 {symbol && (
                   <Chart symbol={symbol} interval={interval} positions={account?.state.positions ?? []}
-                         orders={account?.state.orders ?? []} alerts={account?.alerts ?? []} trades={trades} onPrice={setPrice} />
+                         orders={account?.state.orders ?? []} alerts={account?.alerts ?? []} trades={trades} hidden={hidden}
+                         onPrice={setPrice} />
                 )}
                 <div className="legend">
-                  <span><i style={{ background: "var(--entry)" }} />giriş</span>
-                  <span><i style={{ background: "var(--tp)" }} />TP</span>
-                  <span><i style={{ background: "var(--sl)" }} />SL</span>
-                  <span><i className="dotted" />likidasyon</span>
-                  <span><i style={{ background: "var(--order)" }} />emir</span>
-                  <span><i style={{ background: "var(--alarm)" }} />alarm</span>
+                  <Legend hidden={hidden} />
+                  <Expand full={full} onClick={() => setFull((f) => !f)} />
                 </div>
               </section>
               {account && <Tabs account={account} trades={trades} equity={equity} start={profile?.start_balance ?? null}

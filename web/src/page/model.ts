@@ -1,10 +1,13 @@
 /**
  * file: model.ts
- * importable: Summary, summary, status, EVENTS, wakeText, toolCounts, toolLine, Marker, markers, Row, timeline
+ * importable: Summary, summary, status, EVENTS, wakeText, toolCounts, toolLine, Layer, LayerSpec, LAYERS, LINE_DIM, dimColor,
+ *   readHidden,
+ *   PriceLine, priceLines, Marker, markers, Row, timeline
  *
- * Sayfanın saf mantığı. Üst satırdaki rakamlar, profilin durum satırı,
- * günlükteki uyandırma metni ve araç sayıları, grafikteki işlem işaretleri ve
- * günlükte kararlarla işlem olaylarının tek bir zaman akışında birleşmesi.
+ * Sayfanın saf mantığı. Üst satırdaki rakamlar, sayfanın durum satırı,
+ * günlükteki uyandırma metni ve araç sayıları, grafiğin katmanları, fiyat
+ * çizgileri ve işlem işaretleri, günlükte kararlarla işlem olaylarının tek bir
+ * zaman akışında birleşmesi.
  *
  * description: Herkese açık sayfanın hesapları ve metinleri.
  */
@@ -16,7 +19,7 @@
 
 import { REASONS, WAKES, toolName } from "../shared/labels";
 import { num, signed, when } from "../shared/format";
-import type { Trade, Wake } from "../shared/types";
+import type { Alert, Order, Position, Trade, Wake } from "../shared/types";
 import type { Account, Entry, Profile, ToolRecord } from "../api/types";
 
 export interface Summary { equity: number | null; ret: number | null; open: number | null; trades: number; wins: number }
@@ -38,13 +41,13 @@ export function summary(p: Profile | null, a: Account | null, trades: Trade[]): 
 const STATES: Record<string, string> = { paused: "Duraklatıldı", stopped: "Durduruldu", draft: "Henüz başlamadı", archived: "Arşivde" };
 
 /**
- * Profil adının altındaki kısa durum satırı.
+ * Sayfa adının altındaki kısa durum satırı. busy Opus'un o an düşündüğünü söyler.
  * @param thinking Akıştan araç çağrısı gelmeye başladı mı. Profil özetindeki busy geç yenilenebilir.
  */
-export function status(p: Profile, thinking: boolean, tools: number, now: number): { text: string; tone: "busy" | "wait" | "off" } {
-  if (p.state !== "running") return { text: STATES[p.state] ?? p.state, tone: "off" };
-  if (p.busy || thinking) return { text: tools ? `Düşünüyor · ${tools} araç` : "Düşünüyor", tone: "busy" };
-  return { text: p.next_wake ? `Sonraki çağrı ${when(p.next_wake, now)}` : "Bekliyor", tone: "wait" };
+export function status(p: Profile, thinking: boolean, tools: number, now: number): { text: string; busy: boolean } {
+  if (p.state !== "running") return { text: STATES[p.state] ?? p.state, busy: false };
+  if (p.busy || thinking) return { text: tools ? `Düşünüyor · ${tools} araç` : "Düşünüyor", busy: true };
+  return { text: p.next_wake ? `Sonraki çağrı ${when(p.next_wake, now)}` : "Bekliyor", busy: false };
 }
 
 export const EVENTS: Record<string, string> = {
@@ -94,6 +97,75 @@ export function toolCounts(tools: ToolRecord[] | undefined): string {
 /** Bir aracın günlükteki adı ve kısa ayrıntısı. */
 export function toolLine(t: ToolRecord): { name: string; detail: string } {
   return { name: toolName(t.name), detail: t.title ?? "" };
+}
+
+/** Grafikte ayrı ayrı gizlenebilen katmanlar. */
+export type Layer = "entry" | "tp" | "sl" | "liq" | "order" | "alarm" | "marks";
+
+/** Katmanın açıklama satırındaki adı, rengini veren CSS değişkeni ve çizgi biçimi. marks fiyat çizgisi değil işarettir. */
+export interface LayerSpec { key: Layer; label: string; color: string; style: "solid" | "dotted" | "dashed" | "sparse" | "marks" }
+
+/** Grafiğin katmanları. Açıklama satırı ve filtre menüsü bu sırayla çizilir. */
+export const LAYERS: LayerSpec[] = [
+  { key: "entry", label: "giriş", color: "--entry", style: "solid" },
+  { key: "tp", label: "TP", color: "--tp", style: "solid" },
+  { key: "sl", label: "SL", color: "--sl", style: "solid" },
+  { key: "liq", label: "likidasyon", color: "--dim", style: "dotted" },
+  { key: "order", label: "emir", color: "--order", style: "dashed" },
+  { key: "alarm", label: "alarm", color: "--alarm", style: "sparse" },
+  { key: "marks", label: "işlem işaretleri", color: "--up", style: "marks" },
+];
+
+/** Fiyat çizgilerinin rengi arka plana bu oranda karıştırılır, çizgiler mumların önüne geçmesin diye. */
+export const LINE_DIM = 0.3;
+
+/**
+ * #RRGGBB rengini arka plana karıştırır. Sonuç saydam değildir, eksendeki etiket okunur kalır.
+ * @param share Arka planın payı, 0 ile 1 arası.
+ */
+export function dimColor(color: string, background: string, share: number): string {
+  const rgb = (c: string) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const [a, b] = [rgb(color), rgb(background)];
+  return "#" + a.map((v, i) => Math.round(v * (1 - share) + b[i] * share).toString(16).padStart(2, "0")).join("");
+}
+
+/** Ziyaretçi henüz seçim yapmadıysa gizli gelen katmanlar. */
+const DEFAULT_HIDDEN: Layer[] = ["marks"];
+
+/**
+ * Tarayıcıda saklanan gizli katmanları okur. Hiç saklanmadıysa varsayılan gizliler gelir, bilinmeyen ya da bozuk
+ * değer yok sayılır.
+ * @param raw Saklanan JSON dizisi, hiç saklanmadıysa null.
+ */
+export function readHidden(raw: string | null): Set<Layer> {
+  if (raw == null) return new Set(DEFAULT_HIDDEN);
+  try {
+    const keys = JSON.parse(raw);
+    return new Set(Array.isArray(keys) ? LAYERS.map((l) => l.key).filter((k) => keys.includes(k)) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export interface PriceLine { layer: Layer; price: number; title: string }
+
+/** Seçili paritenin pozisyon, emir ve alarm çizgileri, gizli katmanlar çıkarılmış olarak. */
+export function priceLines(symbol: string, positions: Position[], orders: Order[], alerts: Alert[],
+                           hidden: ReadonlySet<Layer>): PriceLine[] {
+  const out: PriceLine[] = [];
+  for (const p of positions.filter((x) => x.symbol === symbol)) {
+    out.push({ layer: "entry", price: p.entry_price, title: `#${p.number} ${p.side} giriş` });
+    p.tp_levels.forEach((l) => out.push({ layer: "tp", price: l.price, title: `#${p.number} TP %${num(l.pct, 0)}` }));
+    if (p.sl != null) out.push({ layer: "sl", price: p.sl, title: `#${p.number} SL` });
+    out.push({ layer: "liq", price: p.liq_price, title: `#${p.number} likidasyon` });
+  }
+  for (const o of orders.filter((x) => x.symbol === symbol)) {
+    out.push({ layer: "order", price: o.trigger, title: `#${o.number} ${o.side} emir` });
+  }
+  for (const a of alerts.filter((x) => x.symbol === symbol)) {
+    out.push({ layer: "alarm", price: a.price, title: `alarm #${a.number}` });
+  }
+  return out.filter((l) => !hidden.has(l.layer));
 }
 
 export interface Marker { time: number; position: "aboveBar" | "belowBar"; shape: "arrowUp" | "arrowDown" | "circle"; tone: "up" | "down"; text: string }

@@ -9,9 +9,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { Trade } from "../shared/types";
+import type { Alert, Order, Position, Trade } from "../shared/types";
 import type { Account, Entry, Profile } from "../api/types";
-import { markers, status, summary, timeline, toolCounts, wakeText } from "./model";
+import { LAYERS, dimColor, markers, priceLines, readHidden, status, summary, timeline, toolCounts, wakeText, type Layer } from "./model";
 
 const NOW = 1_795_149_360;
 const PROFILE: Profile = { id: 1, name: "Opus", short: "op", strategy: "llm", state: "running", version: 2, equity: 110,
@@ -43,8 +43,8 @@ describe("durum satırı", () => {
   });
 
   it("düşünürken araç sayısı, çalışmıyorsa durumu yazılır", () => {
-    expect(status(PROFILE, true, 3, NOW)).toEqual({ text: "Düşünüyor · 3 araç", tone: "busy" });
-    expect(status({ ...PROFILE, state: "paused" }, false, 0, NOW).text).toBe("Duraklatıldı");
+    expect(status(PROFILE, true, 3, NOW)).toEqual({ text: "Düşünüyor · 3 araç", busy: true });
+    expect(status({ ...PROFILE, state: "paused" }, false, 0, NOW)).toEqual({ text: "Duraklatıldı", busy: false });
   });
 });
 
@@ -74,5 +74,40 @@ describe("grafik işaretleri", () => {
   it("yalnızca seçili paritenin ve grafiğin başlangıcından yeni işaretleri çizilir", () => {
     const ms = markers([trade(1, "sl", -2, NOW), { ...trade(2, "tp", 1, NOW), symbol: "ETHUSDT" }], "BTCUSDT", NOW - 100);
     expect(ms).toEqual([{ time: NOW, position: "aboveBar", shape: "circle", tone: "down", text: "#1 SL −2,00" }]);
+  });
+});
+
+describe("grafik katmanları", () => {
+  const pos = { number: 1, symbol: "BTCUSDT", side: "long", entry_price: 100, tp_levels: [{ price: 110, pct: 50 }], sl: 95,
+                liq_price: 80 } as unknown as Position;
+  const order = { number: 2, symbol: "BTCUSDT", side: "short", trigger: 120 } as unknown as Order;
+  const alert = { number: 3, symbol: "BTCUSDT", price: 130 } as unknown as Alert;
+  const other = { ...alert, symbol: "ETHUSDT" };
+
+  it("her katman kendi çizgisini verir, başka paritenin çizgisi çizilmez", () => {
+    const lines = priceLines("BTCUSDT", [pos], [order], [alert, other], new Set());
+    expect(lines.map((l) => [l.layer, l.price])).toEqual([["entry", 100], ["tp", 110], ["sl", 95], ["liq", 80], ["order", 120], ["alarm", 130]]);
+  });
+
+  it("gizlenen katmanın çizgisi çıkar, diğerleri kalır", () => {
+    const lines = priceLines("BTCUSDT", [pos], [order], [alert], new Set<Layer>(["tp", "alarm"]));
+    expect(lines.map((l) => l.layer)).toEqual(["entry", "sl", "liq", "order"]);
+  });
+
+  it("ilk ziyarette işlem işaretleri gizlidir, saklanan seçimden yalnızca bilinen katmanlar okunur", () => {
+    expect([...readHidden('["sl","yok","marks"]')]).toEqual(["sl", "marks"]);
+    expect(readHidden("{bozuk").size).toBe(0);
+    expect(readHidden('{"sl":1}').size).toBe(0);
+    expect([...readHidden(null)]).toEqual(["marks"]);
+    expect(readHidden("[]").size).toBe(0);
+  });
+
+  it("çizgi rengi arka plana verilen oranda karışır, sonuç saydam olmayan bir renktir", () => {
+    expect(dimColor("#ffffff", "#000000", 0.3)).toBe("#b3b3b3");
+    expect(dimColor("#7FD3A0", "#161A21", 0)).toBe("#7fd3a0");
+  });
+
+  it("her katmanın açıklama satırında ve menüde tek bir yeri vardır", () => {
+    expect(new Set(LAYERS.map((l) => l.key)).size).toBe(LAYERS.length);
   });
 });
