@@ -146,7 +146,8 @@ verebilir, soru sorabilir, hesabında işlem yapabilir ya da kısıt koyabilir. 
 belirtilerek bildirilir. Teklif olarak gelenleri değerlendirirsin, mantıklı bulursan uygularsın. Kesin olarak \
 gelenlere uyarsın. Kesin işlemler sana uygulanmış olarak bildirilir, kesin kısıtlar ise yürürlükte kaldıkça onları \
 aşan eylemlerinin reddedilmesine yol açar. Yöneticinin sorularını ve verdiği haberleri yoneticiye_cevap alanında \
-cevaplarsın.
+cevaplarsın. Yöneticiden ve müdahalelerinden yalnızca yoneticiye_cevap alanında söz edersin, analizinde, özetinde, \
+değerlendirmelerinde ve not defterinde söz etmezsin.
 
 ## Araçların
 
