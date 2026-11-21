@@ -243,6 +243,37 @@ def test_paused_profile_still_hits_tp_but_strategy_is_not_woken(tmp_path):
     assert [x.kind for x in Scripted.seen[-1].wakes] == ["resume"]
 
 
+def test_position_opened_mid_minute_ignores_earlier_prices_of_that_minute(tmp_path):
+    """Dakikalık mum dakika boyunca birikmiş dibi taşır. Bu dip pozisyondan önce görüldüyse SL'yi tetiklememeli,
+    yoksa pozisyon açıldığı saniyede gerçekte hiç görmediği bir fiyattan kapanır. Sonradan gelen yeni dip ise
+    tetiklemeli."""
+    w = World(tmp_path)
+    Scripted.script = [Decision([OpenPosition(SOL, Side.LONG, 10, 10, (), 95)], ["aç"])]
+    p, r = w.running()
+    m = T // 60 * 60
+    r.on_candle(Candle(SOL, m, 100, 100, 90, 100, 1, 1, 1, 1), False)
+    go(w.step(r))
+    assert len(r.broker.state().positions) == 1
+    r.on_candle(Candle(SOL, m, 100, 101, 90, 100, 1, 1, 1, 1), False)
+    assert len(r.broker.state().positions) == 1
+    r.on_candle(Candle(SOL, m, 100, 101, 89, 96, 1, 1, 1, 1), False)
+    assert r.broker.state().positions == ()
+
+
+def test_alert_set_mid_minute_ignores_earlier_prices_of_that_minute(tmp_path):
+    """Dakika içinde kurulan alarm, kurulmadan önce görülen dip yüzünden hemen tetiklenmemeli. Fiyat alarmın
+    seviyesine sonradan inerse, dakikanın dibi değişmese bile kapanışla tetiklenmeli."""
+    w = World(tmp_path)
+    p, r = w.running()
+    m = T // 60 * 60
+    r.on_candle(Candle(SOL, m, 100, 100, 90, 100, 1, 1, 1, 1), False)
+    r.alerts.add(SOL, 95, 100, "", "admin", w.clock.t)
+    r.on_candle(Candle(SOL, m, 100, 100, 90, 99, 1, 1, 1, 1), False)
+    assert len(r.alerts.alerts) == 1
+    r.on_candle(Candle(SOL, m, 100, 100, 90, 94, 1, 1, 1, 1), False)
+    assert r.alerts.alerts == []
+
+
 def test_missed_minutes_are_replayed_after_a_gap(tmp_path):
     """Kapalı geçen dakikadaki SL atlanırsa pozisyon gerçekte kapanmış olduğu halde açık görünür."""
     w = World(tmp_path)

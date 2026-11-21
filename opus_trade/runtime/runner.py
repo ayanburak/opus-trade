@@ -32,6 +32,7 @@ description: Bir profilin uyandırma, karar ve uygulama döngüsü.
 
 import asyncio
 import logging
+from dataclasses import replace
 from typing import Callable
 
 from ..broker.base import Broker, PriceDriven
@@ -143,6 +144,7 @@ class ProfileRunner:
         self.retry_at = 0
         self.next_wake = self._last_next_wake()
         self._last_minute = 0
+        self._seen: dict[str, Candle] = {}
         self._task: asyncio.Task | None = None
 
     @property
@@ -194,15 +196,33 @@ class ProfileRunner:
 
     # --- Piyasa ---
 
+    # Binance dakikalık mumu dakika boyunca birikmiş tepe ve dibiyle günceller.
+    # Bu aralığın bir kısmı, dakika içinde açılan pozisyondan, kurulan emirden
+    # ya da alarmdan öncedir. Broker ve alarmlar yalnızca bir önceki
+    # güncellemeden beri görülen aralığı alır. Tepe yükselmediyse o aralıkta
+    # görülen en yüksek fiyat bilinmez, önceki ve şimdiki kapanışın büyüğü
+    # alınır. Dip için de aynısı geçerlidir. Dakikanın ilk güncellemesi mumun
+    # tamamıyla gelir.
+    def _fresh(self, candle: Candle) -> Candle:
+        prev = self._seen.get(candle.symbol)
+        self._seen[candle.symbol] = candle
+        if prev is None or prev.time != candle.time:
+            return candle
+        high = candle.high if candle.high > prev.high else max(prev.close, candle.close)
+        low = candle.low if candle.low < prev.low else min(prev.close, candle.close)
+        return replace(candle, high=high, low=low)
+
     def on_candle(self, candle: Candle, closed: bool) -> None:
         if candle.symbol not in self.symbols:
             return
         self.prices[candle.symbol] = candle.close
+        fresh = self._fresh(candle)
         if isinstance(self.broker, PriceDriven):
-            self._account(self.broker.on_price(candle.symbol, candle.high, candle.low, candle.close,
+            self._account(self.broker.on_price(candle.symbol, fresh.high, fresh.low, candle.close,
                                                self.clock.time()))
-        for t in [*self.triggers, self.alerts]:
+        for t in self.triggers:
             self._fire(t.on_candle(candle))
+        self._fire(self.alerts.on_candle(fresh))
         if closed:
             self.state.set_setting(f"price_seen:{self.pid}:{candle.symbol}", candle.time)
 
