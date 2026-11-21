@@ -20,7 +20,7 @@
 //
 // NOTE: Tam ekranda yalnızca grafik kartı sekmeyi kaplar.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, get } from "./api/client";
 import { subscribe, useConnected, useStream } from "./api/stream";
 import type { Account, Entry, LiveTool, Profile } from "./api/types";
@@ -34,6 +34,7 @@ import { Filter, Legend, useHiddenLayers } from "./shared/pricechart/Layers";
 import { PriceChart } from "./shared/pricechart/PriceChart";
 import logo from "./shared/logo.svg";
 import type { Candle, EquityPoint, Trade } from "./shared/types";
+import { useHeightVar } from "./shared/useHeightVar";
 
 const POLL_MS = 30_000;
 const PAGE = 50;
@@ -44,20 +45,6 @@ const HIDDEN_KEY = "opus-chart-hidden";
 
 const loadCandles = (symbol: string, interval: string) =>
   get<Candle[]>(`/candles?symbol=${symbol}&interval=${interval}&limit=500`);
-
-// Üst satırın yüksekliği CSS'teki --top-h'ye yazılır. Grafik kartı ve günlük
-// sütunu ekranı bu yüksekliğin altından doldurur, satır kırılınca da doğru kalır.
-function useTopHeight(): RefObject<HTMLElement> {
-  const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => document.documentElement.style.setProperty("--top-h", `${el.offsetHeight}px`));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return ref;
-}
 
 function useWide(): boolean {
   return useSyncExternalStore((cb) => {
@@ -109,7 +96,8 @@ export function App() {
   const [price, setPrice] = useState<number | null>(null);
   const [hidden, setHidden] = useHiddenLayers(HIDDEN_KEY);
   const [full, toggleFull] = useFullscreen();
-  const top = useTopHeight();
+  // Grafik kartı ve günlük sütunu ekranı üst satırın altından doldurur, app.css --top-h.
+  const top = useHeightVar<HTMLElement>("--top-h");
   const now = useNow();
   const wide = useWide();
   const connected = useConnected();
