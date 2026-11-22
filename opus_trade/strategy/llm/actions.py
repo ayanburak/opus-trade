@@ -1,6 +1,6 @@
 """
 file: actions.py
-importable: ACTIONS, ORDER_TYPES, Translation, schema, translate
+importable: ACTIONS, ENTRY_CHECKS, ORDER_TYPES, Translation, schema, translate
 
 Opus'un karar şemasındaki eylemler. Her eylem tek bir kayıttır: Türkçe tipi,
 Opus'a görünen açıklaması, zorunlu ve isteğe bağlı alanları. schema() eylem
@@ -34,6 +34,11 @@ description: Opus'un eylemlerinin şeması ve komuta çevirisi.
 # XXX: Kullanılabilir bakiye kararın başındaki haldir. Aynı kararda birden
 # çok giriş verilirse her biri tek başına sığdırılır, toplamı sığmazsa
 # sonrakini broker reddeder ve düzeltme çağrısı gelir.
+#
+# NOTE: Eylem açıklamaları yalnızca alanların ne olduğunu söyler. Kuralların
+# anlatımı, örneğin limit emrin nasıl dolduğu ya da marjinin miktara nasıl
+# çevrildiği, yalnızca talimatın Hesabın kuralları bölümündedir. İki yerde
+# anlatılınca biri değişip öteki eskiyordu, talimat/cekirdek.md.
 #
 # XXX: Alan adları, eylem tipleri ve emir türlerinin adları Opus'a görünür,
 # Türkçe kalır.
@@ -72,30 +77,41 @@ _FIELDS = {
     "gecerlilik_dk": {"type": "integer"},
     "not": {"type": "string"},
     "alarm_no": {"type": "integer"},
+    "karsi_kanit": {"type": "string", "minLength": 1,
+                    "description": "Girişe aykırı en güçlü veri ve neden ağır basmadığı. Boş ya da yok olamaz."},
+    "risk_beyani": {"type": "object", "additionalProperties": False, "required": ["yuzde", "gerekce"],
+                    "description": "SL'de kaybedeceğin tutarın özkaynağa oranı, aynı yöndeki açık pozisyonla "
+                                   "birlikte, ve bu riski neden aldığın.",
+                    "properties": {"yuzde": {"type": "number"}, "gerekce": {"type": "string", "minLength": 1}}},
+    "gecersizlik": {"type": "object", "additionalProperties": False, "required": ["metin", "fiyat"],
+                    "description": "Tezini bozan koşul ve fiyatı. Emir dolmadan fiyat oraya değerse emir iptal "
+                                   "olur, pozisyon açıkken değerse çağrılırsın.",
+                    "properties": {"metin": {"type": "string", "minLength": 1}, "fiyat": {"type": "number"}}},
+    "son_stoptan_farki": {"type": "string",
+                          "description": "Bu parite ve yöndeki son işlemin stopla kapandıysa bu girişin ondan "
+                                         "farkı. O durumda zorunlu."},
 }
 
 _GUARDS = ["tp", "tp_kademeleri", "sl", "iz_yuzde"]
 _REF = ["numara", "sembol", "yon"]
 
-_ENTRY_NOTE = ("marjin_usd pozisyona ayıracağın marjindir, miktar ona ve paritenin kaldıracına göre hesaplanır. "
-               "kaldirac verirsen ve paritenin ayarlı kaldıracından farklıysa önce parite o kaldıraca ayarlanır. "
-               "Aynı yönde açık pozisyon varsa giriş onunla birleşir. tp ya da tp_kademeleri, sl ve iz_yuzde bu "
-               "girişin miktarına kurulan koruma emirleridir. tp_kademeleri en fazla dört kademedir, her kademenin "
-               "yuzde alanı girişin yüzde kaçını kapatacağıdır.")
+# Girişin kontrol alanları, talimat/sema.md adım 5. son_stoptan_farki
+# şemada isteğe bağlıdır, ne zaman zorunlu olduğunu checks.py bilir.
+ENTRY_CHECKS = ["karsi_kanit", "risk_beyani", "gecersizlik"]
+
+_ENTRY_NOTE = ("marjin_usd ayıracağın marjin, kaldirac verirsen önce ayarlanacak kaldıraç. tp ya da tp_kademeleri, "
+               "sl ve iz_yuzde bu girişin miktarına kurulacak korumalar.")
 
 # tip, açıklama, zorunlu alanlar, isteğe bağlı alanlar.
 ACTIONS = [
     ("kaldirac_ayarla", "Paritenin kaldıracını ayarlar. Kaldıraç long ve short için ortaktır ve sonraki girişlere "
      "uygulanır. Paritede açık pozisyon varken düşürülemez.", ["sembol", "kaldirac"], []),
-    ("piyasa_giris", "Piyasa fiyatından giriş yapar. " + _ENTRY_NOTE,
-     ["sembol", "yon", "marjin_usd"], ["kaldirac"] + _GUARDS),
-    ("emir_ver", "Bekleyen giriş emri verir. tur limit ise fiyat emrin fiyatıdır: long için güncel fiyatın altında, "
-     "short için üstünde defterde bekler ve tam fiyatından maker dolar, yanlış taraftaysa hemen taker dolar. tur "
-     "kirilim Binance'in STOP_MARKET emridir: fiyat long için güncelin üstünde, short için altında bir tetiktir, son "
-     "fiyat oraya değince piyasa emri olur. tur geri_cekilme Binance'in TAKE_PROFIT_MARKET emridir: fiyat long için "
-     "güncelin altında, short için üstünde bir tetiktir, son fiyat oraya gelince piyasa emri olur. gecerlilik_dk "
-     "verirsen emir o kadar dakika içinde dolmazsa iptal olur. " + _ENTRY_NOTE,
-     ["sembol", "yon", "tur", "fiyat", "marjin_usd"], ["kaldirac"] + _GUARDS + ["gecerlilik_dk"]),
+    ("piyasa_giris", "Piyasa fiyatından giriş. " + _ENTRY_NOTE,
+     ["sembol", "yon", "marjin_usd"] + ENTRY_CHECKS, ["kaldirac"] + _GUARDS + ["son_stoptan_farki"]),
+    ("emir_ver", "Bekleyen giriş emri. tur limit, kirilim ya da geri_cekilme, fiyat emrin fiyatı ya da tetiği. "
+     "gecerlilik_dk emrin dolmazsa iptal olacağı süre. " + _ENTRY_NOTE,
+     ["sembol", "yon", "tur", "fiyat", "marjin_usd"] + ENTRY_CHECKS,
+     ["kaldirac"] + _GUARDS + ["gecerlilik_dk", "son_stoptan_farki"]),
     ("emir_degistir", "Bekleyen bir limit emrin fiyatını değiştirir, miktarı aynı kalır. numara, sembol ve yon emrin "
      "hesaptaki değerleridir.", _REF + ["fiyat"], []),
     ("emir_iptal", "Bekleyen bir giriş emrini ya da bir koruma emrini iptal eder. numara, sembol ve yon emrin "
@@ -294,7 +310,9 @@ def translate(a: dict, state: AccountState, prices: dict[str, float], marks: dic
     tip = a.get("tip")
     if tip not in _BY_TYPE:
         raise ValueError(f"Bilinmeyen eylem tipi: {tip}.")
-    missing = [f for f in _BY_TYPE[tip][2] if a.get(f) is None]
+    # Girişin kontrol alanları komuta girmez, onları strateji checks.py ile
+    # denetler. Çeviri yalnızca komutun alanlarına bakar.
+    missing = [f for f in _BY_TYPE[tip][2] if a.get(f) is None and f not in ENTRY_CHECKS]
     if missing:
         raise ValueError(f"{', '.join(missing)} alanı eksik.")
     match tip:

@@ -5,7 +5,8 @@ importable: INTERVALS, LABELS, indicator_summary, summary_line, cards_text
 Opus'a her çağrıda giden parite kartları. cards_text() profilin her paritesi
 için aynı alanlardan oluşan bir kart kurar: fiyat ve değişim, hacim,
 oynaklık, fonlama, trend, açık pozisyon, long short dağılımı,
-likidasyonlar, yakın seviyeler ve dört aralığın göstergeleri.
+likidasyonlar, yakın seviyeler, profilin yapı aralıklarındaki son tepe ve
+dipler ve dört aralığın göstergeleri.
 indicator_summary() bir mum listesinin sabit ayarlı gösterge özetini,
 summary_line() onun Opus'un gördüğü tek satırını verir.
 
@@ -31,7 +32,7 @@ from pathlib import Path
 from ...market import analysis, indicators, liquidations
 from ...market.models import Candle
 from ...market.source import MarketData, MarketDataError, RatioKind
-from .texts import clock, price
+from .texts import INTERVAL_NAMES, clock, price
 
 log = logging.getLogger(__name__)
 
@@ -39,6 +40,16 @@ INTERVALS = ("15m", "1h", "4h", "1d")
 
 # Kartta 1 saatlik grafikte fiyatın üstünde ve altında kaçar seviye gösterildiği.
 _CARD_LEVELS = 2
+
+# Yapı satırında her aralık için kaçar tepe ve dip yazıldığı. Opus şemaya son
+# ikişerini yazar, üçüncüsü bir öncekiyle karşılaştırma için bağlamdır.
+_SWINGS_SHOWN = 3
+
+# Yapı satırındaki uçların iki yanında kaç mum olması gerektiği. seviyeler
+# aracının varsayılanı beştir ve seviye bulmak içindir. Yapıda en yeni uç en
+# az bu kadar mum önce oluşmuş olur, beş mum 1 saatlikte bir geri çekilmenin
+# bittiğini beş saat geç gösterirdi.
+_SWING_WINDOW = 3
 
 LABELS = {
     "close": "kapanis", "ema20": "ema20", "ema50": "ema50", "ema200": "ema200", "rsi14": "rsi14", "macd": "macd",
@@ -84,7 +95,24 @@ def _levels_line(levels: list[analysis.Level]) -> str:
     return ", ".join(f"{price(x.price)} {x.touches} uç" for x in levels) or "yok"
 
 
-async def _card(market: MarketData, liq_db: Path, symbol: str, last: float, now: int) -> str:
+def _swing_text(found: list[analysis.Swing], kind: str) -> str:
+    picked = [x for x in found if x.kind == kind][-_SWINGS_SHOWN:]
+    return ", ".join(f"{price(x.price)} {clock(x.time)}" for x in picked) or "yok"
+
+
+# Eskiden yeniye yazılır, Opus şemaya da bu sırayla yazar.
+def _structure_lines(lists: dict[str, list[Candle]], structure: tuple[str, ...]) -> list[str]:
+    out = []
+    for interval in structure:
+        found = analysis.swings(lists[interval], _SWING_WINDOW)
+        name = INTERVAL_NAMES[interval]
+        name = name[0].upper() + name[1:]
+        out.append(f"{name} son tepeler: {_swing_text(found, 'high')}. {name} son dipler: {_swing_text(found, 'low')}.")
+    return out
+
+
+async def _card(market: MarketData, liq_db: Path, symbol: str, last: float, now: int,
+                structure: tuple[str, ...]) -> str:
     lists = dict(zip(INTERVALS, await asyncio.gather(*(market.candles(symbol, i, 250) for i in INTERVALS))))
     day, prem, oi, accounts, top, taker = await asyncio.gather(
         market.daily_stats(symbol), market.premium(symbol),
@@ -123,8 +151,8 @@ async def _card(market: MarketData, liq_db: Path, symbol: str, last: float, now:
         lines.append("Long short dağılımı: veri yok.")
     con = liquidations.open_readonly(liq_db)
     try:
-        tot = liquidations.totals(con, symbol, now - 86400)
-        waves = liquidations.waves(con, symbol, now - 86400)
+        tot = liquidations.totals(con, symbol, now - 86400, now)
+        waves = liquidations.waves(con, symbol, now - 86400, now)
     finally:
         con.close()
     (ln, lu), (sn, su) = tot["long"], tot["short"]
@@ -142,17 +170,21 @@ async def _card(market: MarketData, liq_db: Path, symbol: str, last: float, now:
     below = [x for x in found if x.price <= last][-_CARD_LEVELS:]
     lines.append(f"1 saatlik grafikte en yakın seviyeler, üstte: {_levels_line(above)}. "
                  f"Altta: {_levels_line(list(reversed(below)))}.")
+    lines += _structure_lines(lists, structure)
     lines.append("### Göstergeler\n\n" + "\n".join(f"{i}: {summary_line(s)}" for i, s in ind.items()))
     return "\n".join(lines[:1]) + "\n\n" + "\n".join(lines[1:-1]) + "\n\n" + lines[-1]
 
 
 async def cards_text(market: MarketData, liq_db: Path, symbols: tuple[str, ...], prices: dict[str, float],
-                     now: int) -> str:
+                     now: int, structure: tuple[str, ...] = ("4h", "1h")) -> str:
     """Profilin bütün paritelerinin kartlarını tek bir Markdown bölümü olarak döndürür.
+
+    structure profilin yapı aralıklarıdır, üstten alta. Her biri INTERVALS'tan biri olmalı.
 
     Raises:
         MarketDataError: Bir paritenin mumları, günlük özeti ya da premium verisi alınamazsa.
     """
-    blocks = await asyncio.gather(*(_card(market, liq_db, s, prices[s], now) for s in symbols))
-    return ("# Parite kartları\n\nHer paritenin kartı aynı verileri aynı derinlikte taşır. Daha uzun geçmişe ve "
-            "diğer verilere piyasa araçlarıyla bakabilirsin.\n\n" + "\n\n".join(blocks))
+    blocks = await asyncio.gather(*(_card(market, liq_db, s, prices[s], now, structure) for s in symbols))
+    return ("# Parite kartları\n\nHer paritenin kartı aynı verileri aynı derinlikte taşır. Son tepe ve dipler "
+            f"iki yanında {_SWING_WINDOW} mumdan uç olan mumlardır, eskiden yeniye. Daha uzun geçmişe ve diğer "
+            "verilere piyasa araçlarıyla bakabilirsin.\n\n" + "\n\n".join(blocks))

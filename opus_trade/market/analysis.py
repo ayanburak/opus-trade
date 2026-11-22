@@ -1,8 +1,9 @@
 """
 file: analysis.py
-importable: Level, levels, VolumeProfile, volume_profile, correlation
+importable: Swing, swings, Level, levels, VolumeProfile, volume_profile, correlation
 
-Mum listelerinden fiyat yapısı çıkaran hesaplar. levels() tepe ve dipleri
+Mum listelerinden fiyat yapısı çıkaran hesaplar. swings() tepe ve dipleri
+zaman sırasıyla verir, piyasanın yapısı onlardan okunur. levels() aynı uçları
 bulup birbirine yakın olanları destek ve direnç seviyelerinde toplar.
 volume_profile() hacmin hangi fiyat aralıklarında yoğunlaştığını hesaplar.
 correlation() birden çok paritenin getirileri arasındaki korelasyonu verir.
@@ -19,6 +20,41 @@ from dataclasses import dataclass
 
 from .indicators import atr
 from .models import Candle
+
+# --- Tepe ve dipler ---
+
+
+@dataclass(frozen=True)
+class Swing:
+    """Bir tepe ya da dip. kind high ya da low olur."""
+
+    time: int
+    price: float
+    kind: str
+
+
+# Bir mumun yükseği iki yanındaki window kadar mumun hepsinden büyükse tepe,
+# düşüğü hepsinden küçükse dip sayılır. Sağında window kadar mum olmayan
+# mumlar değerlendirilmez. Son mum henüz kapanmamış olabilir, sağ yanı
+# görülmemiş bir uç sonradan geçersiz kalabilirdi. Bu yüzden en yeni uç en az
+# window mum önce oluşmuş olur. Aynı mum hem tepe hem dip olabilir, örneğin
+# çok geniş bir mum, ikisi de sırayla yazılır.
+def swings(candles: list[Candle], window: int = 5) -> list[Swing]:
+    """Mumların tepe ve diplerini eskiden yeniye döndürür.
+
+    Args:
+        candles: Eskiden yeniye mumlar.
+        window: Bir tepenin ya da dibin iki yanında kaç mumdan uç olması gerektiği.
+    """
+    found = []
+    for i in range(window, len(candles) - window):
+        around = candles[i - window:i] + candles[i + 1:i + window + 1]
+        if candles[i].high > max(m.high for m in around):
+            found.append(Swing(candles[i].time, candles[i].high, "high"))
+        if candles[i].low < min(m.low for m in around):
+            found.append(Swing(candles[i].time, candles[i].low, "low"))
+    return found
+
 
 # --- Destek ve direnç ---
 
@@ -40,20 +76,6 @@ class Level:
     last: int
 
 
-# Bir mumun yükseği iki yanındaki window kadar mumun hepsinden büyükse tepe,
-# düşüğü hepsinden küçükse dip sayılır. Son window mumun sağ yanı henüz
-# görülmediği için değerlendirilmez.
-def _pivots(candles: list[Candle], window: int) -> list[tuple[int, float]]:
-    found = []
-    for i in range(window, len(candles) - window):
-        around = candles[i - window:i] + candles[i + 1:i + window + 1]
-        if candles[i].high > max(m.high for m in around):
-            found.append((candles[i].time, candles[i].high))
-        if candles[i].low < min(m.low for m in around):
-            found.append((candles[i].time, candles[i].low))
-    return found
-
-
 # Uçlar fiyata göre sıralanır ve grubun ortalamasına yarım ATR'den yakınsa
 # o gruba katılır. Komşu uçla değil ortalamayla karşılaştırmak, birbirine
 # zincirleme yakın uçların çok geniş tek bir seviyeye yayılmasını önler.
@@ -69,7 +91,7 @@ def levels(candles: list[Candle], window: int = 5) -> list[Level]:
         return []
     tolerance = known[-1] / 2
     groups: list[list[tuple[int, float]]] = []
-    for t, price in sorted(_pivots(candles, window), key=lambda x: x[1]):
+    for t, price in sorted(((x.time, x.price) for x in swings(candles, window)), key=lambda x: x[1]):
         if groups and price - sum(p for _, p in groups[-1]) / len(groups[-1]) <= tolerance:
             groups[-1].append((t, price))
         else:

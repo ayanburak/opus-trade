@@ -116,6 +116,22 @@ async def test_correction_is_info_only(api):
 
 
 @run
+async def test_suggestion_is_important_and_exhausted_rejection_is_critical(api):
+    """Opus'un önerisi önemli bildirimdir. Düzeltme hakkı bitince de reddedilen karar kritiktir, o çağrıda hiçbir şey
+    uygulanmadı. Ara retler bilgi seviyesindedir."""
+    pid, r = await api.running(FLAKY)
+    no = lambda: Decision(rejection=["Kontrol: adım 2. Neden: çelişki."], wait_s=900,
+                          record={"rejection": ["Kontrol: adım 2. Neden: çelişki."]})
+    Flaky.script = [Decision(suggestion="Girişlerim erken kalıyor."), no(), no(), no()]
+    await api.step(r)
+    r.wake("admin")
+    await api.step(r)
+    got = [(n["level"], n["kind"]) for n in await notes(api)]
+    assert got == [("important", "suggestion"), ("info", "rejected"), ("info", "rejected"), ("info", "rejected"),
+                   ("critical", "decision_rejected")]
+
+
+@run
 async def test_daily_loss_is_told_once_a_day_even_after_restart(api):
     """Günlük zarar sınırı her dakika değil günde bir kez bildirilir. Profil yeniden kurulsa da aynı gün tekrar etmez."""
     cfg = {**FLAKY, "risk": {"daily_loss": 1}}

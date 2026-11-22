@@ -6,8 +6,10 @@ ProfileRunner tek bir profili yürütür. Canlı mumları ve likidasyonları
 broker'a ve tetikleyicilere verir, uyandırmaları kalıcı bir sırada biriktirir
 ve tick() her saniye çağrıldıkça sıradakileri tek bir kararda stratejiye
 verir. Kararın komutlarını kapıdan geçirir, alarm işlemlerini uygular,
-hafızayı ve günlüğü yazar. Reddedilen bir komut varsa ve strateji isterse
-hemen düzeltme için yeniden uyandırır. describe() bir komutun olaylarını
+hafızayı, günlüğü, girişlerin notlarını ve sınıflandırmaları yazar.
+Strateji kararı kontrol hatasıyla reddettiyse hiçbir şey uygulamaz.
+Reddedilen bir karar ya da komut varsa ve strateji isterse hemen düzeltme
+için yeniden uyandırır. describe() bir komutun olaylarını
 kısa bir Türkçe sonuca çevirir.
 
 description: Bir profilin uyandırma, karar ve uygulama döngüsü.
@@ -40,19 +42,22 @@ from ..domain import numbers
 from ..domain.clock import Clock
 from ..domain.errors import RuleError
 from ..domain.profile import Profile, State, Version
-from ..domain.trading import AccountEvent, Actor, EventKind
+from ..domain.trading import AccountEvent, Actor, CancelOrder, EventKind, Ref
 from ..market.models import Candle, Liquidation
 from ..market.source import MarketData, MarketDataError
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
+from ..storage.notes import NotesRepo
 from ..storage.runtime_state import StateRepo
-from ..strategy.base import ActionResult, Context, Decision, Strategy, Wake
-from ..strategy.llm.texts import order_name
+from ..strategy.base import ActionResult, Context, Decision, Facts, Strategy, Wake
+from ..strategy.llm.texts import invalidation_text, order_name
 from ..triggers.base import Fire, Trigger
 from ..triggers.price_alert import PriceAlerts
+from . import facts as facts_
 from . import wakes as wake_codec
 from .bus import EventBus
 from .gate import Gate
+from .invalidation import Hit, InvalidationWatch
 from .model_access import ModelAccess
 
 log = logging.getLogger(__name__)
@@ -131,6 +136,7 @@ class ProfileRunner:
         max_corrections: Arka arkaya en fazla düzeltme çağrısı.
         feed: Yönetici bölümünü ve gösterilecek müdahalelerin kimliklerini veren fonksiyon.
         delivered: Başarılı bir karardan sonra gösterilen müdahalelerin kimlikleriyle çağrılır.
+        notes: Giriş notları ve sınıflandırmalar. Verilmezse hesap gerçekleri boş gider ve not yazılmaz.
     """
 
     def __init__(self, profile: Profile, version: Version, strategy: Strategy, broker: Broker, gate: Gate,
@@ -138,7 +144,7 @@ class ProfileRunner:
                  state: StateRepo, market: MarketData, clock: Clock, bus: EventBus, access: ModelAccess,
                  lock: asyncio.Lock, history: int = 8, retry_s: int = 600, max_corrections: int = 2,
                  feed: Callable[[], tuple[dict, list[int]]] | None = None,
-                 delivered: Callable[[list[int]], None] | None = None) -> None:
+                 delivered: Callable[[list[int]], None] | None = None, notes: NotesRepo | None = None) -> None:
         self.profile = profile
         self.version = version
         self.strategy = strategy
@@ -159,6 +165,10 @@ class ProfileRunner:
         self.max_corrections = max_corrections
         self.feed = feed or (lambda: ({}, []))
         self.delivered = delivered or (lambda ids: None)
+        self.notes = notes
+        self.watch = InvalidationWatch(notes, profile.id) if notes else None
+        self._cancels: list[Hit] = []
+        self._side_tasks: set[asyncio.Task] = set()
         self.prices: dict[str, float] = {}
         self.marks: dict[str, float] = {}
         self.busy = False
@@ -210,9 +220,13 @@ class ProfileRunner:
             self.bus.publish({"profile": self.pid, "fire": f})
             self.wake("trigger", f)
 
+    # Dolan bir girişin notu oluşan pozisyona bağlanır, Opus tezini
+    # pozisyonun yanında görmeye devam eder.
     def _account(self, events: list[AccountEvent]) -> None:
         for e in events:
             self.bus.publish(e)
+            if e.kind is EventKind.ORDER_FILLED and self.notes and e.order_id and e.position_id:
+                self.notes.attach_position(e.order_id, e.position_id)
             if e.kind in _WAKING:
                 self.wake("account", e)
 
@@ -246,6 +260,7 @@ class ProfileRunner:
         for t in self.triggers:
             self._fire(t.on_candle(candle))
         self._fire(self.alerts.on_candle(fresh))
+        self._invalidations(candle.symbol, fresh.high, fresh.low, self.clock.time())
         if closed:
             self.state.set_setting(f"price_seen:{self.pid}:{candle.symbol}", candle.time)
 
@@ -283,6 +298,7 @@ class ProfileRunner:
                     self._account(self.broker.on_mark(s, m.high, m.low, m.close, c.time + 59, None))
                     self.marks[s] = m.close
                 self._account(self.broker.on_price(s, c.open, c.high, c.low, c.close, c.time + 59))
+                self._invalidations(s, c.high, c.low, c.time + 59)
                 self.prices[s] = c.close
             if candles:
                 self.state.set_setting(f"price_seen:{self.pid}:{s}", candles[-1].time)
@@ -312,9 +328,50 @@ class ProfileRunner:
                 self._account(self.broker.on_funding(s, f.rate, f.mark or self.prices.get(s, 0), f.time))
                 self.state.set_setting(key, f.time)
 
+    # --- Geçersizlik ---
+
+    # Açık pozisyonun seviyesine değilince Opus hemen uyandırılır. Bekleyen
+    # girişin iptali kapıdan gider ve asenkrondur, bir sonraki tick'te
+    # gönderilir. Opus iptal için çağrılmaz, bir sonraki çağrıda hesap
+    # bölümünde görür.
+    def _invalidations(self, symbol: str, high: float, low: float, now: int) -> None:
+        if not self.watch:
+            return
+        for hit in self.watch.on_price(symbol, high, low, self.broker.state()):
+            if hit.order is not None:
+                self._cancels.append(hit)
+                continue
+            n = hit.note
+            self.wake("invalidation", invalidation_text(n.symbol, n.side, n.invalid_price, n.invalid_text))
+            self.watch.done(hit, now)
+
+    async def _cancel(self, hits: list[Hit]) -> None:
+        for hit in hits:
+            o = hit.order
+            now = self.clock.time()
+            try:
+                await self.gate.submit(CancelOrder(Ref(o.number, o.symbol, o.side)), Actor.SYSTEM, now)
+                self.watch.done(hit, now)
+                self.state.system_event(self.pid, now, "invalidated", f"#{o.number} {o.symbol} {o.side} girişi "
+                                        f"geçersizlik fiyatına değdiği için iptal edildi.",
+                                        {"order_id": o.id, "price": hit.note.invalid_price})
+            except RuleError as e:
+                self.watch.failed(hit)
+                log.info("[%s] Geçersizlik iptali gönderilemedi: %s", self.profile.short, e)
+
+    async def flush_cancels(self) -> None:
+        """Sırada bekleyen geçersizlik iptallerini gönderir. Testler ve tick bunu kullanır."""
+        hits, self._cancels = self._cancels, []
+        if hits:
+            await self._cancel(hits)
+
     # --- Zaman ---
 
     def tick(self, now: int) -> None:
+        if self._cancels:
+            task = asyncio.create_task(self.flush_cancels())
+            self._side_tasks.add(task)
+            task.add_done_callback(self._side_tasks.discard)
         for t in self.triggers:
             self._fire(t.tick(now))
         if now // 60 != self._last_minute:
@@ -356,6 +413,8 @@ class ProfileRunner:
             self.busy = False
 
     async def wait_idle(self) -> None:
+        if self._side_tasks:
+            await asyncio.gather(*self._side_tasks, return_exceptions=True)
         if self._task and not self._task.done():
             await asyncio.gather(self._task, return_exceptions=True)
 
@@ -364,7 +423,10 @@ class ProfileRunner:
     def _context(self, wakes: list[Wake], now: int, admin: dict) -> Context:
         trades = self.ledger.trades(self.broker.account_id)
         nets = [t.net for t in trades]
-        return Context(now=now, wakes=wakes, state=self.broker.state(), prices=dict(self.prices),
+        state = self.broker.state()
+        found = (facts_.build(self.ledger, self.journal, self.notes, self.pid, state, self.version.created_at, now,
+                              describe) if self.notes else Facts())
+        return Context(now=now, wakes=wakes, state=state, prices=dict(self.prices),
                        marks=dict(self.marks), symbols=self.symbols, market=self.market,
                        memory=self.journal.memory(self.pid),
                        history=self.journal.recent(self.pid, self.history),
@@ -372,11 +434,37 @@ class ProfileRunner:
                        alerts=self.alerts.alerts,
                        stats={"count": len(nets), "wins": sum(1 for n in nets if n > 0), "net": sum(nets),
                               "fee": sum(t.fee for t in trades)},
-                       start_balance=self.ledger.start_balance(self.broker.account_id),
+                       start_balance=self.ledger.start_balance(self.broker.account_id), facts=found,
                        on_tool=lambda t: self.bus.publish({"profile": self.pid, "tool": t}))
 
-    async def _apply(self, d: Decision, now: int) -> list[ActionResult]:
+    # Girişin notu, komutun olaylarından emrin ya da pozisyonun kimliğini
+    # alır. Bekleyen girişte ORDER_PLACED, piyasa girişinde OPENED ya da
+    # ADDED olayıdır. Not günlük satırı yazıldıktan sonra kimliğiyle depoya
+    # girer, o yüzden burada yalnızca toplanır.
+    @staticmethod
+    def _noted(note: dict, events: list[AccountEvent]) -> dict | None:
+        for e in events:
+            if e.kind is EventKind.ORDER_PLACED and not e.reduce and e.order_id:
+                return {**note, "order_id": e.order_id}
+            if e.kind in (EventKind.OPENED, EventKind.ADDED) and e.position_id:
+                return {**note, "position_id": e.position_id}
+        return None
+
+    # Rejimi uygun bulunmayan paritede beklenen fiyata sistemin kurduğu alarm.
+    # Aynı paritenin eski beklenti alarmı yenisinden önce iptal edilir, Opus
+    # yalnızca son beklediği fiyatta çağrılır.
+    def _expect(self, op: dict, now: int) -> str:
+        for old in [a for a in self.alerts.alerts if a.purpose == "expectation" and a.symbol == op["symbol"]]:
+            self.alerts.cancel(old.number)
+            self.state.resolve_alert(self.pid, old.number, "cancelled", now)
+        a = self.alerts.add(op["symbol"], op["price"], self.prices[op["symbol"]], op["note"], str(Actor.SYSTEM), now,
+                            purpose="expectation")
+        self.state.add_alert(self.pid, a)
+        return f"beklenen fiyata alarm #{a.number} {a.symbol} {numbers.price(a.price)} kuruldu."
+
+    async def _apply(self, d: Decision, now: int) -> tuple[list[ActionResult], list[dict]]:
         results = d.errors + d.notes
+        noted: list[dict] = []
         failed = False
         for i, (cmd, label) in enumerate(zip(d.commands, d.labels)):
             if failed and i < len(d.chained) and d.chained[i]:
@@ -384,15 +472,23 @@ class ProfileRunner:
                                                           f"reddedildi."))
                 continue
             try:
-                results.append(ActionResult(label, True, describe(await self.gate.submit(cmd, Actor.STRATEGY, now))))
+                events = await self.gate.submit(cmd, Actor.STRATEGY, now)
+                results.append(ActionResult(label, True, describe(events)))
                 failed = False
+                note = d.annotations[i] if i < len(d.annotations) else None
+                if note and (found := self._noted(note, events)):
+                    noted.append(found)
             except RuleError as e:
                 results.append(ActionResult(label, False, f"{label} reddedildi: {e}"))
                 failed = True
         for op in d.alarms:
             label = op.get("label", "alarm")
             try:
-                if op["op"] == "add":
+                if op["op"] == "expect":
+                    if op["symbol"] not in self.prices:
+                        raise ValueError(f"{op['symbol']} fiyatı henüz gelmedi.")
+                    results.append(ActionResult(label, True, self._expect(op, now)))
+                elif op["op"] == "add":
                     if op["symbol"] not in self.prices:
                         raise ValueError(f"{op['symbol']} fiyatı henüz gelmedi.")
                     a = self.alerts.add(op["symbol"], op["price"], self.prices[op["symbol"]], op["note"],
@@ -406,7 +502,19 @@ class ProfileRunner:
                     results.append(ActionResult(label, True, f"alarm #{a.number} iptal edildi."))
             except ValueError as e:
                 results.append(ActionResult(label, False, f"{label} reddedildi: {e}"))
-        return results
+        return results, noted
+
+    # Notlar ve sınıflandırmalar günlük satırının kimliğiyle yazılır, panel
+    # bir girişin hangi kararla verildiğini buradan bulur.
+    def _remember(self, d: Decision, noted: list[dict], jid: int, now: int) -> None:
+        if not self.notes:
+            return
+        for n in noted:
+            self.notes.add_entry(self.pid, self.broker.account_id, n["symbol"], n["side"], n["reason"],
+                                 n["invalid_price"], n["invalid_text"], now, jid, n.get("order_id"),
+                                 n.get("position_id"))
+        for r in d.reviews:
+            self.notes.add_review(r["position_id"], self.pid, jid, r["verdict"], r["text"], now)
 
     async def _decide(self, wakes: list[Wake], ids: list[int], corrections: int) -> None:
         now = self.clock.time()
@@ -428,13 +536,43 @@ class ProfileRunner:
             return
         self.state.drop_wakes(ids)
         self.delivered(shown)
-        results = await self._apply(d, now)
+        can_correct = self.strategy.corrects and corrections < self.max_corrections
+        left = self.max_corrections - corrections - 1
+        if d.suggestion:
+            self.bus.publish({"profile": self.pid, "suggestion": d.suggestion})
+        if d.rejection:
+            await self._rejected(d, now, stored, corrections, can_correct, left)
+            return
+        results, noted = await self._apply(d, now)
         if d.memory:
             self.journal.set_memory(self.pid, d.memory)
         self.next_wake = now + d.wait_s if d.wait_s else None
         jid = self.journal.add(self.pid, self.version.id, now, stored,
                                [{"label": r.label, "ok": r.ok, "message": r.message} for r in results],
                                d.record, None, self.next_wake)
+        self._remember(d, noted, jid, now)
         self.bus.publish({"profile": self.pid, "journal": jid})
-        if self.strategy.corrects and corrections < self.max_corrections and any(not r.ok for r in results):
-            await self._decide([Wake("correction", now, results)], [], corrections + 1)
+        if can_correct and any(not r.ok for r in results):
+            await self._decide([Wake("correction", now, {"rejected": False, "results": results, "left": left})], [],
+                               corrections + 1)
+
+    # Kontrol hatasıyla reddedilen karar hiçbir komut uygulamaz, hafızayı
+    # yazmaz. Günlüğe reddin nedenleriyle girer. Hak varsa hemen düzeltme
+    # istenir. Hak bitince yöneticiye bildirilir ve bir sonraki çağrı
+    # stratejinin verdiği beklemeyle olur. Düzeltme çağrısı da hata verirse
+    # profil bu beklemeyle yine uyanır.
+    async def _rejected(self, d: Decision, now: int, stored: list[dict], corrections: int, can_correct: bool,
+                        left: int) -> None:
+        results = [ActionResult("kontrol", False, e) for e in d.rejection]
+        self.next_wake = now + d.wait_s if d.wait_s else None
+        jid = self.journal.add(self.pid, self.version.id, now, stored,
+                               [{"label": r.label, "ok": r.ok, "message": r.message} for r in results],
+                               d.record, None, self.next_wake)
+        self.bus.publish({"profile": self.pid, "journal": jid})
+        if can_correct:
+            await self._decide([Wake("correction", now, {"rejected": True, "results": results, "left": left})], [],
+                               corrections + 1)
+            return
+        self.state.system_event(self.pid, now, "decision_rejected", "Karar düzeltme hakkı bittiği için uygulanmadı.",
+                                {"errors": d.rejection, "journal": jid})
+        self.bus.publish({"profile": self.pid, "decision_rejected": d.rejection, "journal_id": jid})

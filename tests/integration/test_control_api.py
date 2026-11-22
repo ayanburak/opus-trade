@@ -461,19 +461,28 @@ def test_startup_log_counts_profiles_after_they_are_built(tmp_path, caplog):
     assert "1 profil kuruldu." in caplog.messages
 
 
+BOOK = {"plan": {"metin": "62615 altında short ara.", "bozulma": "62615 üstü", "gecerlilik": "23.11.2026 18:00"},
+        "seviyeler_notu": "Direnç 57.600", "gundem": "Salı FOMC."}
+
+
 def test_admin_edits_notebook_and_strategy_reads_it_next(tmp_path, monkeypatch):
-    """Panelden düzeltilen not defteri bir sonraki kararda stratejiye gider, eski metin olayda kalır."""
+    """Panelden düzeltilen not defteri bir sonraki kararda stratejiye gider, eski biçimdeki metin olayda kalır.
+    Sistemin taşıdığı tepe ve dipler panelden yazılmaz, korunur."""
     monkeypatch.setattr(Echo, "uses_model", True)
 
     async def go(api):
         pid, r = await api.running(ECHO)
         api.core.journal.set_memory(pid, {"notebook": "DÖNEM: eski\nDirenç 57.600"})
-        await api.call("POST", f"/profiles/{pid}/memory", json={"notebook": "Direnç 57.600", "before": "DÖNEM: eski\nDirenç 57.600"})
+        await api.call("POST", f"/profiles/{pid}/memory", json={"notebook": BOOK, "before": "DÖNEM: eski\nDirenç 57.600"})
         await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "look_now"})
         await api.step(r, 1)
-        assert Echo.seen[-1].memory["notebook"] == "Direnç 57.600"
+        book = Echo.seen[-1].memory["notebook"]
+        assert book["plan"] == BOOK["plan"] and book["yapi"] == {"seviyeler_notu": "Direnç 57.600", "rakamlar": {}}
         ev = [e for e in api.core.state.system_events(pid) if e["kind"] == "memory_edit"]
         assert len(ev) == 1 and "DÖNEM: eski" in ev[0]["detail"]
+        too_long = {**BOOK, "gundem": "x" * 501}
+        err = await api.call("POST", f"/profiles/{pid}/memory", ok=False, json={"notebook": too_long, "before": book})
+        assert "gündem 501 karakter" in err["detail"]
     asyncio.run(go(Api(tmp_path)))
 
 
@@ -481,14 +490,14 @@ def test_notebook_edit_is_refused_while_deciding_or_without_model(tmp_path, monk
     """Karar sürerken yazma reddedilir, yoksa çağrının sonu düzeltmeyi siler. Kural profilinde defter yoktur."""
     async def go(api):
         rule = await api.call("POST", "/profiles", json={"name": "Kural", "short": "K", "config": RULE})
-        err = await api.call("POST", f"/profiles/{rule['id']}/memory", ok=False, json={"notebook": "x", "before": ""})
+        err = await api.call("POST", f"/profiles/{rule['id']}/memory", ok=False, json={"notebook": BOOK, "before": None})
         assert "not defteri tutmaz" in err["detail"]
         monkeypatch.setattr(Echo, "uses_model", True)
         pid, r = await api.running(ECHO)
         api.core.journal.set_memory(pid, {"notebook": "Opus'un"})
         r.busy = True
         err = await api.call("POST", f"/profiles/{pid}/memory", ok=False,
-                             json={"notebook": "yönetici", "before": "Opus'un"})
+                             json={"notebook": BOOK, "before": "Opus'un"})
         assert "karar veriyor" in err["detail"] and api.core.journal.memory(pid) == {"notebook": "Opus'un"}
     asyncio.run(go(Api(tmp_path)))
 
@@ -501,7 +510,7 @@ def test_notebook_edit_is_refused_when_a_decision_rewrote_it(tmp_path, monkeypat
         pid, _ = await api.running(ECHO)
         api.core.journal.set_memory(pid, {"notebook": "yeni karar"})
         err = await api.call("POST", f"/profiles/{pid}/memory", ok=False,
-                             json={"notebook": "yönetici", "before": "eski"})
+                             json={"notebook": BOOK, "before": "eski"})
         assert "değişti" in err["detail"] and api.core.journal.memory(pid) == {"notebook": "yeni karar"}
     asyncio.run(go(Api(tmp_path)))
 
@@ -526,3 +535,6 @@ async def test_account_carries_the_position_detail(api):
     assert p["notional"] == p["qty"] * acc["prices"][SOL]
     [x] = p["outlook"]
     assert (x["order_id"], x["level"], x["qty"]) == (sl["id"], 97, p["qty"]) and x["net"] < 0
+    assert p["by_admin"] is True and p["notes"] == []
+    limit = next(o for o in acc["state"]["orders"] if not o["reduce"])
+    assert limit["by_admin"] is True and limit["note"] is None

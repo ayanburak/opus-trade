@@ -43,20 +43,24 @@ def open_readonly(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 
 
-def totals(con: sqlite3.Connection, symbol: str, since: int) -> dict[str, tuple[int, float]]:
+# until verilirse o andan sonraki kayıtlar sayılmaz. Geçmiş bir anın sınaması
+# gelecekteki likidasyonları görmemeli.
+def totals(con: sqlite3.Connection, symbol: str, since: int, until: int | None = None) -> dict[str, tuple[int, float]]:
     """Long ve short taraf için kayıt sayısını ve dolar toplamını döndürür."""
     out = {"long": (0, 0.0), "short": (0, 0.0)}
     for side, n, usd in con.execute("SELECT side, COUNT(*), SUM(price * qty) FROM liquidations "
-                                    "WHERE symbol = ? AND time >= ? GROUP BY side", (symbol, since)):
+                                    "WHERE symbol = ? AND time >= ? AND time < ? GROUP BY side",
+                                    (symbol, since, until if until is not None else 2**62)):
         out[side] = (n, usd)
     return out
 
 
-def waves(con: sqlite3.Connection, symbol: str, since: int) -> list[LiquidationWaveRow]:
-    """Bir paritedeki likidasyonları eskiden yeniye dalgalar halinde döndürür."""
+def waves(con: sqlite3.Connection, symbol: str, since: int, until: int | None = None) -> list[LiquidationWaveRow]:
+    """Bir paritedeki likidasyonları eskiden yeniye dalgalar halinde döndürür, until verilirse o ana kadar."""
     found: list[LiquidationWaveRow] = []
     for t, side, price, qty in con.execute("SELECT time, side, price, qty FROM liquidations "
-                                           "WHERE symbol = ? AND time >= ? ORDER BY time", (symbol, since)):
+                                           "WHERE symbol = ? AND time >= ? AND time < ? ORDER BY time",
+                                           (symbol, since, until if until is not None else 2**62)):
         if not found or t - found[-1].end > WAVE_GAP_S:
             found.append(LiquidationWaveRow(start=t, end=t))
         w, usd = found[-1], price * qty

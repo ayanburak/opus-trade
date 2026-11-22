@@ -136,6 +136,38 @@ class Ledger:
                                 (account_id, since or 0))
         return tuple(_trade(r) for r in rows)
 
+    # Hesap gerçekleri olayların kimin yaptığını ve hangi emrin hangi
+    # pozisyonu açtığını buradan okur. detail olayın tamamıdır.
+    def events(self, account_id: int, since: int = 0, kinds: tuple[str, ...] | None = None) -> list[dict]:
+        """since anından sonraki hesap olaylarını eskiden yeniye döndürür, kinds verilirse yalnızca o türleri."""
+        sql, args = "SELECT * FROM account_events WHERE account_id = ? AND time >= ?", [account_id, since]
+        if kinds:
+            sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+            args += list(kinds)
+        return [{**dict(r), "detail": json.loads(r["detail"])} for r in self.con.execute(sql + " ORDER BY id", args)]
+
+    # Bir pozisyonun bütün parçaları birlikte döner, kısmi kapanışlar da.
+    # Pozisyon tamamen kapandığında status closed olur, son parçanın zamanı
+    # kapanma anıdır.
+    def closed_positions(self, account_id: int, since: int = 0) -> list[tuple[int, tuple[Trade, ...]]]:
+        """since anından sonra tamamen kapanan pozisyonları kapanma sırasıyla, parçalarıyla döndürür."""
+        rows = self.con.execute(
+            "SELECT t.* FROM trades t JOIN positions p ON p.id = t.position_id WHERE t.account_id = ? "
+            "AND p.status = 'closed' AND t.position_id IN (SELECT position_id FROM trades WHERE account_id = ? "
+            "GROUP BY position_id HAVING MAX(exit_time) >= ?) ORDER BY t.id", (account_id, account_id, since))
+        grouped: dict[int, list[Trade]] = {}
+        for r in rows:
+            grouped.setdefault(r["position_id"], []).append(_trade(r))
+        return sorted(((pid, tuple(ts)) for pid, ts in grouped.items()), key=lambda x: (x[1][-1].exit_time, x[0]))
+
+    # Dolma oranı için çözülmüş giriş emirleri. Piyasa girişi defterde
+    # beklemez, sayılmaz.
+    def resolved_entries(self, account_id: int, limit: int) -> list[dict]:
+        """Son çözülmüş bekleyen giriş emirlerini yeniden eskiye id, status ve resolved_at ile döndürür."""
+        return [dict(r) for r in self.con.execute(
+            "SELECT id, status, resolved_at FROM orders WHERE account_id = ? AND reduce = 0 AND type != 'market' "
+            "AND status != 'pending' ORDER BY resolved_at DESC, id DESC LIMIT ?", (account_id, limit))]
+
     def leverages(self, account_id: int) -> dict[str, int]:
         rows = self.con.execute("SELECT symbol, leverage FROM leverages WHERE account_id = ?", (account_id,))
         return {r[0]: r[1] for r in rows}

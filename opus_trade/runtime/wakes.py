@@ -1,6 +1,6 @@
 """
 file: wakes.py
-importable: encode, decode
+importable: encode, decode, event_from_dict
 
 Bir uyandırmanın verisini JSON'a çevirir ve geri kurar. encode() verinin
 türünü de yazar, decode() o türe göre doğru tipi kurar. Bekleyen
@@ -51,6 +51,15 @@ def _trade(d: dict | None) -> Trade | None:
     return Trade(**{k: v for k, v in d.items() if k in known}, side=Side(d["side"]), tp_prices=tuple(tps))
 
 
+def event_from_dict(d: dict) -> AccountEvent:
+    """Sözlüğe çevrilmiş bir hesap olayını geri kurar. Defterdeki olayların detail alanı da bu biçimdedir."""
+    known = {f.name for f in fields(AccountEvent)}
+    return AccountEvent(**{**{k: v for k, v in d.items() if k in known}, "kind": EventKind(d["kind"]),
+                           "actor": Actor(d["actor"]),
+                           "side": Side(d["side"]) if d.get("side") else None, "trade": _trade(d.get("trade")),
+                           "order_type": OrderType(d["order_type"]) if d.get("order_type") else None})
+
+
 def decode(text: str | None) -> Any:
     if text is None:
         return None
@@ -59,10 +68,6 @@ def decode(text: str | None) -> Any:
     if kind == "text":
         return d["text"]
     if kind == "event":
-        known = {f.name for f in fields(AccountEvent)}
-        return AccountEvent(**{**{k: v for k, v in d.items() if k in known}, "kind": EventKind(d["kind"]),
-                               "actor": Actor(d["actor"]),
-                               "side": Side(d["side"]) if d.get("side") else None, "trade": _trade(d.get("trade")),
-                               "order_type": OrderType(d["order_type"]) if d.get("order_type") else None})
+        return event_from_dict(d)
     inner = Wave(**d["data"]) if d["inner"] == "wave" else Alert(**d["data"])
     return Fire(d["kind"], d["time"], d["symbol"], inner)

@@ -82,4 +82,72 @@ def test_trade_history_tells_the_effective_leverage(tmp_path, monkeypatch):
                                   4, 0.2, 0, 98, 100.5, (98,), None))
     monkeypatch.setenv("OPUS_CORE_DB", str(tmp_path / "core.db"))
     monkeypatch.setenv("OPUS_ACCOUNT", str(acc))
-    assert tools.gecmis_islemlerim(5).startswith("SOLUSDT short etkin kaldıraç 25.0x, miktar 2 marjin 8.00, giriş 100")
+    assert tools.gecmis_islemlerim(5).startswith(f"#{pid} SOLUSDT short etkin kaldıraç 25.0x, miktar 2 marjin 8.00, "
+                                                 f"giriş 100")
+
+
+def _profile(con, acc):
+    con.execute("INSERT INTO profiles (id, name, short, area, account_id, created_at) VALUES (1, 'A', 'a', 'paper', ?, ?)",
+                (acc, NOW))
+    con.execute("INSERT INTO profile_versions (id, profile_id, number, config, created_at) VALUES (1, 1, 1, '{}', ?)",
+                (NOW,))
+    con.commit()
+
+
+def test_history_tools_show_the_review_and_the_entry_thesis(tmp_path, monkeypatch):
+    """Sınıflandırma işlemin kaydına bağlanır, Opus kendi işlemlerine baktığında görür. Öğrenme ölçülebilir olur."""
+    from opus_trade.storage.notes import NotesRepo
+    con = connect(tmp_path / "core.db")
+    migrate(con, MIGRATIONS, tmp_path / "bak", catalog=catalog())
+    ledger = Ledger(con)
+    acc = ledger.create_account("paper", 10, NOW)
+    _profile(con, acc)
+    with ledger.atomic():
+        pid = ledger.insert_position(acc, symbol="SOLUSDT", side=Side.SHORT, qty=2, margin=8, entry_price=100,
+                                     entry_time=NOW - 600, best_price=100, best_time=NOW, worst_price=100,
+                                     worst_time=NOW, liq_price=110, fee=0, funding=0).id
+        ledger.insert_trade(Trade(0, acc, pid, "SOLUSDT", Side.SHORT, 2, 8, 100, NOW - 600, 101, NOW, "sl",
+                                  -2, 0.2, 0, 99.5, 101, (), 101))
+    notes = NotesRepo(con)
+    notes.add_entry(1, acc, "SOLUSDT", "short", {}, 101.5, "101,5 üstü kapanış", NOW - 600, position_id=pid)
+    notes.add_review(pid, 1, None, "zamanlama_yanlisti", "Erken girdim.", NOW)
+    monkeypatch.setenv("OPUS_CORE_DB", str(tmp_path / "core.db"))
+    monkeypatch.setenv("OPUS_ACCOUNT", str(acc))
+    line = tools.gecmis_islemlerim(5)
+    assert line.endswith("geçersizlik 101.5: 101,5 üstü kapanış, sınıflandırman zamanlama yanlıştı: Erken girdim.")
+    assert "sınıflandırman zamanlama yanlıştı" in tools.cikis_karnesi(5)
+
+
+def test_decision_history_reads_both_record_shapes(tmp_path, monkeypatch):
+    """Eski kayıtlar görüş ve güven, yenileri rejim taşır. Araç ikisini de okur, eski kayıt yüzünden çökmez."""
+    import json
+    from opus_trade.storage.journal import JournalRepo
+    con = connect(tmp_path / "core.db")
+    migrate(con, MIGRATIONS, tmp_path / "bak", catalog=catalog())
+    _profile(con, Ledger(con).create_account("paper", 10, NOW))
+    j = JournalRepo(con)
+    j.add(1, 1, NOW - 60, [], [], {"decision": {"gorus": "dusus", "guven": 60, "ozet": "eski", "analiz": ""}}, None,
+          None)
+    new = {"ozet": "yeni", "analiz": "", "pariteler": {"BTCUSDT": {"rejim": {"rejim": "donus", "uygun": "hayir"}}}}
+    j.add(1, 1, NOW, [], [], {"decision": new, "rejection": ["x"]}, None, None)
+    monkeypatch.setenv("OPUS_CORE_DB", str(tmp_path / "core.db"))
+    monkeypatch.setenv("OPUS_PROFILE", "1")
+    text = tools.gecmis_kararlarim(5)
+    assert "BTCUSDT dönüş, uygun değil, kontrol hatasıyla reddedildi\n  özet: yeni" in text
+    assert "görüş dusus, güven 60\n  özet: eski" in text
+
+
+def test_as_of_cuts_the_clock_and_the_order_book(tmp_path, monkeypatch):
+    """Sınamada araçlar geçmiş anın saatini kullanır, o andan sonraki likidasyon görünmez, emir defteri geçmişi yoktur."""
+    con = connect(tmp_path / "market.db")
+    migrate(con, MARKET_MIGRATIONS, tmp_path / "bak")
+    CollectorStore(con).add_liquidations([Liquidation(NOW - 60, "SOLUSDT", Side.LONG, 100.0, 1000.0),
+                                          Liquidation(NOW + 60, "SOLUSDT", Side.SHORT, 101.0, 10.0)])
+    monkeypatch.setenv("OPUS_MARKET_DB", str(tmp_path / "market.db"))
+    monkeypatch.setenv("OPUS_AS_OF", str(NOW))
+    monkeypatch.setattr(tools, "_market", None)
+    text = tools.likidasyonlar("SOLUSDT", 1)
+    assert "long likidasyonları 1 kayıt" in text and "short likidasyonları 0 kayıt" in text
+    assert "emir defteri yoktur" in asyncio.run(tools.emir_defteri("SOLUSDT"))
+    assert type(tools._rest()).__name__ == "AsOfMarket"
+    monkeypatch.setattr(tools, "_market", None)

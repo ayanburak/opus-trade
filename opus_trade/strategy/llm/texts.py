@@ -1,7 +1,7 @@
 """
 file: texts.py
-importable: TZ, MONTHS, DAYS, ORDER_NAMES, GUARD_NAMES, REASONS, price, clock, date_text, usd, order_name,
-            guard_text, event_text, fire_text
+importable: TZ, MONTHS, DAYS, INTERVAL_NAMES, ORDER_NAMES, GUARD_NAMES, REASONS, price, clock, date_text, usd, order_name,
+            guard_text, event_text, fire_text, invalidation_text
 
 Opus'a giden Türkçe metinlerin ortak yardımcıları. price() bir fiyatı
 paritenin büyüklüğüne göre yeterli basamakla, noktalı ondalıkla yazar ve
@@ -33,6 +33,9 @@ TZ_LABEL = "Türkiye saati, UTC+3"
 MONTHS = ("Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım",
           "Aralık")
 DAYS = ("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")
+
+# Mum aralıklarının Opus'a görünen adları, yapı ve rejim metinlerinde.
+INTERVAL_NAMES = {"15m": "15 dakikalık", "1h": "1 saatlik", "4h": "4 saatlik", "1d": "günlük"}
 
 # Kapanış nedenlerinin Opus'a görünen karşılıkları.
 REASONS = {"tp": "TP ile kapandı", "sl": "SL ile kapandı", "liquidation": "likide oldu",
@@ -144,3 +147,9 @@ def fire_text(f: Fire, now: int) -> str:
         who = "Kurduğun" if a.actor == "strategy" else "Yöneticinin kurduğu"
         return f"{who} #{a.number} {a.symbol} {numbers.price(a.price)} alarmı tetiklendi. Alarm notu: {a.note or 'yok'}"
     return f"{f.symbol} için {f.kind} tetiklendi."
+
+
+def invalidation_text(symbol: str, side: str, level: float, text: str) -> str:
+    """Açık pozisyonun geçersizlik seviyesine son fiyatın değdiğini Opus'a anlatır."""
+    return (f"{symbol} {side} pozisyonunun geçersizlik fiyatına, {numbers.price(level)}, son fiyat değdi. Girişte "
+            f"tezini bozan koşul olarak şunu yazmıştın: {text}")

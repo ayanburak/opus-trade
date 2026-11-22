@@ -10,6 +10,7 @@
  */
 
 import type { AccountState, ActionResult, Alert, Decision, Wake } from "../shared/types";
+import type { Badge } from "../shared/regime/model";
 
 export type State = "draft" | "running" | "paused" | "stopped" | "archived";
 
@@ -34,7 +35,7 @@ export interface Entry {
   wakes: Wake[];
   results: ActionResult[];
   record: { summary?: string; decision?: Decision; tools?: ToolRecord[]; model?: string; effort?: string;
-            duration_s?: number; waves?: unknown };
+            duration_s?: number; waves?: unknown; badge?: Record<string, Badge> };
   error: string | null;
 }
 

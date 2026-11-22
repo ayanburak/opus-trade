@@ -55,11 +55,28 @@ class JournalRepo:
 
     # Stratejiye giden son kararlar yalnızca başarılı uyanmalardır. Özet
     # kaydın summary alanından, sonuçlar komutların metinlerinden gelir.
+    # regimes parite başına rejim ve uygunluktur, şablon 6'dan önceki
+    # kayıtlarda yoktur ve boş döner. rejected kontrol hatasıyla reddedilmiş
+    # karardır.
     def recent(self, profile_id: int, limit: int) -> list[dict]:
         rows = self.con.execute("SELECT time, results, record FROM journal WHERE profile_id = ? AND error IS NULL "
                                 "ORDER BY id DESC LIMIT ?", (profile_id, limit)).fetchall()
-        return [{"time": t, "summary": json.loads(rec).get("summary", ""),
-                 "results": [x["message"] for x in json.loads(res)]} for t, res, rec in reversed(rows)]
+        out = []
+        for t, res, rec in reversed(rows):
+            r = json.loads(rec)
+            pairs = (r.get("decision") or {}).get("pariteler") or {}
+            regimes = {s: (p["rejim"]["rejim"], p["rejim"]["uygun"]) for s, p in pairs.items()
+                       if isinstance(p, dict) and isinstance(p.get("rejim"), dict)}
+            out.append({"time": t, "summary": r.get("summary", ""), "results": [x["message"] for x in json.loads(res)],
+                        "regimes": regimes, "rejected": bool(r.get("rejection"))})
+        return out
+
+    # Kayıt alanı büyük olduğu için yalnızca an ve istenen uyanma okunur.
+    def last_success(self, profile_id: int) -> tuple[int, int | None] | None:
+        """Son başarılı kararın anını ve istediği uyanma anını döndürür, hiç yoksa None."""
+        r = self.con.execute("SELECT time, next_wake FROM journal WHERE profile_id = ? AND error IS NULL "
+                             "ORDER BY id DESC LIMIT 1", (profile_id,)).fetchone()
+        return (r[0], r[1]) if r else None
 
     def entries(self, profile_id: int, limit: int = 300, before: int | None = None) -> list[dict]:
         sql = "SELECT * FROM journal WHERE profile_id = ?"

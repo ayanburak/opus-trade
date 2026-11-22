@@ -18,7 +18,7 @@ from ..triggers.price_alert import Alert
 
 def _alert(r: sqlite3.Row) -> Alert:
     return Alert(number=r["number"], symbol=r["symbol"], price=r["price"], below=bool(r["below"]), note=r["note"],
-                 actor=r["actor"], created_at=r["created_at"])
+                 actor=r["actor"], created_at=r["created_at"], purpose=r["purpose"])
 
 
 class StateRepo:
@@ -33,9 +33,10 @@ class StateRepo:
 
     def add_alert(self, profile_id: int, a: Alert) -> None:
         with self.con:
-            self.con.execute("INSERT INTO alerts (profile_id, number, symbol, price, below, note, actor, created_at) "
-                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                             (profile_id, a.number, a.symbol, a.price, int(a.below), a.note, a.actor, a.created_at))
+            self.con.execute("INSERT INTO alerts (profile_id, number, symbol, price, below, note, actor, created_at, "
+                             "purpose) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (profile_id, a.number, a.symbol, a.price, int(a.below), a.note, a.actor, a.created_at,
+                              a.purpose))
 
     def resolve_alert(self, profile_id: int, number: int, status: str, now: int) -> None:
         with self.con:

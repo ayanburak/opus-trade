@@ -239,7 +239,10 @@ class Notifier:
         self._limit_sent = False
         entry = self.journal.get(jid)
         notes = []
-        if any(w["kind"] == "correction" for w in entry["wakes"]):
+        rejection = entry["record"].get("rejection")
+        if rejection:
+            notes.append(_Note("info", "rejected", pid, "Karar kontrol hatasıyla reddedildi", " ".join(rejection)[:500]))
+        elif any(w["kind"] == "correction" for w in entry["wakes"]):
             failed = [r["message"] for r in entry["results"] if not r["ok"]]
             notes.append(_Note("info", "correction", pid, "Düzeltme çağrısı yapıldı", " ".join(failed)[:500]))
         reply = (entry["record"].get("reply") or "").strip()
@@ -269,6 +272,12 @@ class Notifier:
             return self._journal(pid, item["journal"])
         if "decide_error" in item:
             return self._error(pid, item["decide_error"], item.get("limit", False))
+        if "decision_rejected" in item:
+            return [_Note("critical", "decision_rejected", pid, "Karar düzeltme hakkı bitince de reddedildi",
+                          "Bu çağrıda hiçbir eylem uygulanmadı, defter değişmedi. Son ret: "
+                          + " ".join(item["decision_rejected"])[:500])]
+        if "suggestion" in item:
+            return [_Note("important", "suggestion", pid, "Opus bir öneri yazdı", item["suggestion"][:1000])]
         if "daily_loss" in item:
             return [_Note("critical", "daily_loss", pid, "Günlük zarar sınırı aşıldı",
                           f"Sınır {numbers.num(item['daily_loss'])} dolar. Bugün yeni risk alınmıyor, açık pozisyonlar "

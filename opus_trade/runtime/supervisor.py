@@ -43,6 +43,7 @@ from ..market.stream import MarketStream, StreamListener
 from ..registry import Entry
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
+from ..storage.notes import NotesRepo
 from ..storage.profiles import ProfileRepo
 from ..storage.runtime_state import StateRepo
 from ..strategy.base import STRATEGIES, Deps
@@ -77,6 +78,7 @@ class Supervisor(StreamListener):
         catalog: Parite kuralları.
         fees: Kâğıt hesapların komisyon oranları.
         deps: Bir profil için strateji bağımlılıklarını kuran fonksiyon.
+        notes: Giriş notları ve sınıflandırmalar, verilmezse defterin bağlantısıyla kurulur.
 
     interventions kurulumdan sonra verilir, çünkü müdahaleler de çalıştırıcılara
     Supervisor üzerinden ulaşır.
@@ -84,7 +86,8 @@ class Supervisor(StreamListener):
 
     def __init__(self, repo: ProfileRepo, ledger: Ledger, journal: JournalRepo, state: StateRepo,
                  market: MarketData, stream: MarketStream, clock: Clock, bus: EventBus, access: ModelAccess,
-                 catalog: Catalog, fees: FeeSchedule, deps: Callable[[Profile], Deps]) -> None:
+                 catalog: Catalog, fees: FeeSchedule, deps: Callable[[Profile], Deps],
+                 notes: NotesRepo | None = None) -> None:
         self.repo = repo
         self.ledger = ledger
         self.journal = journal
@@ -97,6 +100,7 @@ class Supervisor(StreamListener):
         self.catalog = catalog
         self.fees = fees
         self.deps = deps
+        self.notes = notes or NotesRepo(ledger.con)
         self.runners: dict[int, ProfileRunner] = {}
         self.interventions = None
         self._locks: dict[int, asyncio.Lock] = {}
@@ -134,7 +138,8 @@ class Supervisor(StreamListener):
         lock = self._locks.setdefault(p.id, asyncio.Lock())
         return ProfileRunner(p, v, strategy, broker, gate, triggers, alerts, self.ledger, self.journal, self.state,
                              self.market, self.clock, self.bus, self.access, lock,
-                             feed=(lambda: iv.feed(p.id)) if iv else None, delivered=iv.delivered if iv else None)
+                             feed=(lambda: iv.feed(p.id)) if iv else None, delivered=iv.delivered if iv else None,
+                             notes=self.notes)
 
     def refresh(self, profile_id: int) -> None:
         """Bir profilin çalıştırıcısını son haline göre kurar, değiştirir ya da kaldırır. Süren bir karar varsa

@@ -66,3 +66,29 @@ def test_correlation_with_too_few_points_is_nan():
     a = [candle(t, 100 + t, 100, 100 + t) for t in range(3)]
     corr, n = analysis.correlation({"A": a, "B": a})[("A", "B")]
     assert n == 2 and math.isnan(corr)
+
+
+def test_swings_come_in_time_order_with_their_kind():
+    """Yapı tepe ve diplerin zaman sırasıyla okunur. Fiyata göre sıralansa alçalan tepe yükselen gibi görünürdü."""
+    highs, lows = {5: 120, 15: 115}, {10: 90, 20: 95}
+    cs = [candle(i, highs.get(i, 105), lows.get(i, 100), 102) for i in range(30)]
+    found = analysis.swings(cs, 3)
+    assert [(x.time, x.price, x.kind) for x in found] == [(5, 120, "high"), (10, 90, "low"), (15, 115, "high"),
+                                                         (20, 95, "low")]
+
+
+def test_swing_without_enough_candles_on_its_right_is_not_counted():
+    """Son mum henüz kapanmamış olabilir. Sağında pencere kadar mum olmayan uç sonradan bozulabilir, sayılmaz."""
+    cs = [candle(i, 105, 100, 102) for i in range(20)] + [candle(20, 130, 100, 120), candle(21, 110, 100, 105)]
+    assert analysis.swings(cs, 3) == []
+    cs += [candle(22, 108, 100, 104), candle(23, 107, 100, 103)]
+    assert [(x.time, x.kind) for x in analysis.swings(cs, 3)] == [(20, "high")]
+
+
+def test_levels_and_swings_share_the_same_extremes():
+    """Seviyeler ve yapı aynı uç bulma kodunu kullanır, iki yöntem aynı grafikte farklı tepe görmez."""
+    highs = {10: 110, 22: 110.5, 34: 120}
+    cs = [candle(i, highs.get(i, 101), 99, 100) for i in range(45)]
+    tops = [x.price for x in analysis.swings(cs) if x.kind == "high"]
+    assert tops == [110, 110.5, 120]
+    assert sum(x.touches for x in analysis.levels(cs)) == len(analysis.swings(cs))

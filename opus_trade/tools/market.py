@@ -17,6 +17,10 @@ description: Opus'un ihtiyaç duyduğu piyasa ve geçmiş verisini kendisinin se
 # çekirdeğin deposu, OPUS_ACCOUNT profilin hesap kimliği, OPUS_PROFILE profilin
 # kimliği.
 #
+# NOTE: OPUS_AS_OF doluysa araçlar o ana kadarki veriyi görür, sınamada
+# geçmiş bir an yeniden oynatılırken. Piyasa AsOfMarket ile sarılır, saat o
+# an olur, likidasyonlar o anda kesilir. Emir defterinin geçmişi yoktur.
+#
 # NOTE: Araç çıktıları JSON yerine sıkı metin olarak döner. Aynı bilgi bu
 # biçimde daha az token tutar ve Opus için okuması aynı derecede kolaydır.
 #
@@ -39,9 +43,12 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 
 from ..market import analysis, indicators, liquidations, opening
+from ..market.asof import AsOfMarket
 from ..market.binance.rest import BASE_URL, BinanceRest
-from ..market.source import MarketDataError, RatioKind
+from ..market.source import MarketData, MarketDataError, RatioKind
 from ..storage.ledger import Ledger
+from ..storage.notes import NotesRepo
+from ..strategy.llm.schema import REGIMES, VERDICTS
 from ..strategy.llm.cards import indicator_summary, LABELS
 from ..strategy.llm.texts import REASONS, local
 
@@ -64,13 +71,24 @@ _SERIES = {"ema": (20,), "sma": (20,), "rsi": (14,), "atr": (14,), "bollinger": 
            "stokastik": (14, 3), "vwap": ()}
 _LINE_NAMES = {"mid": "orta", "upper": "ust", "lower": "alt", "signal": "sinyal"}
 
-_market: BinanceRest | None = None
+_market: MarketData | None = None
 
 
-def _rest() -> BinanceRest:
+def _as_of() -> int | None:
+    v = os.environ.get("OPUS_AS_OF")
+    return int(v) if v else None
+
+
+def _now() -> int:
+    return _as_of() or int(time.time())
+
+
+def _rest() -> MarketData:
     global _market
     if _market is None:
         _market = BinanceRest(httpx.AsyncClient(base_url=BASE_URL, timeout=15))
+        if (t := _as_of()) is not None:
+            _market = AsOfMarket(_market, t)
     return _market
 
 
@@ -135,7 +153,12 @@ async def emir_defteri(sembol: str, derinlik: int = 20) -> str:
         sembol: Binance USDT vadeli sembolü.
     """
     depth = min((5, 10, 20, 50, 100, 500, 1000), key=lambda v: abs(v - derinlik))
-    book = await _rest().order_book(sembol.upper(), depth)
+    try:
+        book = await _rest().order_book(sembol.upper(), depth)
+    except MarketDataError as e:
+        if _as_of() is not None:
+            return str(e)
+        raise
     asks = "\n".join(f"  {p:g} : {q:g}" for p, q in reversed(book.asks))
     bids = "\n".join(f"  {p:g} : {q:g}" for p, q in book.bids)
     return f"Satış kademeleri, fiyat : miktar\n{asks}\n---\nAlış kademeleri\n{bids}"
@@ -354,10 +377,11 @@ def likidasyonlar(sembol: str, saat: int = 24) -> str:
     """
     s = sembol.upper()
     hours = _clamp(saat, 1, 720)
-    since = int(time.time()) - hours * 3600
+    now = _now()
+    since = now - hours * 3600
     con = liquidations.open_readonly(Path(os.environ["OPUS_MARKET_DB"]))
     try:
-        tot, found = liquidations.totals(con, s, since), liquidations.waves(con, s, since)
+        tot, found = liquidations.totals(con, s, since, now), liquidations.waves(con, s, since, now)
     finally:
         con.close()
     if not found:
@@ -399,7 +423,7 @@ async def ny_acilisi(sembol: str) -> str:
     Args:
         sembol: Binance USDT vadeli sembolü.
     """
-    s, now, m = sembol.upper(), int(time.time()), _rest()
+    s, now, m = sembol.upper(), _now(), _rest()
     o = opening.next_open(now)
     moves, past, vol = await asyncio.gather(opening.index_moves(m, now), opening.history(m, s, 20, now),
                                             opening.volatility(m, s))
@@ -435,7 +459,7 @@ async def acilis_gecmisi(sembol: str, gun: int = 20) -> str:
         sembol: Binance USDT vadeli sembolü.
         gun: Kaç işlem günü geriye bakılacağı, bir ile altmış arası.
     """
-    found = await opening.history(_rest(), sembol.upper(), _clamp(gun, 1, 60), int(time.time()))
+    found = await opening.history(_rest(), sembol.upper(), _clamp(gun, 1, 60), _now())
     if not found:
         return f"{sembol.upper()} için açılış verisi bulunamadı."
     return "tarih  nasdaq_03-09  av_yönü  av  tepeye_dk  ilk_saatte_geri_verilen  oynaklık_24s\n" + "\n".join(
@@ -444,19 +468,36 @@ async def acilis_gecmisi(sembol: str, gun: int = 20) -> str:
 
 # --- Geçmiş ---
 
+# Kapanan parçalar pozisyonun sınıflandırmasını ve giriş notlarının kısasını
+# da taşır. Sınıflandırma tamamen kapanan pozisyonundur, her parçasında aynı
+# görünür.
 def _trades(limit: int):
     con = sqlite3.connect(f"file:{os.environ['OPUS_CORE_DB']}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        found = Ledger(con).trades(int(os.environ["OPUS_ACCOUNT"]))
+        found = list(reversed(Ledger(con).trades(int(os.environ["OPUS_ACCOUNT"]))))[:limit]
+        ids = sorted({t.position_id for t in found})
+        notes = NotesRepo(con)
+        reviews, theses = notes.reviews(ids), notes.for_positions(ids)
     finally:
         con.close()
-    return list(reversed(found))[:limit]
+    return [(t, reviews.get(t.position_id), theses.get(t.position_id, [])) for t in found]
+
+
+def _extra(review: dict | None, theses: list) -> str:
+    out = ""
+    if theses:
+        n = theses[0]
+        out += f", geçersizlik {n.invalid_price:g}: {n.invalid_text}"
+    if review:
+        out += f", sınıflandırman {VERDICTS.get(review['verdict'], review['verdict'])}: {review['text']}"
+    return out
 
 
 @server.tool()
 def gecmis_kararlarim(adet: int = 20, atla: int = 0, analiz_dahil: bool = False) -> str:
-    """Kendi geçmiş kararlarını yeniden eskiye getirir.
+    """Kendi geçmiş kararlarını yeniden eskiye getirir. Her kararda parite başına okuduğun rejim ve uygunluk,
+    eski kararlarda görüş ve güven yazar. Kontrol hatasıyla reddedilen kararlar öyle işaretlenir.
 
     Args:
         adet: Bir ile yüz arası.
@@ -472,11 +513,21 @@ def gecmis_kararlarim(adet: int = 20, atla: int = 0, analiz_dahil: bool = False)
         con.close()
     parts = []
     for t, results, record in rows:
-        k = json.loads(record).get("decision")
+        r = json.loads(record)
+        k = r.get("decision")
         if not k:
             continue
         done = "; ".join(x["message"] for x in json.loads(results)) or "eylem yok"
-        text = f"{_clock(t)}, görüş {k['gorus']}, güven {k['guven']}\n  özet: {k['ozet']}\n  sonuç: {done}"
+        # Şablon 6'dan önceki kararlar görüş ve güven, sonrakiler parite başına rejim taşır.
+        if "gorus" in k:
+            head = f"görüş {k['gorus']}, güven {k['guven']}"
+        else:
+            head = "; ".join(f"{sym} {REGIMES.get(p['rejim']['rejim'], p['rejim']['rejim'])}, "
+                             f"{'uygun' if p['rejim']['uygun'] == 'evet' else 'uygun değil'}"
+                             for sym, p in k.get("pariteler", {}).items())
+        if r.get("rejection"):
+            head += ", kontrol hatasıyla reddedildi"
+        text = f"{_clock(t)}, {head}\n  özet: {k['ozet']}\n  sonuç: {done}"
         if analiz_dahil:
             text += f"\n  analiz: {k['analiz']}"
         parts.append(text)
@@ -488,7 +539,8 @@ def gecmis_islemlerim(adet: int = 50) -> str:
     """Kapanmış işlemlerini yeniden eskiye getirir. Bir pozisyonun kısmi kapanışları ayrı satırdır. Net sonuç komisyon ve fonlama dahildir.
     Aynı yöndeki girişler pozisyonla birleştiği için giriş fiyatı birleşen girişlerin ortalaması, açılış saati ilk
     girişin saatidir. Etkin kaldıraç büyüklüğün marjine oranıdır, farklı kaldıraçlı girişler birleştiyse paritenin
-    ayarından farklı olabilir.
+    ayarından farklı olabilir. Satırın başındaki numara pozisyonun numarasıdır. Girişte yazdığın geçersizlik ve
+    pozisyonu sınıflandırdıysan sınıflandırman da yazar.
 
     Args:
         adet: Bir ile beş yüz arası.
@@ -497,9 +549,10 @@ def gecmis_islemlerim(adet: int = 50) -> str:
     if not found:
         return "Kapanmış işlem yok."
     return "\n".join(
-        f"{t.symbol} {t.side} etkin kaldıraç {t.leverage:.1f}x, miktar {t.qty:g} marjin {t.margin:.2f}, giriş "
-        f"{t.entry_price:g} {_clock(t.entry_time)}, çıkış {t.exit_price:g} {_clock(t.exit_time)}, "
-        f"{REASONS.get(t.reason, t.reason)}, net {t.net:+.2f} dolar" for t in found)
+        f"#{t.position_id} {t.symbol} {t.side} etkin kaldıraç {t.leverage:.1f}x, miktar {t.qty:g} marjin "
+        f"{t.margin:.2f}, giriş {t.entry_price:g} {_clock(t.entry_time)}, çıkış {t.exit_price:g} "
+        f"{_clock(t.exit_time)}, {REASONS.get(t.reason, t.reason)}, net {t.net:+.2f} dolar{_extra(rv, th)}"
+        for t, rv, th in found)
 
 
 # Her kapanan parça kendi miktarıyla değerlendirilir. En iyi andaki açık kâr
@@ -536,7 +589,8 @@ def cikis_karnesi(adet: int = 20) -> str:
     """Kapanmış işlemlerinin çıkışlarını yeniden eskiye değerlendirir. Her işlem için en iyi fiyatı, o anda
     görülen açık kârı, net sonucun bu kârın yüzde kaçı olduğunu, yani yakalama oranını, değmeyen en yakın TP'ye
     ne kadar kala dönüldüğünü ve en kötü fiyatın SL'ye uzaklığını verir. En altta ortalama yakalama oranı ve
-    TP'ye yüzde 0.6'dan az farkla varamayan işlem sayısı bulunur. Yüzdeler giriş fiyatına göredir.
+    TP'ye yüzde 0.6'dan az farkla varamayan işlem sayısı bulunur. Yüzdeler giriş fiyatına göredir. Girişte
+    yazdığın geçersizlik ve pozisyonun sınıflandırması da yazar.
 
     Args:
         adet: Değerlendirilecek son kapanmış işlem sayısı, bir ile yüz arası.
@@ -544,7 +598,10 @@ def cikis_karnesi(adet: int = 20) -> str:
     found = _trades(_clamp(adet, 1, 100))
     if not found:
         return "Kapanmış işlem yok."
-    rows = [_exit_report(t) for t in found]
+    rows = []
+    for t, rv, th in found:
+        text, capture, gap = _exit_report(t)
+        rows.append((text + _extra(rv, th).replace(", ", " ", 1), capture, gap))
     captures = [c for _, c, _ in rows if c is not None]
     near = sum(1 for _, _, g in rows if g is not None and g < _NEAR_MISS_PCT)
     summary = (f"Özet: {len(rows)} işlem, "

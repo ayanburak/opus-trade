@@ -17,8 +17,11 @@ description: Eklenebilir parçaların kayıt defteri ve parametre şeması.
 # elle satır eklenmez, hepsi kayıt defterini okur.
 #
 # NOTE: Param.kind değerleri formun hangi alanla çizileceğini de söyler: int,
-# float, text, choice, symbols ve symbol_map. symbol_map her parite için bir
-# sayı taşır, örneğin likidasyon dalgasının parite başına eşiği.
+# float, text, choice, multi, symbols ve symbol_map. choice tek seçimdir ve
+# seçmeli kutuyla, multi choices içinden bir ya da daha çok seçimdir ve işaret
+# kutularıyla çizilir. symbol_map her parite için bir sayı taşır, örneğin
+# likidasyon dalgasının parite başına eşiği. labels doluysa choices'ın formda
+# görünen Türkçe adlarıdır, aynı sırayla.
 #
 # NOTE: cls kaydın kurduğu sınıftır, verilmesi isteğe bağlıdır. Kontrol API'si
 # stratejinin yetenek bayraklarını, örneğin accepts_messages, parçayı kurmadan
@@ -36,13 +39,14 @@ class Param:
 
     Args:
         name: Parametrenin İngilizce adı, kayıtta bu anahtarla durur.
-        kind: int, float, text, choice, symbols ya da symbol_map.
+        kind: int, float, text, choice, multi, symbols ya da symbol_map.
         label: Formda görünen Türkçe ad.
         default: Verilmezse kullanılan değer. None ise parametre zorunludur.
         low: Sayılarda en küçük değer.
         high: Sayılarda en büyük değer.
-        choices: choice türünde geçerli değerler.
+        choices: choice ve multi türünde geçerli değerler.
         help: Formda alanın altında görünen kısa açıklama.
+        labels: choices'ın formda görünen adları, boşsa değerlerin kendisi görünür.
     """
 
     name: str
@@ -53,6 +57,7 @@ class Param:
     high: float | None = None
     choices: tuple[str, ...] = ()
     help: str = ""
+    labels: tuple[str, ...] = ()
 
 
 def _number(p: Param, v: Any) -> float:
@@ -74,6 +79,13 @@ def _one(p: Param, v: Any) -> Any:
         if v not in p.choices:
             raise ValueError(f"{p.label} şunlardan biri olmalı: {', '.join(p.choices)}.")
         return v
+    # Seçimler choices'ın sırasıyla döner, aynı seçim iki kez sayılmaz.
+    if p.kind == "multi":
+        if not isinstance(v, (list, tuple)) or not v:
+            raise ValueError(f"{p.label} için en az bir seçim yapılmalı.")
+        if bad := [x for x in v if x not in p.choices]:
+            raise ValueError(f"{p.label} şunlardan seçilmeli: {', '.join(p.choices)}. Geçersiz: {', '.join(map(str, bad))}.")
+        return tuple(c for c in p.choices if c in v)
     if p.kind == "symbols":
         if not isinstance(v, (list, tuple)) or not v:
             raise ValueError(f"{p.label} en az bir parite içermeli.")

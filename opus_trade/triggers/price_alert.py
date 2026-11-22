@@ -12,7 +12,10 @@ description: Fiyat alarmı tetikleyicisi.
 
 # NOTE: Alarm hesabın bir kaydı değildir ve Binance'te karşılığı yoktur, bu
 # yüzden broker'da değil tetikleyicilerdedir. actor alarmı kimin kurduğunu
-# tutar, stratejiye giden metin yönetici kurduysa bunu söyler.
+# tutar, stratejiye giden metin yönetici kurduysa bunu söyler. purpose
+# alarmın amacıdır: opus, admin ya da expectation. expectation Opus'un
+# rejimi uygun bulmadığı bir çağrıda beklediği fiyata sistemin kurduğu
+# alarmdır, Opus'un kendi alarmlarıyla karışmasın diye ayrı tutulur.
 #
 # NOTE: Alarmların numarası pozisyon ve emirlerden ayrıdır. Kalıcı olarak
 # saklanması çalıştırıcının işidir, bu sınıf yalnızca bellekteki listeyi
@@ -33,6 +36,7 @@ class Alert:
     note: str
     actor: str
     created_at: int
+    purpose: str = "opus"
 
 
 class PriceAlerts(Trigger):
@@ -48,8 +52,11 @@ class PriceAlerts(Trigger):
     def alerts(self) -> list[Alert]:
         return sorted(self._alerts.values(), key=lambda a: a.number)
 
-    def add(self, symbol: str, price: float, current: float, note: str, actor: str, now: int) -> Alert:
+    def add(self, symbol: str, price: float, current: float, note: str, actor: str, now: int,
+            purpose: str | None = None) -> Alert:
         """Bir alarm kurar. Fiyat güncel fiyatın altındaysa düşüşte, üstündeyse yükselişte tetiklenir.
+
+        purpose verilmezse kurana göre admin ya da opus olur.
 
         Raises:
             ValueError: Seviye sıfır ya da negatifse veya güncel fiyata çok yakınsa.
@@ -59,7 +66,8 @@ class PriceAlerts(Trigger):
         n = 1
         while n in self._alerts:
             n += 1
-        a = Alert(n, symbol, price, price < current, note, actor, now)
+        a = Alert(n, symbol, price, price < current, note, actor, now,
+                  purpose or ("admin" if actor == "admin" else "opus"))
         self._alerts[n] = a
         return a
 

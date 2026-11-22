@@ -2,7 +2,7 @@
 file: test_runner.py
 importable: yok
 
-Profil servisinin, çalıştırıcının ve Supervisor'ın testleri. Burada bir hata
+Profil servisinin, çalıştırıcının, geçersizlik gözcüsünün ve Supervisor'ın testleri. Burada bir hata
 ya bir uyandırmayı kaybeder, ya stratejiyi gereksiz yere tekrar tekrar
 çağırıp limiti harcar, ya da kapalı geçen sürede bir SL'yi atlar. Testler
 sahte bir stratejiyle, sahte saatle ve ağa çıkmadan çalışır.
@@ -208,8 +208,77 @@ def test_corrections_stop_after_two(tmp_path):
     p, r = w.running()
     go(w.step(r))
     assert [c.wakes[0].kind for c in Scripted.seen] == ["start", "correction", "correction"]
-    rejected = Scripted.seen[1].wakes[0].data[0]
+    first, last = Scripted.seen[1].wakes[0].data, Scripted.seen[2].wakes[0].data
+    rejected = first["results"][0]
     assert isinstance(rejected, ActionResult) and "Açık SOLUSDT short pozisyonu yok" in rejected.message
+    assert (first["rejected"], first["left"], last["left"]) == (False, 1, 0)
+
+
+def test_rejected_decision_applies_nothing_and_asks_for_a_correction(tmp_path):
+    """Kontrol hatası bütün kararı reddeder: komut gitmez, hafıza yazılmaz, düzeltme kalan hakla istenir."""
+    w = World(tmp_path)
+    no = Decision([PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=1)], ["aç"], memory={"notebook": "yeni"},
+                  rejection=["Kontrol: adım 2. Neden: çelişki."], wait_s=900)
+    Scripted.script = [no, opening()]
+    p, r = w.running()
+    w.journal.set_memory(p.id, {"notebook": "eski"})
+    go(w.step(r))
+    data = Scripted.seen[1].wakes[0].data
+    assert data["rejected"] and data["left"] == 1 and "adım 2" in data["results"][0].message
+    first = w.journal.entries(p.id)[-1]
+    assert first["results"][0]["ok"] is False and first["results"][0]["label"] == "kontrol"
+    assert len(r.broker.state().positions) == 1
+    assert w.journal.memory(p.id) == {"notebook": "eski"}
+
+
+def test_rejections_past_the_rights_notify_and_wait(tmp_path):
+    """Hak bitince yöneticiye bildirilir ve bir sonraki çağrı stratejinin verdiği beklemeyle olur."""
+    w = World(tmp_path)
+    queue = w.sup.bus.subscribe(unbounded=True)
+    no = lambda: Decision(rejection=["Kontrol: adım 4. Neden: eksik."], wait_s=900)
+    Scripted.script = [no(), no(), no()]
+    p, r = w.running()
+    go(w.step(r))
+    assert len(Scripted.seen) == 3 and r.next_wake == T + 900
+    seen = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert any("decision_rejected" in x for x in seen if isinstance(x, dict))
+    assert w.state.system_events(p.id)[0]["kind"] == "decision_rejected"
+
+
+def test_entry_notes_and_reviews_are_written_with_the_journal_row(tmp_path):
+    """Girişin notu olayın emir ya da pozisyon kimliğiyle yazılır, dolan emrin notu pozisyona geçer."""
+    w = World(tmp_path)
+    note = {"symbol": SOL, "side": "long", "reason": {"karsi_kanit": "x"}, "invalid_price": 90.0,
+            "invalid_text": "90 altı"}
+    d = Decision([PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=1),
+                  PlaceOrder(SOL, Side.SHORT, OrderType.LIMIT, qty=1, price=101)], ["aç", "emir"],
+                 annotations=[note, {**note, "side": "short", "invalid_price": 103.0}],
+                 reviews=[{"position_id": 1, "verdict": "tez_yanlisti", "text": "y"}])
+    Scripted.script = [d]
+    p, r = w.running()
+    go(w.step(r))
+    jid = w.journal.entries(p.id)[0]["id"]
+    pos = r.broker.state().position(SOL, Side.LONG)
+    order = r.broker.state().orders[0]
+    assert [n.journal_id for n in r.notes.for_position(pos.id)] == [jid]
+    assert r.notes.for_order(order.id).invalid_price == 103.0
+    r.on_candle(Candle(SOL, T // 60 * 60, 100, 101.5, 100, 101.5, 1, 1, 1, 1), False)
+    short = r.broker.state().position(SOL, Side.SHORT)
+    assert r.notes.for_position(short.id)[0].invalid_price == 103.0
+    assert pos.id == 1 and r.notes.reviews([1])[1]["journal_id"] == jid
+
+
+def test_expectation_alarm_replaces_the_old_one_of_the_same_pair(tmp_path):
+    """Opus yalnızca son beklediği fiyatta çağrılır, eski beklenti alarmı yenisinden önce kalkar."""
+    w = World(tmp_path)
+    expect = lambda x: Decision(alarms=[{"op": "expect", "symbol": SOL, "price": x, "note": "bekle", "label": "b"}])
+    Scripted.script = [expect(90.0), expect(110.0)]
+    p, r = w.running()
+    go(w.step(r))
+    r.wake("timer")
+    go(w.step(r))
+    assert [(a.price, a.purpose, a.actor) for a in r.alerts.alerts] == [(110.0, "expectation", "system")]
+    assert [a.price for a in w.state.alerts(p.id)] == [110.0]
 
 
 def test_chained_command_is_not_sent_when_the_one_before_is_refused(tmp_path):
@@ -410,3 +479,68 @@ def test_wake_keeps_the_order_type_and_whether_it_closes():
                      order_type=OrderType.STOP, reduce=True)
     back = wakes.decode(wakes.encode(e))
     assert back == e and back.order_type is OrderType.STOP
+
+
+# --- Geçersizlik gözcüsü ---
+
+INV_NOTE = {"symbol": SOL, "reason": {"karsi_kanit": "x"}, "invalid_text": "tez bozulur"}
+
+
+def _inv_candle(high, low, close=None):
+    return Candle(SOL, T // 60 * 60, 100, high, low, close if close is not None else (high + low) / 2, 1, 1, 1, 1)
+
+
+def _inv_setup(w, *decisions):
+    Scripted.script = list(decisions)
+    p, r = w.running()
+    go(w.step(r))
+    return p, r
+
+
+def test_pending_entry_is_cancelled_by_the_system_without_waking(tmp_path):
+    """Bekleyen short girişin geçersizliğine son fiyat değince emir sistemce iptal edilir, Opus çağrılmaz."""
+    w = World(tmp_path)
+    d = Decision([PlaceOrder(SOL, Side.SHORT, OrderType.LIMIT, qty=1, price=102)], ["emir"],
+                 annotations=[{**INV_NOTE, "side": "short", "invalid_price": 101.5}])
+    p, r = _inv_setup(w, d)
+    order = r.broker.state().orders[0]
+    r.on_candle(_inv_candle(101.4, 100), False)
+    go(w.step(r))
+    assert [o.id for o in r.broker.state().orders] == [order.id]
+    r.on_candle(_inv_candle(101.6, 100.5), False)
+    r.on_candle(_inv_candle(101.8, 100.5), False)
+    assert len(r._cancels) == 1, "Aynı iptal iki kez sıraya girerse canlı broker'a iki istek gider."
+    go(w.step(r))
+    assert r.broker.state().orders == ()
+    events = w.ledger.events(r.broker.account_id, kinds=("order_cancelled",))
+    assert [e["actor"] for e in events] == ["system"]
+    assert w.state.wakes(p.id) == []
+    assert [n.id for n, _ in r.notes.cancelled_since(p.id, 0)] == [r.notes.for_order(order.id).id]
+
+
+def test_open_position_hit_wakes_once(tmp_path):
+    """Açık pozisyonun geçersizliğine değince Opus bir kez uyandırılır, fiyat seviyede gezinse de ikinci kez değil."""
+    w = World(tmp_path)
+    d = Decision([PlaceOrder(SOL, Side.LONG, OrderType.MARKET, qty=1)], ["aç"],
+                 annotations=[{**INV_NOTE, "side": "long", "invalid_price": 99.0}])
+    p, r = _inv_setup(w, d)
+    r.on_candle(_inv_candle(100, 98.9), False)
+    r.on_candle(_inv_candle(100, 98.5), False)
+    wakes = w.state.wakes(p.id)
+    assert [k for _, _, k, _ in wakes] == ["invalidation"]
+    assert "geçersizlik fiyatına, 99,00, son fiyat değdi" in wakes[0][3]
+
+
+def test_filled_order_is_watched_as_a_position(tmp_path):
+    """Emir dolunca not pozisyona geçer, gözcü artık iptal değil uyandırma yapar."""
+    w = World(tmp_path)
+    d = Decision([PlaceOrder(SOL, Side.LONG, OrderType.LIMIT, qty=1, price=99)], ["emir"],
+                 annotations=[{**INV_NOTE, "side": "long", "invalid_price": 97.0}])
+    p, r = _inv_setup(w, d)
+    r.on_candle(_inv_candle(100, 98.9), False)
+    go(w.step(r))
+    assert len(r.broker.state().positions) == 1
+    r.on_candle(_inv_candle(99, 96.9), False)
+    go(w.step(r))
+    assert r.broker.state().orders == () or all(o.reduce for o in r.broker.state().orders)
+    assert [c.wakes[0].kind for c in Scripted.seen[1:]] == ["account", "invalidation"]

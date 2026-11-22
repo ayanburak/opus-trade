@@ -3,10 +3,11 @@
  * importable: Journal
  *
  * Günlük: Opus'un kararları ve kararın dışında kapanan işlemler yeniden
- * eskiye tek akışta. Her karar kartında uyandırma nedeni, görüş ve güven,
- * özet, araçların sayısı, eylemlerin sonucu, süre ve sonraki çağrı vardır.
- * Ayrıntıda uyandırmalar, paritelerin değerlendirmesi, analiz, not defteri
- * ve kullanılan araçların listesi açılır. Opus düşünürken en üstte canlı
+ * eskiye tek akışta. Her karar kartında uyandırma nedeni, yapı ve rejim
+ * rozeti, özet, araçların sayısı, eylemlerin sonucu, süre ve sonraki çağrı
+ * vardır. Şablon 6'dan önceki kayıtlar rozet yerine eski görüş ve güven
+ * etiketleriyle görünür. Ayrıntıda uyandırmalar, paritelerin yapısı ve
+ * rejimi, analiz, not defteri ve kullanılan araçların listesi açılır. Opus düşünürken en üstte canlı
  * araç listesiyle bir kart durur.
  *
  * description: Kararların ve işlem olaylarının zaman akışı.
@@ -16,8 +17,10 @@ import { useEffect, useState } from "react";
 import { get } from "../api/client";
 import type { Entry, LiveTool } from "../api/types";
 import { dayClock, num, signed, when } from "../shared/format";
-import { REASONS, VIEWS } from "../shared/labels";
-import type { ToolCall, Trade } from "../shared/types";
+import { DIRECTIONS, REASONS, VIEWS } from "../shared/labels";
+import { notebookParts } from "../shared/notebook";
+import { RegimeBadge } from "../shared/regime/RegimeBadge";
+import type { PairView, Structure, ToolCall, Trade } from "../shared/types";
 import { timeline, toolCounts, toolLine, wakeText } from "./model";
 
 const VIEW_TONE: Record<string, string> = { yukselis: "up", dusus: "down" };
@@ -30,6 +33,24 @@ function ToolList({ tools }: { tools: LiveTool[] }) {
         return <li key={i} className={t.sub ? "sub" : ""}><b>{name}</b> <span className="dim">{detail}</span></li>;
       })}
     </ol>
+  );
+}
+
+// Yeni kayıtta yapı rakamlarıyla ve rejimle, eski kayıtta görüş ve
+// değerlendirmeyle yazılır.
+function Pair({ symbol, x }: { symbol: string; x: PairView }) {
+  if (!x.yapi) {
+    return (
+      <div className="pair-view"><b>{symbol}</b> <span className={VIEW_TONE[x.gorus ?? ""] ?? "muted"}>{VIEWS[x.gorus ?? ""] ?? x.gorus}</span>
+        <div className="text">{x.degerlendirme}</div></div>
+    );
+  }
+  const line = (name: string, l: Structure) =>
+    `${name}: ${DIRECTIONS[l.yon] ?? l.yon}, tepeler ${l.tepeler.map((v) => num(v)).join(" → ")}, dipler ${l.dipler.map((v) => num(v)).join(" → ")}`;
+  return (
+    <div className="pair-view"><b>{symbol}</b>
+      <div className="text">{line("Üst", x.yapi.ust)}{"\n"}{line("Alt", x.yapi.alt)}</div>
+    </div>
   );
 }
 
@@ -47,14 +68,15 @@ function Detail({ e }: { e: Entry }) {
       )}
       {d?.pariteler && (
         <section><h4>Pariteler</h4>
-          {Object.entries(d.pariteler).map(([s, x]) => (
-            <div key={s} className="pair-view"><b>{s}</b> <span className={VIEW_TONE[x.gorus] ?? "muted"}>{VIEWS[x.gorus] ?? x.gorus}</span>
-              <div className="text">{x.degerlendirme}</div></div>
-          ))}
+          {Object.entries(d.pariteler).map(([s, x]) => <Pair key={s} symbol={s} x={x} />)}
         </section>
       )}
       {d?.analiz && <section><h4>Analiz</h4><div className="text">{d.analiz}</div></section>}
-      {d?.not_defteri && <section><h4>Not defterine yazdığı</h4><div className="text">{d.not_defteri}</div></section>}
+      {notebookParts(d?.not_defteri).length > 0 && (
+        <section><h4>Not defterine yazdığı</h4>
+          {notebookParts(d?.not_defteri).map((p) => <div key={p.title} className="nb-part"><span className="soft">{p.title}</span><div className="text">{p.text}</div></div>)}
+        </section>
+      )}
       <section><h4>Kullandığı araçlar{tools && tools.length > 0 && ` · ${tools.length}`}</h4>
         {!tools ? <div className="dim">Yükleniyor…</div> : !tools.length ? <div className="dim">Araç kullanmadı.</div>
           : <ToolList tools={tools} />}
@@ -79,8 +101,9 @@ function Card({ e, now }: { e: Entry; now: number }) {
       <div className="jtop">
         <span className="mono dim">{dayClock(e.time)}</span>
         {wakes.map((w) => <span key={w} className="tag">{w}</span>)}
-        {d?.gorus && <span className={`tag ${VIEW_TONE[d.gorus] ?? ""}`}>{VIEWS[d.gorus] ?? d.gorus}</span>}
-        {d?.guven != null && (
+        <RegimeBadge badge={e.record.badge} />
+        {!e.record.badge && d?.gorus && <span className={`tag ${VIEW_TONE[d.gorus] ?? ""}`}>{VIEWS[d.gorus] ?? d.gorus}</span>}
+        {!e.record.badge && d?.guven != null && (
           <span className="confidence" title="Kararına güveni">
             {d.guven}<i><b style={{ width: `${Math.max(0, Math.min(100, d.guven))}%` }} /></i>
           </span>

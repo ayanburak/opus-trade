@@ -45,11 +45,13 @@ from ..storage.notifications import NotificationRepo
 from ..storage.profiles import ProfileRepo
 from ..storage.runtime_state import StateRepo
 from ..strategy.base import STRATEGIES
+from ..strategy.llm import notebook as nbk
 from ..triggers.base import TRIGGERS
 from ..runtime.bus import EventBus
 from ..runtime.interventions import Interventions, commands_from
 from ..runtime.health import CollectorWatch
 from ..runtime.model_access import ModelAccess
+from ..runtime.facts import origins
 from ..runtime.risk import DAY_TZ
 from ..runtime.notifications import Notifier, settings_from, DEFAULT_SETTINGS
 from ..runtime.profiles import ProfileService
@@ -246,8 +248,11 @@ def create_app(core: Core) -> FastAPI:
         p = profile(pid)
         versions = core.repo.versions(pid)
         res = results(p, versions)
+        # Defterin sınırları panelin karakter sayacı içindir, tek kaynağı notebook.py.
         return {**summary(p), "versions": [{**_plain(v), "result": res[v.id]} for v in versions],
-                "memory": core.journal.memory(pid)}
+                "memory": core.journal.memory(pid),
+                "notebook_limits": {"metin": nbk.PLAN_TEXT_MAX, "bozulma": nbk.PLAN_BREAK_MAX,
+                                    "seviyeler_notu": nbk.NOTE_MAX, "gundem": nbk.AGENDA_MAX}}
 
     @app.post("/profiles/{pid}/config")
     async def config(pid: int, config: dict = Body(...), note: str = Body("")):
@@ -310,6 +315,20 @@ def create_app(core: Core) -> FastAPI:
             mine = [t for t in closed if t.position_id == x["id"]]
             x["realized"], x["realized_count"] = sum(t.net for t in mine), len(mine)
             x["outlook"] = outlook[x["id"]]
+        # Girişlerin notları ve kaynakları panelin hesap görünümünde emrin ve
+        # pozisyonun yanında görünür, Opus'un istemde gördüğü gibi.
+        found = r.notes or None
+        if found:
+            for x in st["positions"]:
+                x["notes"] = [_plain(n) for n in found.for_position(x["id"])]
+            for x in st["orders"]:
+                n = found.for_order(x["id"]) if not x["reduce"] else None
+                x["note"] = _plain(n) if n else None
+        positions, orders = origins(core.ledger.events(state.account_id))
+        for x in st["positions"]:
+            x["by_admin"] = positions.get(x["id"]) == "admin"
+        for x in st["orders"]:
+            x["by_admin"] = orders.get(x["id"]) == "admin"
         return {"state": st, "prices": r.prices, "alerts": _plain(r.alerts.alerts),
                 "triggers": [t.snapshot() for t in r.triggers if t.snapshot() is not None],
                 "restrictions": core.interventions.active(pid, core.clock.time())}
@@ -368,11 +387,12 @@ def create_app(core: Core) -> FastAPI:
     # yönetici komutu gibi kapıdan geçer, reddedilecekse nedeni 400 ile döner.
     # Not defterini yönetici düzeltir. Opus karar verirken yazma reddedilir:
     # süren çağrı eski defteri okudu, bitince kendi defterini yazıp düzeltmeyi
-    # silerdi. before panelin düzenlemeye başladığı metindir. Defter o arada
+    # silerdi. before panelin düzenlemeye başladığı defterdir, sözlük ya da eski
+    # biçimdeki metin. Defter o arada
     # yeni bir kararla değiştiyse yazma reddedilir, yoksa Opus'un yeni defteri
     # ezilirdi. Eski metin sistem olayının ayrıntısında kalır, geri alınabilir.
     @app.post("/profiles/{pid}/memory")
-    async def edit_memory(pid: int, notebook: str = Body(...), before: str = Body(...)):
+    async def edit_memory(pid: int, notebook: dict = Body(...), before: dict | str | None = Body(None)):
         p = profile(pid)
         key = core.repo.version(p.version_id).config.strategy if p.version_id else None
         entry = STRATEGIES.entries.get(key)
@@ -382,11 +402,17 @@ def create_app(core: Core) -> FastAPI:
         if r is not None and r.busy:
             raise ValueError("Opus şu an karar veriyor, karar bitince yeniden dene.")
         old = core.journal.memory(pid)
-        if old.get("notebook", "") != before:
+        if old.get("notebook") != before:
             raise ValueError("Defter sen düzenlerken yeni bir kararla değişti, düzeltme kaydedilmedi.")
-        core.journal.set_memory(pid, {**old, "notebook": notebook})
+        # Panel not_defteri biçiminde gönderir. Sınırlar Opus'a uygulananlarla
+        # aynıdır. Sistemin taşıdığı tepe ve dipler eski defterden korunur.
+        if problems := nbk.problems(notebook):
+            raise ValueError(" ".join(problems))
+        merged = nbk.Notebook(plan=notebook["plan"], note=notebook["seviyeler_notu"],
+                              swings=nbk.read(old).swings, agenda=notebook["gundem"])
+        core.journal.set_memory(pid, {**old, "notebook": merged.to_memory()})
         core.state.system_event(pid, core.clock.time(), "memory_edit", "Not defteri yönetici tarafından değiştirildi.",
-                                {"before": old.get("notebook", "")})
+                                {"before": old.get("notebook")})
         return {"memory": core.journal.memory(pid)}
 
     @app.post("/profiles/{pid}/preview")

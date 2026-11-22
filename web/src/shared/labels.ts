@@ -1,6 +1,6 @@
 /**
  * file: labels.ts
- * importable: WAKES, REASONS, VIEWS, orderName, toolName
+ * importable: WAKES, REASONS, VIEWS, DIRECTIONS, VERDICTS, REVIEWS, orderName, toolName
  *
  * Çekirdeğin kısa adlarının arayüzdeki Türkçe karşılıkları: uyandırma
  * nedenleri, kapanış nedenleri, Opus'un piyasa görüşü, emir türleri ve araç
@@ -14,6 +14,7 @@
 export const WAKES: Record<string, string> = {
   start: "başlangıç", timer: "zamanlayıcı", account: "hesap olayı", trigger: "tetikleyici", admin: "yönetici",
   correction: "düzeltme", restart: "yeniden başlama", resume: "devam", shutdown: "kapanış",
+  invalidation: "geçersizlik",
 };
 
 /** Kapanan işlemin nedeni. */
@@ -21,9 +22,26 @@ export const REASONS: Record<string, string> = {
   tp: "TP", sl: "SL", liquidation: "likidasyon", strategy: "strateji", admin: "yönetici", system: "sistem",
 };
 
-/** Opus'un piyasa görüşü. */
+/** Opus'un piyasa görüşü, şablon 6'dan önceki kayıtlarda. */
 export const VIEWS: Record<string, string> = {
   yukselis: "Yükseliş", dusus: "Düşüş", yatay: "Yatay", belirsiz: "Belirsiz",
+};
+
+/** Yapının yönü. */
+export const DIRECTIONS: Record<string, string> = {
+  yukselen: "yükselen", alcalan: "alçalan", yatay: "yatay", belirsiz: "belirsiz",
+};
+
+/** Kapanan pozisyonun sınıfı. Çekirdekteki karşılığı strategy/llm/schema.py VERDICTS'tir. */
+export const VERDICTS: Record<string, string> = {
+  tez_dogruydu: "tez doğruydu", tez_yanlisti: "tez yanlıştı", zamanlama_yanlisti: "zamanlama yanlıştı",
+  koruma_yanlis_yerdeydi: "koruma yanlış yerdeydi",
+};
+
+/** Defter sınamasının seçenekleri. */
+export const REVIEWS: Record<string, string> = {
+  gecerli: "geçerli", zayifladi: "zayıfladı", bozuldu: "bozuldu", ayni: "aynı", guncellendi: "güncellendi",
+  etkisi_yok: "etkisi yok", etkiliyor: "etkiliyor",
 };
 
 // stop ve take_profit girişte ve kapatan emirde başka şeylerdir, bu yüzden

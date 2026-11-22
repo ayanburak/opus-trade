@@ -57,6 +57,7 @@ from ..storage.database import connect
 from ..storage.journal import JournalRepo
 from ..storage.ledger import MIGRATIONS, Ledger
 from ..storage.migrate import migrate
+from ..storage.notes import NotesRepo
 from ..storage.notifications import NotificationRepo
 from ..storage.profiles import ProfileRepo
 from ..storage.runtime_state import StateRepo
@@ -86,7 +87,7 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
         return Deps(clock, catalog, llm, {"work_dir": cfg.work_dir(p.id), "tool_env": env, "market_db": cfg.market_db})
 
     sup = Supervisor(repo, ledger, journal, state, market, stream, clock, bus, access, catalog, BINANCE_STANDARD,
-                     deps)
+                     deps, NotesRepo(con))
     iv = Interventions(con, state, clock, sup.runners.get)
     sup.interventions = iv
     service = ProfileService(repo, ledger, journal, catalog, clock, sup.refresh)

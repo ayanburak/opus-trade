@@ -58,10 +58,11 @@ class NullStream(MarketStream):
         await asyncio.Event().wait()
 
 
+# llm verilirse Opus stratejisi o sahte istemciyle çalışır.
 class Api:
-    def __init__(self, path):
+    def __init__(self, path, llm=None):
         self.clock = FakeClock(T)
-        self.core = assemble(AppConfig(path), self.clock, FakeMarket(), NullStream(), None, catalog())
+        self.core = assemble(AppConfig(path), self.clock, FakeMarket(), NullStream(), llm, catalog())
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(create_app(self.core)), base_url="http://core")
         Echo.seen, Echo.script = [], []
 

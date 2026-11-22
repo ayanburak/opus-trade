@@ -216,3 +216,36 @@ def test_restriction_rejection_is_hidden_in_old_and_new_wording():
            "message": "piyasa_giris SOLUSDT reddedildi: Yöneticinin #1 numaralı kesin kısıtı geçerli: x."}
     assert public._public_result(old)["message"] == "long_ac SOLUSDT reddedildi."
     assert public._public_result(new)["message"] == "piyasa_giris SOLUSDT reddedildi."
+
+
+def test_public_entry_keeps_the_badge_and_hides_the_controls():
+    """Herkese açık sayfada rozet ve özet görünür. Kontrollerin metni, yöneticiye öneri, giriş gerekçeleri ve
+    kontrol retleri yalnızca paneldedir. Reddedilen kararın kendisi hiç görünmez."""
+    decision = {"ozet": "bekledim", "analiz": "a", "yoneticiye_cevap": "c", "yoneticiye_oneri": "o",
+                "defter_sinamasi": {"plan": {}}, "kapanan_islemler": [], "not_defteri": {},
+                "pariteler": {SOL: {"yapi": {"ust": {"yon": "alcalan"}},
+                                    "rejim": {"rejim": "donus", "kanit": "RSI 25", "uygun": "hayir"}}},
+                "eylemler": [{"tip": "piyasa_giris", "sembol": SOL, "karsi_kanit": "x", "risk_beyani": {},
+                              "gecersizlik": {}, "marjin_usd": 5}]}
+    entry = {"id": 1, "time": T, "version_id": 1, "next_wake": None, "wakes": [], "error": None,
+             "results": [{"label": "piyasa_giris SOLUSDT", "ok": False,
+                          "message": "piyasa_giris SOLUSDT reddedildi. Kontrol: adım 5, risk beyanı. Neden: x"},
+                         {"label": "defter", "ok": True, "message": "eski plan taşındı"}],
+             "record": {"summary": "bekledim", "decision": decision, "badge": {SOL: {"regime": "dönüş"}},
+                        "suggestion": "o", "checks": {"errors": []}}}
+    out = public.public_entry(entry)
+    k = out["record"]["decision"]
+    assert set(k) == {"ozet", "analiz", "pariteler", "eylemler", "not_defteri"}
+    assert k["pariteler"][SOL]["rejim"] == {"rejim": "donus", "uygun": "hayir"}
+    assert k["eylemler"] == [{"tip": "piyasa_giris", "sembol": SOL, "marjin_usd": 5}]
+    assert out["record"]["badge"] == {SOL: {"regime": "dönüş"}} and "suggestion" not in out["record"]
+    assert out["results"] == [{"label": "piyasa_giris SOLUSDT", "ok": False, "message": "piyasa_giris SOLUSDT reddedildi."}]
+    assert public.is_public(entry) and not public.is_public({**entry, "record": {"rejection": ["x"]}})
+
+
+def test_public_account_hides_entry_notes_and_origin():
+    """Girişin gerekçesi ve pozisyonu kimin açtığı panelde görünür, herkese açık hesapta görünmez."""
+    state = {"cash": 1, "positions": [{"id": 1, "notes": [{"reason": {}}], "by_admin": True}],
+             "orders": [{"id": 2, "note": {"reason": {}}, "by_admin": False}]}
+    out = public.public_state(state)
+    assert out == {"cash": 1, "positions": [{"id": 1}], "orders": [{"id": 2}]}

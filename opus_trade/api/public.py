@@ -1,6 +1,6 @@
 """
 file: public.py
-importable: Hub, create_public_app, public_entry, public_event
+importable: Hub, create_public_app, is_public, public_entry, public_event, public_state
 
 Herkese açık API. create_public_app() çekirdeğin kontrol API'sine giden bir
 istemci alır ve yalnızca yayındaki profilin verisini veren FastAPI
@@ -47,9 +47,15 @@ log = logging.getLogger(__name__)
 
 _PROFILE_KEYS = ("id", "name", "short", "strategy", "state", "version", "equity", "start_balance", "positions",
                  "orders", "busy", "next_wake")
-_RECORD_KEYS = ("summary", "decision", "tools", "model", "effort", "duration_s", "template_version", "waves")
-_ADMIN_FIELDS = ("yoneticiye_cevap",)
+_RECORD_KEYS = ("summary", "decision", "tools", "model", "effort", "duration_s", "template_version", "waves", "badge")
+
+# Kararın yalnızca panelde görünen alanları: yöneticiyle konuşma ve kontrol
+# adımlarının metinleri, talimat/sema.md. Herkese açık sayfada rozet ve özet
+# kalır.
+_ADMIN_FIELDS = ("yoneticiye_cevap", "yoneticiye_oneri", "defter_sinamasi", "kapanan_islemler")
+_CHECK_FIELDS = ("karsi_kanit", "risk_beyani", "gecersizlik", "son_stoptan_farki")
 _RESTRICTION = "yöneticinin #"
+_CHECK = "kontrol:"
 
 
 # --- Süzme ---
@@ -68,19 +74,50 @@ def _public_wake(w: dict) -> bool:
 # içeriğini görür. Dışarıda yalnızca eylemin reddedildiği kalır. Kalıp harf
 # büyüklüğüne bakmadan aranır: eski kayıtlarda cümlenin ortasında, yenilerinde
 # başında durur.
+# Kontrol adımının reddi de yalnızca panelde ayrıntılıdır.
 def _public_result(r: dict) -> dict:
-    if not r["ok"] and _RESTRICTION in r["message"].lower():
+    text = r["message"].lower()
+    if not r["ok"] and (_RESTRICTION in text or _CHECK in text):
         return {**r, "message": f"{r['label']} reddedildi."}
     return r
+
+
+# Paritelerde rozetin okuduğu yön ve rejim kalır, rejimin kanıt metni çıkar.
+# Eylemlerde girişin kontrol alanları çıkar.
+def _public_decision(k: dict) -> dict:
+    out = {key: v for key, v in k.items() if key not in _ADMIN_FIELDS}
+    if isinstance(out.get("pariteler"), dict):
+        out["pariteler"] = {s: ({**p, "rejim": {x: y for x, y in p["rejim"].items() if x != "kanit"}}
+                                if isinstance(p, dict) and isinstance(p.get("rejim"), dict) else p)
+                            for s, p in out["pariteler"].items()}
+    if isinstance(out.get("eylemler"), list):
+        out["eylemler"] = [{x: y for x, y in a.items() if x not in _CHECK_FIELDS} for a in out["eylemler"]]
+    return out
+
+
+# Girişin gerekçesi ve kimin açtığı yalnızca paneldedir, talimat/sema.md.
+_PRIVATE_ROW = ("notes", "note", "by_admin")
+
+
+def public_state(state: dict) -> dict:
+    """Hesabın halinden pozisyon ve emirlerin giriş notlarını ve kaynağını çıkarır."""
+    strip = lambda rows: [{k: v for k, v in r.items() if k not in _PRIVATE_ROW} for r in rows]
+    return {**state, "positions": strip(state.get("positions", [])), "orders": strip(state.get("orders", []))}
+
+
+def is_public(e: dict) -> bool:
+    """Kontrol hatasıyla reddedilen kararlar yalnızca panelde görünür."""
+    return not e["record"].get("rejection")
 
 
 def public_entry(e: dict) -> dict:
     """Bir günlük kaydından yönetici izlerini ve iç ayrıntıları çıkarır."""
     record = {k: e["record"][k] for k in _RECORD_KEYS if k in e["record"]}
     if isinstance(record.get("decision"), dict):
-        record["decision"] = {k: v for k, v in record["decision"].items() if k not in _ADMIN_FIELDS}
+        record["decision"] = _public_decision(record["decision"])
     return {"id": e["id"], "time": e["time"], "version_id": e["version_id"], "next_wake": e["next_wake"],
-            "wakes": [w for w in e["wakes"] if _public_wake(w)], "results": [_public_result(r) for r in e["results"]], "record": record,
+            "wakes": [w for w in e["wakes"] if _public_wake(w)],
+            "results": [_public_result(r) for r in e["results"] if r["label"] != "defter"], "record": record,
             "error": "Karar alınamadı." if e["error"] else None}
 
 
@@ -232,7 +269,7 @@ def create_public_app(core: httpx.AsyncClient, max_clients: int = 50,
     async def account():
         p = await published()
         acc = await call(f"/profiles/{p['id']}/account")
-        return {"state": acc["state"], "prices": acc["prices"], "triggers": acc["triggers"],
+        return {"state": public_state(acc["state"]), "prices": acc["prices"], "triggers": acc["triggers"],
                 "alerts": [a for a in acc["alerts"] if a.get("actor") != "admin"]}
 
     @app.get("/trades")
@@ -247,7 +284,7 @@ def create_public_app(core: httpx.AsyncClient, max_clients: int = 50,
     async def journal(before: int | None = None, limit: int = 50):
         p = await published()
         params = {"limit": min(limit, 100)} | ({"before": before} if before is not None else {})
-        return [public_entry(e) for e in await call(f"/profiles/{p['id']}/journal", **params)]
+        return [public_entry(e) for e in await call(f"/profiles/{p['id']}/journal", **params) if is_public(e)]
 
     @app.get("/journal/{jid}/tools")
     async def tools(jid: int):
