@@ -143,9 +143,25 @@ def test_broken_or_expired_plan_needs_a_new_plan():
 
 
 def test_valid_plan_rewritten_is_carried_with_a_note_not_rejected():
-    """Geçerli denen planın metni değiştirilirse ret yok, eski plan taşınır ve bu Opus'a söylenir."""
+    """Geçerli denen planın metni değiştirilirse ret yok, eski metin taşınır ve bu Opus'a söylenir. Yalnızca
+    geçerlilik saati değiştiyse not düşülmez, ama geçmişte kalan saat reddedilir."""
     r = validate(decision(not_defteri__plan={**PLAN, "metin": "Başka."}), ctx())
-    assert r.errors == [] and "eski plan aynen taşındı" in r.notes[0]
+    assert r.errors == [] and "metni ve bozulma koşulu aynen taşındı" in r.notes[0]
+    r = validate(decision(not_defteri__plan={**PLAN, "gecerlilik": "22.11.2026 06:00"}), ctx())
+    assert r.errors == [] and r.notes == []
+    r = validate(decision(not_defteri__plan={**PLAN, "gecerlilik": "21.11.2026 10:00"}), ctx())
+    assert any("geçmişte kalıyor" in e for e in r.errors)
+
+
+def test_realized_plan_needs_a_new_plan_but_not_a_new_date_only():
+    """Altın 23.11'de beklediği kurulum oluşunca planı zayıfladı demek zorunda kaldı. Gerçekleşti denen plan
+    bozuldu gibi yeni plan ister, aynı metni yalnızca saatini değiştirerek yazmak da kabul edilmez."""
+    k = decision(defter_sinamasi__plan={"durum": "gerceklesti", "gerekce": "Geri çekilme 3607'de bitti."},
+                 not_defteri__plan={**PLAN, "gecerlilik": "22.11.2026 06:00"})
+    assert any("gerçekleşti dedin, aynı planı yeniden yazamazsın" in e for e in validate(k, ctx()).errors)
+    k = decision(defter_sinamasi__plan={"durum": "gerceklesti", "gerekce": "Geri çekilme 3607'de bitti."},
+                 not_defteri__plan={**PLAN, "metin": "Long taşınır, stop yeni dibin altına çekilir."})
+    assert validate(k, ctx()).errors == []
 
 
 # --- Adım 2 ve 3 ---
@@ -184,6 +200,19 @@ def test_fit_must_match_the_profiles_regimes_and_unfit_needs_what_it_waits_for()
     rejim["bekledigi"] = {"tur": "saat", "fiyat": 0, "saat": "21.11.2026 14:00"}
     r = validate(decision(pariteler__BTCUSDT__rejim=rejim), ctx())
     assert r.errors == [] and r.wait_until == int(datetime(2026, 11, 21, 14, 0, tzinfo=HOME_TZ).timestamp())
+
+
+def test_open_position_may_wait_for_nothing_but_still_cannot_enter():
+    """Açık pozisyonu yöneten Opus rejim uygun değilken beklemediği bir hedef uydurmak zorunda kalmaz. Yine de o
+    paritede giriş yapamaz, alarm ve saat de kurulmaz."""
+    rejim = {"rejim": "asiri_uzama", "kanit": "x", "uygun": "hayir", "bekledigi": {"tur": "yok", "fiyat": 0, "saat": ""}}
+    k = decision(pariteler__BTCUSDT__rejim=rejim, defter_sinamasi__pozisyonlar=[
+        {"sembol": BTC, "yon": "short", "durum": "gecerli", "gerekce": "Tez sürüyor."}])
+    c = ctx(positions=[_position()])
+    r = validate(k, c)
+    assert r.errors == [] and r.expectations == [] and r.wait_until is None
+    a, cmd = entry()
+    assert "giriş yapamazsın" in checks.entry_problem(a, cmd, k, r, c, FEES, 20, set())
 
 
 def test_saturday_1532_entry_is_rejected_at_step_3():

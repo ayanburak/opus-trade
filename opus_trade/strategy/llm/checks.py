@@ -141,13 +141,15 @@ def _plan(k: dict, ctx: Context, old: Notebook, out: Review) -> None:
     choice = k["defter_sinamasi"]["plan"]["durum"]
     expired = nbk.plan_state(old, ctx.now) == nbk.EXPIRED
     if choice == "gecerli" and not expired:
-        if new["plan"] != old.plan:
-            out.notes.append("Planı geçerli dediğin için eski plan aynen taşındı, yeni yazdığın plan kullanılmadı.")
-        return
-    if (choice == "bozuldu" or expired) and old.plan is not None and new["plan"] == old.plan:
-        why = "süresi doldu" if expired else "bozuldu dedin"
-        out.errors.append(_fail("adım 1, plan", f"Planın {why}, aynı planı yeniden yazamazsın. Bugünkü veriyle yeni "
-                                                f"bir plan yaz."))
+        if (new["plan"]["metin"], new["plan"]["bozulma"]) != (old.plan.get("metin"), old.plan.get("bozulma")):
+            out.notes.append("Planı geçerli dediğin için metni ve bozulma koşulu aynen taşındı, yeni yazdığın "
+                             "plandan yalnızca geçerlilik saati alındı.")
+    elif choice in ("bozuldu", "gerceklesti") or expired:
+        if old.plan is not None and (new["plan"]["metin"], new["plan"]["bozulma"]) == \
+                (old.plan.get("metin"), old.plan.get("bozulma")):
+            why = "süresi doldu" if expired else f"{'gerçekleşti' if choice == 'gerceklesti' else 'bozuldu'} dedin"
+            out.errors.append(_fail("adım 1, plan", f"Planın {why}, aynı planı yeniden yazamazsın. Bugünkü veriyle "
+                                                    f"yeni bir plan yaz."))
     try:
         if nbk.parse_until(new["plan"]["gecerlilik"]) <= ctx.now:
             out.errors.append(_fail("adım 1, plan", f"Yeni planın geçerlilik saati {new['plan']['gecerlilik']} "
@@ -210,6 +212,11 @@ def _pairs(k: dict, ctx: Context, structure: tuple[str, str], fit_regimes: tuple
                                                             f"rejimlerden değil. Uygun rejimler: {names}."))
         if fit:
             continue
+        # Paritede açık pozisyon varken Opus yalnızca onu yönetiyor olabilir,
+        # beklediği bir şey yoksa uydurmak zorunda kalmaz. Giriş yasağı sürer.
+        holding = any(p.symbol == sym for p in ctx.state.positions)
+        if wait["tur"] == "yok" and holding:
+            continue
         if wait["tur"] == "fiyat" and wait["fiyat"] > 0:
             out.expectations.append((sym, float(wait["fiyat"])))
         elif wait["tur"] == "saat":
@@ -224,7 +231,8 @@ def _pairs(k: dict, ctx: Context, structure: tuple[str, str], fit_regimes: tuple
                 out.wait_until = t if out.wait_until is None else min(out.wait_until, t)
         else:
             out.errors.append(_fail(f"adım 3, {sym} bekledigi", "rejimi uygun bulmadın ama neyi beklediğini yazmadın. "
-                                                               "Bir fiyat ya da bir saat yaz."))
+                                                               "Bir fiyat ya da bir saat yaz. Paritede açık "
+                                                               "pozisyonun yoksa yok seçilemez."))
 
 
 # --- Adım 4 ---

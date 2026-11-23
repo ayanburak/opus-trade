@@ -35,12 +35,12 @@ export const DIRECTIONS: Record<string, string> = {
 /** Kapanan pozisyonun sınıfı. Çekirdekteki karşılığı strategy/llm/schema.py VERDICTS'tir. */
 export const VERDICTS: Record<string, string> = {
   tez_dogruydu: "tez doğruydu", tez_yanlisti: "tez yanlıştı", zamanlama_yanlisti: "zamanlama yanlıştı",
-  koruma_yanlis_yerdeydi: "koruma yanlış yerdeydi",
+  koruma_yanlis_yerdeydi: "koruma yanlış yerdeydi", beklenmedik_olay: "beklenmedik olay",
 };
 
 /** Defter sınamasının seçenekleri. */
 export const REVIEWS: Record<string, string> = {
-  gecerli: "geçerli", zayifladi: "zayıfladı", bozuldu: "bozuldu", ayni: "aynı", guncellendi: "güncellendi",
+  gecerli: "geçerli", zayifladi: "zayıfladı", gerceklesti: "gerçekleşti", bozuldu: "bozuldu", ayni: "aynı", guncellendi: "güncellendi",
   etkisi_yok: "etkisi yok", etkiliyor: "etkiliyor",
 };
 

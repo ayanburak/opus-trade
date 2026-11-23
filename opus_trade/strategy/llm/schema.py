@@ -47,7 +47,7 @@ FIT = ("evet", "hayir")
 
 # Kapanan pozisyonun sınıfları ve arayüzdeki etiketleri.
 VERDICTS = {"tez_dogruydu": "tez doğruydu", "tez_yanlisti": "tez yanlıştı", "zamanlama_yanlisti": "zamanlama yanlıştı",
-            "koruma_yanlis_yerdeydi": "koruma yanlış yerdeydi"}
+            "koruma_yanlis_yerdeydi": "koruma yanlış yerdeydi", "beklenmedik_olay": "beklenmedik olay"}
 
 # Bekleyen emir ve açık pozisyon için defter sınamasındaki seçenekler.
 ITEM_REVIEWS = ("gecerli", "zayifladi", "bozuldu")
@@ -76,8 +76,9 @@ def _book_review() -> dict:
                        "bugünkü veriyle sına. Hepsi listede olmalı, fazlası da eksiği de karar reddine yol açar.",
         "required": ["plan", "yapi", "gundem", "emirler", "pozisyonlar"],
         "properties": {
-            "plan": _review(notebook.PLAN_REVIEWS, "Plan bugünkü veriyle geçerli mi, zayıfladı mı, bozuldu mu. "
-                                                   "Süresi dolan planı burada geçerli desen de yenisini yazarsın."),
+            "plan": _review(notebook.PLAN_REVIEWS, "Plan bugünkü veriyle geçerli mi, zayıfladı mı, beklediği kurulum "
+                                                   "oluşup gerçekleşti mi, bozuldu mu. Süresi dolan planı burada "
+                                                   "geçerli desen de yenisini yazarsın."),
             "yapi": _review(notebook.STRUCTURE_REVIEWS, "Defterdeki yapı aynı mı, güncellendi mi, bozuldu mu."),
             "gundem": _review(notebook.AGENDA_REVIEWS, "Yakın olaylar bugünkü kararı etkiliyor mu. Olay yoksa "
                                                        "gerekçe tek kelime olabilir."),
@@ -102,7 +103,8 @@ def _pair(structure: tuple[str, str]) -> dict:
 
     waiting = {"type": "object", "additionalProperties": False, "required": ["tur", "fiyat", "saat"],
                "description": "Uygun değilse neyi beklediğin. Fiyat beklersen sistem oraya alarm kurar, saat "
-                              "beklersen o saatte çağrılırsın. Uygunsa tur yok olur.",
+                              "beklersen o saatte çağrılırsın. Uygunsa tur yok olur. Uygun değilken yok yalnızca "
+                              "paritede açık pozisyonun varsa seçilebilir.",
                "properties": {"tur": {"type": "string", "enum": ["fiyat", "saat", "yok"]},
                               "fiyat": {"type": "number", "description": "tur fiyat ise beklenen fiyat, değilse 0."},
                               "saat": {"type": "string", "description": "tur saat ise 22.11.2026 18:00 biçiminde, "

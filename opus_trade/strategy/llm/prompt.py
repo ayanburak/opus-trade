@@ -49,7 +49,7 @@ from .schema import REGIMES, VERDICTS
 from .texts import (INTERVAL_NAMES, ORDER_NAMES, REASONS, TZ_LABEL, clock, date_text, event_text, fire_text,
                     guard_text, price)
 
-TEMPLATE_VERSION = 6
+TEMPLATE_VERSION = 7
 
 # İstemde emrin ve pozisyonun yanında yazılan risk gerekçesinin en uzun hali.
 _REASON_SHOWN = 160
@@ -145,10 +145,12 @@ ilk yapı oluştuysa, düşüşte ilk alçalan tepe, yükselişte ilk yükselen 
 3. Rejim ve uygunluk, pariteler alanında rejim. Stratejinin çalışmadığı piyasada işlem açılmasın diye var. \
 Piyasanın rejimini okur, kanıtını rakamla yazar ve stratejine uygun olup olmadığını söylersin. Stratejin şu \
 rejimlerde çalışır: {fit}. Uyum yoksa düzenli trend seçemezsin. Uygun değilse neyi beklediğini yazarsın, bir fiyat \
-ya da bir saat. Beklediğin fiyata sistem alarm kurar, beklediğin saat sonraki çağrının en geç zamanı olur. Uygun \
-olmayan paritede giriş yapamazsın.
+ya da bir saat. Beklediğin fiyata sistem alarm kurar, beklediğin saat sonraki çağrının en geç zamanı olur. \
+Paritede açık pozisyonun varsa ve yalnızca onu yönetiyorsan beklediğin bir şey olmayabilir, o zaman yok seçersin. \
+Uygun olmayan paritede giriş yapamazsın.
 4. Son işlemler, kapanan_islemler. Kayıplardan ve kazançlardan öğrenmek ölçülebilir olsun diye var. Hesap \
 bölümünde sınıflandırılmayı bekleyen her pozisyonu bir kez sınıflandırırsın: {verdicts}, yanına bir cümle. \
+Beklenmedik olay, bir haberin ya da ani bir olayın tezini ve korumanı geçersiz kıldığı işlemdir. \
 Sınıflandırma işlemin kaydına bağlanır, kapanan işlemlerine araçla baktığında görürsün. Yöneticinin açtığı ya da \
 kapattığı pozisyonlar sınıflandırılmaz.
 5. Giriş alanları. Her girişte riskini, tezini bozan koşulu ve tezine aykırı veriyi bilerek girmen için var. \
@@ -189,7 +191,8 @@ Not defteri üç alandır:
 rakamlarını sistem 2. adımda yazdıklarından deftere kendisi taşır.
 - gundem: Etkisi süren haberler ve yaklaşan olaylar, tarihleriyle, en fazla {nbk.AGENDA_MAX} karakter.
 
-Planı geçerli dersen eski plan olduğu gibi taşınır, yeniden yazamazsın. Zayıfladı dersen düzeltebilirsin. Bozuldu \
+Planı geçerli dersen metni ve bozulma koşulu olduğu gibi taşınır, yalnızca geçerlilik saatini değiştirebilirsin. \
+Zayıfladı dersen düzeltebilirsin. Planın beklediği kurulum oluştuysa gerçekleşti dersin. Gerçekleşti ya da bozuldu \
 dersen ya da planın geçerlilik saati geçtiyse yeni bir plan yazmak zorundasın. Süresi dolan plan istemde öyle \
 işaretlenir, geçerlilik saati gelince ayrıca çağrılmazsın. Deftere işlem geçmişini, hesabı ve pozisyonların tezini \
 yazmazsın, onlar zaten sana gelir. Deftere ders ya da kural da yazmazsın. İşlemlerinde bir örüntü görürsen, \

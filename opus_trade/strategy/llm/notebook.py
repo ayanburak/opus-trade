@@ -50,8 +50,9 @@ _UNTIL_PATTERN = r"^[0-3][0-9]\.[01][0-9]\.20[0-9]{2} [0-2][0-9]:[0-5][0-9]$"
 # --- Defter sınaması ---
 
 # Opus'un eski defteri sınarken seçtikleri, talimat/defter.md. Süresi doldu
-# Opus'un seçeneği değildir, saati geçen plana sistem koyar.
-PLAN_REVIEWS = ("gecerli", "zayifladi", "bozuldu")
+# Opus'un seçeneği değildir, saati geçen plana sistem koyar. Gerçekleşti,
+# planın beklediği kurulumun oluştuğudur, bozuldu gibi yeni plan ister.
+PLAN_REVIEWS = ("gecerli", "zayifladi", "gerceklesti", "bozuldu")
 STRUCTURE_REVIEWS = ("ayni", "guncellendi", "bozuldu")
 AGENDA_REVIEWS = ("etkisi_yok", "etkiliyor")
 EXPIRED = "suresi_doldu"
@@ -92,8 +93,8 @@ def schema() -> dict:
                                "description": "Planın geçerli olduğu son an, Türkiye saatiyle, 22.11.2026 18:00 "
                                               "biçiminde."}}}
     return {"type": "object", "additionalProperties": False, "required": ["plan", "seviyeler_notu", "gundem"],
-            "description": "Not defterin. Defter sınamasında planı geçerli dediysen plan aynen taşınır, burada "
-                           "yazdığın plan kullanılmaz.",
+            "description": "Not defterin. Defter sınamasında planı geçerli dediysen planın metni ve bozulma "
+                           "koşulu aynen taşınır, buradaki planından yalnızca geçerlilik saati alınır.",
             "properties": {
                 "plan": plan,
                 "seviyeler_notu": {"type": "string", "maxLength": NOTE_MAX,
@@ -170,11 +171,16 @@ def merge(old: Notebook, new: dict, review: str, swings: dict, now: int) -> tupl
         now: Şu an, planın süresi için.
 
     Returns:
-        Yeni defter ve eski planın Opus'un farklı yazdığı plana rağmen taşınıp taşınmadığı.
+        Yeni defter ve eski planın metniyle bozulma koşulunun Opus'un farklı yazdığına rağmen taşınıp taşınmadığı.
     """
+    # Geçerli denen planın metni ve bozulma koşulu kilitlidir, geçerlilik
+    # saati yenisinden alınır. Opus süren bir planı yeniden yazmadan uzatabilir.
     keep = review == "gecerli" and plan_state(old, now) is None
-    plan = old.plan if keep else new["plan"]
-    carried = keep and new["plan"] != old.plan
+    if keep:
+        plan = {**old.plan, "gecerlilik": new["plan"]["gecerlilik"]}
+        carried = (new["plan"]["metin"], new["plan"]["bozulma"]) != (old.plan.get("metin"), old.plan.get("bozulma"))
+    else:
+        plan, carried = new["plan"], False
     return Notebook(plan=plan, note=new["seviyeler_notu"], swings=swings, agenda=new["gundem"]), carried
 
 

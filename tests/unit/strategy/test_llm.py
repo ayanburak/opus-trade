@@ -420,7 +420,7 @@ def test_valid_plan_is_carried_and_reviews_and_suggestion_are_passed_on(monkeypa
     k["defter_sinamasi"]["plan"]["durum"] = "gecerli"
     k["not_defteri"]["plan"] = {**PLAN, "metin": "Başka."}
     d, _ = _decide(monkeypatch, tmp_path, k, state=EMPTY, memory=old)
-    assert d.memory["notebook"]["plan"] == PLAN and "eski plan aynen taşındı" in d.notes[0].message
+    assert d.memory["notebook"]["plan"] == PLAN and "aynen taşındı" in d.notes[0].message
     assert d.suggestion == "Girişlerim erken kalıyor." and d.record["suggestion"] == d.suggestion
 
 

@@ -29,12 +29,14 @@ def _new(plan=NEW_PLAN) -> dict:
     return {"plan": plan, "seviyeler_notu": "62320 direnç.", "gundem": "Salı FOMC tutanakları."}
 
 
-@pytest.mark.parametrize("review, kept", [("gecerli", True), ("zayifladi", False), ("bozuldu", False)])
+@pytest.mark.parametrize("review, kept", [("gecerli", True), ("zayifladi", False), ("gerceklesti", False),
+                                          ("bozuldu", False)])
 def test_plan_review_decides_which_plan_survives(review, kept):
-    """Geçerli denen plan Opus farklı yazsa da aynen kalır, diğer durumlarda yeni plan alınır."""
+    """Geçerli denen planın metni ve bozulma koşulu Opus farklı yazsa da kalır, yalnızca geçerlilik saati yenisinden
+    alınır. Diğer durumlarda yeni plan alınır."""
     old = Notebook(plan=PLAN, note="eski", agenda="eski")
     merged, carried = nbk.merge(old, _new(), review, SWINGS, NOW)
-    assert merged.plan == (PLAN if kept else NEW_PLAN)
+    assert merged.plan == ({**PLAN, "gecerlilik": NEW_PLAN["gecerlilik"]} if kept else NEW_PLAN)
     assert carried is kept
     assert (merged.note, merged.agenda, merged.swings) == ("62320 direnç.", "Salı FOMC tutanakları.", SWINGS)
 
@@ -51,6 +53,14 @@ def test_valid_plan_with_same_text_is_not_reported_as_carried():
     """Opus geçerli planı aynen yazdıysa sonuca not düşmeye gerek yok."""
     merged, carried = nbk.merge(Notebook(plan=PLAN), _new(PLAN), "gecerli", {}, NOW)
     assert merged.plan == PLAN and carried is False
+
+
+def test_valid_plan_can_be_extended_without_rewriting_it():
+    """Trend 23.11 03:57'de süren planını uzatmak istedi, metin kilitli olduğu için uzatamadı. Geçerli denen plan
+    aynı metinle yeni geçerlilik saatini alır, bu bir taşıma notu sayılmaz."""
+    longer = {**PLAN, "gecerlilik": "23.11.2026 15:00"}
+    merged, carried = nbk.merge(Notebook(plan=PLAN), _new(longer), "gecerli", {}, NOW)
+    assert merged.plan == longer and carried is False
 
 
 def test_old_plain_text_notebook_is_read_as_legacy_with_an_expired_plan():
