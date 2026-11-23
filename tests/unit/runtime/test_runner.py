@@ -281,6 +281,26 @@ def test_expectation_alarm_replaces_the_old_one_of_the_same_pair(tmp_path):
     assert [a.price for a in w.state.alerts(p.id)] == [110.0]
 
 
+def test_dropped_expectation_cancels_only_the_expectation_alarm_of_that_pair(tmp_path):
+    """Opus fiyat beklemeyi bırakınca paritenin beklenti alarmı iptal edilir. Opus'un kendi alarmı kalır,
+    iptal edilecek alarm yoksa sonuç satırı yazılmaz."""
+    w = World(tmp_path)
+    expect = Decision(alarms=[{"op": "expect", "symbol": SOL, "price": 90.0, "note": "bekle", "label": "b"},
+                              {"op": "add", "symbol": SOL, "price": 95.0, "note": "benim", "label": "a"}])
+    drop = Decision(alarms=[{"op": "unexpect", "symbol": SOL, "label": "b"}])
+    Scripted.script = [expect, drop, drop]
+    p, r = w.running()
+    go(w.step(r))
+    for _ in range(2):
+        r.wake("timer")
+        go(w.step(r))
+    assert [(a.price, a.purpose) for a in r.alerts.alerts] == [(95.0, "opus")]
+    assert [a.price for a in w.state.alerts(p.id)] == [95.0]
+    second, first = w.journal.entries(p.id)[:2]
+    assert [x["message"] for x in first["results"]] == ["artık beklenmeyen fiyatın alarmı #1 iptal edildi."]
+    assert second["results"] == []
+
+
 def test_chained_command_is_not_sent_when_the_one_before_is_refused(tmp_path):
     """Kaldıraç reddedilirse giriş eski kaldıraçla açılmaz. Yeni koruma reddedilirse eskisinin iptali gitmez,
     pozisyon korumasız kalmaz. Zincirsiz komut önceki redden etkilenmez."""

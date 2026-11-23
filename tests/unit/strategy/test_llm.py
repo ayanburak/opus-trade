@@ -397,12 +397,20 @@ def test_unfit_regime_sets_an_expectation_alarm_or_shortens_the_wait(monkeypatch
     k["pariteler"][SOL]["rejim"]["bekledigi"] = {"tur": "saat", "fiyat": 0, "saat": "01.01.2030 00:00"}
     d, _ = _decide(monkeypatch, tmp_path, k, state=EMPTY)
     assert d.wait_s == 180 * 60
+    assert d.alarms == [{"op": "unexpect", "symbol": SOL, "label": f"beklenti {SOL}"}]
     from opus_trade.strategy.llm.notebook import parse_until
     soon = NOW + 1800
     from opus_trade.strategy.llm.texts import local
     k["pariteler"][SOL]["rejim"]["bekledigi"]["saat"] = local(soon).strftime("%d.%m.%Y %H:%M")
     d, _ = _decide(monkeypatch, tmp_path, k, state=EMPTY)
     assert d.wait_s == parse_until(k["pariteler"][SOL]["rejim"]["bekledigi"]["saat"]) - NOW
+
+
+def test_fit_regime_drops_the_old_expectation_alarm(monkeypatch, tmp_path):
+    """Rejim uygun okununca paritenin eski beklenti alarmı kalkar. Kalsaydı Opus artık beklemediği fiyatta
+    "Rejimi uygun bulmadığın çağrıda beklediğin fiyat" notuyla çağrılırdı, 23.11'de Altın'da olduğu gibi."""
+    d, _ = _decide(monkeypatch, tmp_path, _k(), state=EMPTY)
+    assert d.alarms == [{"op": "unexpect", "symbol": SOL, "label": f"beklenti {SOL}"}]
 
 
 def test_valid_plan_is_carried_and_reviews_and_suggestion_are_passed_on(monkeypatch, tmp_path):

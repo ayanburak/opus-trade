@@ -66,6 +66,13 @@ from ..strategy.llm.client import ClaudeCliClient, LLMClient
 
 _ROOT = Path(__file__).resolve().parents[2]
 
+# opus-web'in httpx istemcisi boştaki bağlantıyı 5 saniye tutup yeniden
+# kullanır, uvicorn'un varsayılanı da 5 saniyedir. Sunucu bağlantıyı tam
+# istemci onu kullanırken kapatırsa istek RemoteProtocolError ile düşer ve
+# panel 502 alır. Sunucu bağlantıyı istemciden uzun tutunca kapatan hep
+# istemci olur.
+KEEP_ALIVE_S = 30
+
 log = logging.getLogger("opus_trade.core")
 
 
@@ -148,7 +155,7 @@ async def _main(cfg: AppConfig) -> None:
             # opus-web'in canlı akış bağlantısı kendiliğinden bitmez, kapanış onu
             # en fazla beş saniye bekler.
             server = uvicorn.Server(uvicorn.Config(create_app(core), uds=str(cfg.core_socket), log_level="warning",
-                                                   timeout_graceful_shutdown=5))
+                                                   timeout_graceful_shutdown=5, timeout_keep_alive=KEEP_ALIVE_S))
             server.install_signal_handlers = lambda: None
             tasks.append(asyncio.create_task(server.serve()))
         log.info("Çekirdek başladı.")

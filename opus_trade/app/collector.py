@@ -45,6 +45,12 @@ from ..storage.migrate import migrate
 # bin istek sınırı koyuyor, bu aralık sınırın yarısının altında kalır.
 _REQUEST_GAP_S = 0.6
 
+# Panelin toplayıcıya giden httpx istemcisi boştaki bağlantıyı 5 saniye
+# tutar. Sunucu bağlantıyı daha uzun tutmazsa iki taraf aynı anda kapatıp
+# kullanmaya çalışır ve panel ara sıra 502 alır, çekirdekteki KEEP_ALIVE_S
+# ile aynı neden.
+KEEP_ALIVE_S = 30
+
 log = logging.getLogger("opus_trade.collector")
 
 
@@ -73,7 +79,7 @@ async def _run(store: CollectorStore, cfg: AppConfig) -> None:
             app = create_collector_app(store, cfg.market_db, rest, clock)
             # İndirme süren bir istektir, kapanış onu en fazla beş saniye bekler.
             server = uvicorn.Server(uvicorn.Config(app, uds=str(cfg.collector_socket), log_level="warning",
-                                                   timeout_graceful_shutdown=5))
+                                                   timeout_graceful_shutdown=5, timeout_keep_alive=KEEP_ALIVE_S))
             server.install_signal_handlers = lambda: None
             tasks.append(asyncio.create_task(server.serve()))
         log.info("Toplayıcı başladı, %d parite izleniyor.", len(store.symbols()))

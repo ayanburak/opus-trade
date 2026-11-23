@@ -181,9 +181,16 @@ class LLMStrategy(Strategy):
         busy: set[tuple[str, str]] = set()
         for a in k["eylemler"]:
             self._action(a, k, review, ctx, d, busy)
+        # Bir paritenin beklenti alarmı yalnızca bu kararın beklediği fiyattır.
+        # Rejim uygun okunduysa ya da Opus bir saat bekliyorsa eski alarm kalkar,
+        # yoksa Opus artık beklemediği bir fiyatta yanıltıcı notla çağrılırdı.
+        expected = {sym for sym, _ in review.expectations}
         for sym, level in review.expectations:
             d.alarms.append({"op": "expect", "symbol": sym, "price": level, "label": f"beklenti {sym}",
                              "note": "Rejimi uygun bulmadığın çağrıda beklediğin fiyat."})
+        for sym in k["pariteler"]:
+            if sym not in expected:
+                d.alarms.append({"op": "unexpect", "symbol": sym, "label": f"beklenti {sym}"})
         return d
 
     @staticmethod

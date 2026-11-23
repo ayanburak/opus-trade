@@ -454,13 +454,20 @@ class ProfileRunner:
     # Aynı paritenin eski beklenti alarmı yenisinden önce iptal edilir, Opus
     # yalnızca son beklediği fiyatta çağrılır.
     def _expect(self, op: dict, now: int) -> str:
-        for old in [a for a in self.alerts.alerts if a.purpose == "expectation" and a.symbol == op["symbol"]]:
-            self.alerts.cancel(old.number)
-            self.state.resolve_alert(self.pid, old.number, "cancelled", now)
+        self._unexpect(op["symbol"], now)
         a = self.alerts.add(op["symbol"], op["price"], self.prices[op["symbol"]], op["note"], str(Actor.SYSTEM), now,
                             purpose="expectation")
         self.state.add_alert(self.pid, a)
         return f"beklenen fiyata alarm #{a.number} {a.symbol} {numbers.price(a.price)} kuruldu."
+
+    # Paritenin beklenti alarmlarını iptal eder, iptal edilenlerin numaralarını döndürür.
+    def _unexpect(self, symbol: str, now: int) -> list[int]:
+        gone = []
+        for old in [a for a in self.alerts.alerts if a.purpose == "expectation" and a.symbol == symbol]:
+            self.alerts.cancel(old.number)
+            self.state.resolve_alert(self.pid, old.number, "cancelled", now)
+            gone.append(old.number)
+        return gone
 
     async def _apply(self, d: Decision, now: int) -> tuple[list[ActionResult], list[dict]]:
         results = d.errors + d.notes
@@ -488,6 +495,11 @@ class ProfileRunner:
                     if op["symbol"] not in self.prices:
                         raise ValueError(f"{op['symbol']} fiyatı henüz gelmedi.")
                     results.append(ActionResult(label, True, self._expect(op, now)))
+                elif op["op"] == "unexpect":
+                    # Kalkacak alarm yoksa sonuç satırı yazılmaz, her kararda boş satır olurdu.
+                    for n in self._unexpect(op["symbol"], now):
+                        results.append(ActionResult(label, True, f"artık beklenmeyen fiyatın alarmı #{n} iptal "
+                                                                 f"edildi."))
                 elif op["op"] == "add":
                     if op["symbol"] not in self.prices:
                         raise ValueError(f"{op['symbol']} fiyatı henüz gelmedi.")
