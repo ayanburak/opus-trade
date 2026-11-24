@@ -66,11 +66,12 @@ def quiet_then_burst(t0: int = NOW) -> list[Trade]:
     return out
 
 
-def test_list_comes_from_the_screen_and_only_trades_are_asked():
+def test_list_comes_from_the_screen_with_trades_and_candles():
     """İzleme listesi saat başı özetten kurulur. Liste değişmedikçe istek aynı kalmalı, yoksa her saniye abonelik
-    mesajı gider. Strateji mumla değil işlemle çalışır, mum istemek akış sınırını boşa tüketirdi."""
+    mesajı gider. Sinyal işlemden hesaplanır, mum da istenir: panelin grafiği canlı fiyatı mumdan alır, mum
+    dinlenmezse listedeki coin'lerin grafiği donar."""
     t, _ = burst_trigger()
-    assert t.wanted() == {SOL: frozenset({Feed.TRADE})}
+    assert t.wanted() == {SOL: frozenset({Feed.TRADE, Feed.KLINE})}
     assert t.wanted() == t.wanted()
 
 

@@ -21,6 +21,11 @@ description: Tekil işlem akışında tek yönlü patlama tetikleyicisi.
 # Liste saat başı değişince yeni giren paritenin birkaç dakika ısınması
 # gerekir, eksik geçmişle ölçülen normal patlamayı ya gizler ya da uydurur.
 #
+# NOTE: Sinyal yalnızca tekil işlemlerden hesaplanır ama mum da istenir.
+# Panelin ve herkese açık sayfanın grafiği canlı fiyatı mum akışından alır,
+# mum dinlenmezse listedeki coin'lerin grafiği donar. 25.11 yayınında görüldü.
+# Mumla gelen fiyat broker'ı fiyatlamaz, emirler yine işlemle dolar.
+#
 # NOTE: İlk ve ucuz eşik 5 saniyelik harekettir. İşlemlerin neredeyse hepsi
 # orada elenir, diğer sorgular yalnızca hareket varken yapılır.
 
@@ -96,7 +101,7 @@ class TradeBurst(Trigger):
         if screen is not None and screen.version != self._version:
             self._version = screen.version
             self._list = screen.top(self.list_size, self.ranking, self.setup.universe)
-            self._wanted = {s: frozenset({Feed.TRADE}) for s in self._list}
+            self._wanted = {s: frozenset({Feed.TRADE, Feed.KLINE}) for s in self._list}
         return dict(self._wanted)
 
     def on_trade(self, trade: Trade) -> list[Fire]:
