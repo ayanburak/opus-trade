@@ -10,12 +10,17 @@ description: tools.market için birim testleri.
 """
 
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
 
 from opus_trade.domain.models import Side
 from opus_trade.domain.trading import Trade
 from opus_trade.collector.store import MIGRATIONS as MARKET_MIGRATIONS
 from opus_trade.collector.store import CollectorStore
-from opus_trade.market.models import Liquidation
+from opus_trade.market import opening
+from opus_trade.market.models import Candle, Liquidation
 from opus_trade.storage.database import connect
 from opus_trade.storage.ledger import MIGRATIONS, Ledger
 from opus_trade.storage.migrate import migrate
@@ -154,3 +159,41 @@ def test_as_of_cuts_the_clock_and_the_order_book(tmp_path, monkeypatch):
     assert "emir defteri yoktur" in asyncio.run(tools.emir_defteri("SOLUSDT"))
     assert type(tools._rest()).__name__ == "AsOfMarket"
     monkeypatch.setattr(tools, "_market", None)
+
+
+class _FlatMarket:
+    """Her parite ve her dakika için aynı mumu veren, ağa çıkmayan piyasa. Yalnızca saat hesabı sınanır."""
+
+    def __init__(self, now: int):
+        self.now = now
+
+    async def candles(self, symbol, interval, limit=500, start=None, end=None):
+        end = end if end is not None else self.now // 60 * 60
+        first = start if start is not None else end - limit * 60
+        return [Candle(symbol, t, 100.0, 101.0, 99.0, 100.0, 1.0, 100.0, 1, 0.5) for t in range(first, end, 60)]
+
+
+def _ist(text: str) -> int:
+    return int(datetime.strptime(text, "%d.%m.%Y %H:%M").replace(tzinfo=ZoneInfo("Europe/Istanbul")).timestamp())
+
+
+@pytest.mark.parametrize("now, next_open, minutes, last_day", [
+    ("24.11.2026 23:59", "25.11.2026 17:30", 1051, "24.11.2026"),
+    ("25.11.2026 00:01", "25.11.2026 17:30", 1049, "24.11.2026"),
+    ("25.11.2026 07:59", "25.11.2026 17:30", 571, "24.11.2026"),
+    ("25.11.2026 08:01", "25.11.2026 17:30", 569, "24.11.2026"),
+    ("26.11.2026 00:01", "27.11.2026 17:30", 2489, "25.11.2026"),
+])
+def test_ny_open_tool_across_midnights(monkeypatch, now, next_open, minutes, last_day):
+    """NY açılışı aracı yalnızca kendi saatine bakar. İstanbul gece yarısının ve NY gece yarısının, 07:59 ile 08:01
+    arası, iki yanında bir sonraki açılış ve son ölçülen açılış doğru gün olur. Şükran Günü tatili atlanır. Eski
+    sistemde test sabit saate, araç gerçek saate baktığı için gece yarısında düşüyordu."""
+    t = _ist(now)
+    monkeypatch.setattr(tools.time, "time", lambda: t)
+    monkeypatch.setattr(tools, "_market", _FlatMarket(t))
+    monkeypatch.setattr(opening, "_cache", {})
+    lines = asyncio.run(tools.ny_acilisi("btcusdt")).splitlines()
+    assert lines[0] == f"NY borsasının bir sonraki açılışı {next_open}, {minutes} dakika sonra."
+    rows = lines[lines.index(next(x for x in lines if x.startswith("tarih"))) + 1:]
+    assert rows[0].startswith(last_day) and len(rows) == 10
+    assert not any(r.startswith("26.11.2026") for r in rows)
