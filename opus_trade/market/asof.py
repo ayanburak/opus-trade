@@ -11,8 +11,8 @@ hesaplanır. Emir defterinin geçmişi yoktur, MarketDataError verir.
 description: Piyasa verisini geçmiş bir ana kadarki veriyle sınırlayan sarmalayıcı, sınama için.
 """
 
-# NOTE: Sınama Opus'u geçmiş bir anda, o ana kadarki veriyle yeniden çağırır,
-# talimat/yayin.md. Opus'un araçları da bunu kullanır, OPUS_AS_OF ortam
+# NOTE: Sınama Opus'u geçmiş bir anda, o ana kadarki veriyle yeniden çağırır.
+# Opus'un araçları da bunu kullanır, OPUS_AS_OF ortam
 # değişkeni doluysa. Gelecekten tek bir mum sızarsa sınama anlamsızlaşır.
 #
 # XXX: Binance açık pozisyon, long short ve agresif alış satış geçmişini

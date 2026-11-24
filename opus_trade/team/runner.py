@@ -28,7 +28,7 @@ description: Alt görevlerin kota, eşzamanlılık ve süreyle çalıştırılma
 #
 # NOTE: deadline time.monotonic() cinsinden mutlak bir andır. Görevin süre
 # sınırı rolün sınırı ile kalan sürenin küçüğüdür. Böylece alt görev claude'un
-# araç zaman aşımından ve ana çağrının süresinden önce biter, talimat/ekip.
+# araç zaman aşımından ve ana çağrının süresinden önce biter, adimlar-ve-ekip.md.
 
 import asyncio
 import shutil
