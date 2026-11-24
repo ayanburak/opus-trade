@@ -128,6 +128,7 @@ class PaperBroker(Broker, PriceDriven):
         self.clock = clock
         self.prices: dict[str, float] = {}
         self.marks: dict[str, float] = {}
+        self._live: set[str] | None = None
 
     # --- Durum ---
 
@@ -193,10 +194,21 @@ class PaperBroker(Broker, PriceDriven):
                             order_id=order.id if order else None, position_id=position.id if position else None,
                             **extra)
 
+    # Dizin defterden kurulur ve hesabı değiştiren her şeyden sonra yeniden
+    # kurulmak üzere silinir: komutlar ve olay üreten fiyat kontrolleri. Tekil
+    # işlem dinlenen paritede fiyat saniyede yüzlerce kez gelir, emri ve
+    # pozisyonu olmayan parite defteri hiç sorgulamamalı.
+    def live_symbols(self) -> set[str]:
+        if self._live is None:
+            self._live = ({p.symbol for p in self.ledger.positions(self.account_id)}
+                          | {o.symbol for o in self.ledger.orders(self.account_id)})
+        return self._live
+
     # --- Komutlar ---
 
     async def execute(self, cmd: Command, actor: Actor) -> list[AccountEvent]:
         now = self.clock.time()
+        self._live = None
         with self.ledger.atomic():
             events = self._dispatch(cmd, actor, now)
             for e in events:
@@ -209,7 +221,7 @@ class PaperBroker(Broker, PriceDriven):
                 return self._set_leverage(cmd, actor, now)
             case PlaceOrder(reduce=True):
                 p = self._need_position(cmd.symbol, cmd.side)
-                return self._place_exit(p, cmd.type, cmd.qty, cmd.price, cmd.trail_pct, actor, now)
+                return self._place_exit(p, cmd.type, cmd.qty, cmd.price, cmd.trail_pct, actor, now, cmd.by_last)
             case PlaceOrder(type=OrderType.MARKET):
                 return self._market_entry(cmd, actor, now)
             case PlaceOrder():
@@ -304,6 +316,8 @@ class PaperBroker(Broker, PriceDriven):
                 if x.qty > qty + rules.TOLERANCE:
                     raise RuleError(f"Korumanın miktarı {numbers.qty(x.qty, spec.symbol)}, girişin miktarı "
                                     f"{numbers.qty(qty, spec.symbol)} değerini aşamaz.")
+            if x.by_last and x.type is not OrderType.STOP:
+                raise RuleError("Son fiyatla tetiklenme yalnızca SL'de seçilebilir.")
             if x.type is OrderType.TRAILING_STOP:
                 rules.check_trail(x.trail_pct)
                 continue
@@ -321,7 +335,8 @@ class PaperBroker(Broker, PriceDriven):
         out = []
         for x in protection:
             try:
-                out += self._place_exit(p, x.type, x.qty or qty, x.price, x.trail_pct, Actor.SYSTEM, now)
+                out += self._place_exit(p, x.type, x.qty or qty, x.price, x.trail_pct, Actor.SYSTEM, now,
+                                        x.by_last)
             except RuleError as e:
                 out.append(self._event(EventKind.ORDER_FAILED, Actor.SYSTEM, now, p.symbol, p.side, position=p,
                                        price=x.price, reason=str(e), order_type=x.type, reduce=True))
@@ -419,16 +434,19 @@ class PaperBroker(Broker, PriceDriven):
     # --- Kapatan emir ---
 
     # Hedge modunda kapatan emir yalnızca açık pozisyona konur. Miktarsız
-    # emir tetiklendiğinde pozisyonun kalanının tamamını kapatır. TP son
-    # fiyata, SL ve iz mark fiyatına göre doğru tarafta olmalıdır. İzin en iyi
-    # fiyatı emrin konduğu andaki mark fiyatından başlar.
+    # emir tetiklendiğinde pozisyonun kalanının tamamını kapatır. TP ve son
+    # fiyatla tetiklenen SL son fiyata, diğer SL ve iz mark fiyatına göre
+    # doğru tarafta olmalıdır. İzin en iyi fiyatı emrin konduğu andaki mark
+    # fiyatından başlar.
     def _place_exit(self, p: Position, type_: OrderType, qty: float | None, price: float | None,
-                    trail_pct: float | None, actor: Actor, now: int) -> list[AccountEvent]:
+                    trail_pct: float | None, actor: Actor, now: int, by_last: bool = False) -> list[AccountEvent]:
         spec = self.catalog.get(p.symbol)
         buy = rules.is_buy(p.side, True)
         if type_ not in _EXITS:
             raise RuleError("Kapatan emir TP, SL ya da iz olabilir. Pozisyonu hemen kapatmak için kapatma komutu "
                             "kullanılır.")
+        if by_last and type_ is not OrderType.STOP:
+            raise RuleError("Son fiyatla tetiklenme yalnızca SL'de seçilebilir.")
         if qty is not None:
             rules.check_qty(spec, qty, price or self.price(p.symbol), market=False)
             if qty > p.qty + rules.TOLERANCE:
@@ -445,7 +463,7 @@ class PaperBroker(Broker, PriceDriven):
                 raise RuleError("TP ve SL'nin fiyatı sıfırdan büyük olmalı.")
             rules.check_ticks(spec, price)
             stop = type_ is OrderType.STOP
-            if stop:
+            if stop and not by_last:
                 rules.check_trigger(stop, buy, True, price, self._mark(p.symbol), "mark fiyatı")
             else:
                 rules.check_trigger(stop, buy, True, price, self.price(p.symbol), "son fiyat")
@@ -453,7 +471,7 @@ class PaperBroker(Broker, PriceDriven):
         o = self.ledger.insert_order(Order(
             id=0, account_id=self.account_id, number=self.ledger.free_number(self.account_id), symbol=p.symbol,
             side=p.side, type=type_, reduce=True, qty=qty, price=price, trail_pct=trail_pct, best=best, margin=0.0,
-            protection=(), expires_at=None, created_at=now))
+            protection=(), expires_at=None, created_at=now, by_last=by_last))
         return [self._event(EventKind.ORDER_PLACED, actor, now, o.symbol, o.side, o, position=p, price=o.price,
                             qty=o.qty)]
 
@@ -610,11 +628,39 @@ class PaperBroker(Broker, PriceDriven):
     def on_price(self, symbol: str, open_: float, high: float, low: float, last: float,
                  time: int) -> list[AccountEvent]:
         self.prices[symbol] = last
+        if symbol not in self.live_symbols():
+            return []
         with self.ledger.atomic():
-            events = [*self._check_tps(symbol, open_, high, low, time),
+            events = [*self._check_last_stops(symbol, open_, high, low, time),
+                      *self._check_tps(symbol, open_, high, low, time),
                       *self._check_entries(symbol, open_, high, low, time)]
             for e in events:
                 self.ledger.log_event(e)
+        if events:
+            self._live = None
+        return events
+
+    # Son fiyatla tetiklenen SL stop-market emridir, TP gibi tetik anının
+    # fiyatından kaymayla taker dolar. Aynı aralıkta TP'den önce işlenir, SL
+    # önce sayılır kuralı burada da geçerlidir. Birden çok SL varsa fiyata en
+    # yakın olan önce gelir.
+    def _check_last_stops(self, symbol: str, open_: float, high: float, low: float, time: int) -> list[AccountEvent]:
+        events = []
+        spec = self.catalog.get(symbol)
+        for p in self.ledger.positions(self.account_id, symbol):
+            buy = rules.is_buy(p.side, True)
+            above = _above(OrderType.STOP, buy)
+            stops = sorted((o for o in self._exits(p) if o.type is OrderType.STOP and o.by_last),
+                           key=lambda o: o.price, reverse=not above)
+            for o in stops:
+                if not rules.triggered(above, o.price, high, low):
+                    break
+                current = self.ledger.position(p.id)
+                fill = rules.slipped(spec, rules.trigger_fill(above, o.price, open_), buy)
+                events += self._close(current, o.qty or current.qty, o.price, time, "sl", Actor.SYSTEM,
+                                      maker=False, order=o, fill=fill)
+                if self._position(symbol, p.side) is None:
+                    break
         return events
 
     # TP take-profit-market emridir, son fiyatla tetiklenir ve kaymayla taker
@@ -680,12 +726,16 @@ class PaperBroker(Broker, PriceDriven):
     def on_mark(self, symbol: str, high: float, low: float, mark: float, time: int,
                 fill: float | None) -> list[AccountEvent]:
         self.marks[symbol] = mark
+        if symbol not in self.live_symbols():
+            return []
         with self.ledger.atomic():
             events = []
             for p in self.ledger.positions(self.account_id, symbol):
                 events += self._check_stops(p, high, low, time, fill)
             for e in events:
                 self.ledger.log_event(e)
+        if events:
+            self._live = None
         return events
 
     # SL stop-market, iz trailing-stop-market emridir, ikisi de mark fiyatıyla
@@ -705,7 +755,7 @@ class PaperBroker(Broker, PriceDriven):
         spec = self.catalog.get(p.symbol)
         levels: list[tuple[float, int, Order | None]] = [(p.liq_price, 1, None)]
         for o in self._exits(p):
-            if o.type is OrderType.STOP:
+            if o.type is OrderType.STOP and not o.by_last:
                 levels.append((o.price, 0, o))
             elif o.type is OrderType.TRAILING_STOP:
                 levels.append((rules.trail_level(p.side, o.best, o.trail_pct), 0, o))
@@ -761,4 +811,6 @@ class PaperBroker(Broker, PriceDriven):
                                           price=mark, amount=payment))
             for e in events:
                 self.ledger.log_event(e)
+        if events:
+            self._live = None
         return events

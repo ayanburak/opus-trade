@@ -603,3 +603,62 @@ def test_outlook_of_a_stop_after_a_full_close_is_zero(broker):
     run(broker, buy(1, protection=(Protection(STOP, price=95), Protection(STOP, price=90))))
     got = sorted(broker.outlook(pos(broker)), key=lambda x: -x.level)
     assert (got[0].qty, got[1].qty, got[1].net) == (1, 0, 0)
+
+
+# --- Son fiyatla tetiklenen SL ve canlı parite dizini ---
+
+def _trades(b: PaperBroker):
+    return b.ledger.trades(b.account_id)
+
+
+def test_sl_by_last_ignores_mark_and_fires_on_the_last_price(broker):
+    """İğnede mark fiyatı son fiyatın gerisinde kalır. Son fiyatla tetiklenmesi istenen SL mark'a bakarsa geç
+    çalışır, mark'la tetiklenmesi istenen eski SL'ler ise eskisi gibi kalmalı."""
+    run(broker, SetLeverage(SOL, 5))
+    run(broker, buy(1, protection=(Protection(STOP, price=95, by_last=True),)))
+    assert [o.by_last for o in exits(broker)] == [True]
+    mark(broker, 90, fill=90)
+    assert pos(broker) is not None
+    price(broker, 94.9, open_=96)
+    t = _trades(broker)[-1]
+    assert pos(broker) is None and t.reason == "sl"
+    assert t.exit_price == pytest.approx(95 * (1 - SLIP))
+
+
+def test_sl_by_last_fills_from_the_open_after_a_jump(broker):
+    """Fiyat seviyenin ötesine sıçradıysa stop-market tetik anındaki fiyattan dolar, seviyeden değil."""
+    run(broker, buy(1, protection=(Protection(STOP, price=95, by_last=True),)))
+    price(broker, 93, open_=93)
+    assert _trades(broker)[-1].exit_price == pytest.approx(93 * (1 - SLIP))
+
+
+def test_sl_by_last_is_checked_against_the_last_price_when_placed(broker):
+    """Son fiyatla tetiklenen SL'nin doğru tarafta olup olmadığı son fiyata göre denetlenir. Mark'a göre
+    denetlenseydi iğnede geçerli bir SL reddedilirdi. TP ve izde bu seçenek yoktur."""
+    run(broker, SetLeverage(SOL, 5))
+    run(broker, buy(1))
+    mark(broker, 90)
+    run(broker, buy(None, STOP, 95, reduce=True, by_last=True))
+    with pytest.raises(RuleError, match="yalnızca SL'de"):
+        run(broker, buy(None, TP, 110, reduce=True, by_last=True))
+    with pytest.raises(RuleError, match="yalnızca SL'de"):
+        run(broker, buy(1, protection=(Protection(TRAIL, trail_pct=1, by_last=True),)))
+
+
+def test_sl_by_last_comes_before_tp_in_the_same_range(broker):
+    """Aynı aralıkta TP ve SL birlikte tetiklenirse SL önce sayılır. Tersi kâğıt hesabı olduğundan iyi gösterirdi."""
+    run(broker, buy(1, protection=(Protection(TP, price=105), Protection(STOP, price=95, by_last=True))))
+    price(broker, 100, high=106, low=94)
+    assert _trades(broker)[-1].reason == "sl"
+
+
+def test_live_index_follows_orders_and_positions(broker):
+    """Emri ve pozisyonu olmayan paritenin fiyatı defteri sorgulamaz. Dizin bir değişiklikten sonra yenilenmezse
+    yeni emir hiç dolmaz ya da kapanan pozisyonun fiyatı boşa işlenir."""
+    assert broker.live_symbols() == set()
+    run(broker, buy(1, LIMIT, 99))
+    assert broker.live_symbols() == {SOL}
+    price(broker, 98.9)
+    assert pos(broker) is not None and broker.live_symbols() == {SOL}
+    run(broker, ClosePosition(SOL, LONG))
+    assert broker.live_symbols() == set()

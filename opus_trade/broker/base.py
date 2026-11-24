@@ -130,6 +130,10 @@ class Broker(ABC):
 
 class PriceDriven(ABC):
     @abstractmethod
+    def live_symbols(self) -> set[str]:
+        """Açık pozisyonu ya da bekleyen emri olan pariteleri döndürür. Diğer paritelerin fiyatı hesabı değiştirmez."""
+
+    @abstractmethod
     def on_price(self, symbol: str, open_: float, high: float, low: float, last: float,
                  time: int) -> list[AccountEvent]:
         """Son işlem fiyatının son kontrolden bu yana aralığıyla TP'leri ve giriş emirlerini işler.

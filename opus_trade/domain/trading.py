@@ -64,12 +64,16 @@ class Ref:
 # Bekleyen bir girişin üzerinde istek olarak duran koruma. Giriş dolunca
 # her istek o girişin miktarıyla kapatan bir emir olur. qty None ise girişin
 # dolan miktarının tamamıdır. price TP ve SL'de tetik fiyatıdır, izde boştur.
+# by_last yalnızca SL'de seçilir, SL'yi mark fiyatı yerine son fiyatla
+# tetikler. Binance'teki karşılığı workingType CONTRACT_PRICE'tır. İğnede
+# mark fiyatı son fiyatın gerisinde kalır, mark'la tetiklenen SL geç çalışır.
 @dataclass(frozen=True)
 class Protection:
     type: OrderType
     price: float | None = None
     trail_pct: float | None = None
     qty: float | None = None
+    by_last: bool = False
 
 
 # --- Kayıtlar ---
@@ -111,7 +115,7 @@ class Order:
     kalanının tamamını kapatır. margin girişin kullanılabilir bakiyeden
     ayırdığı tutardır, kapatan emirde sıfırdır. best yalnızca izde dolu olur,
     emrin konduğu andan beri görülen en iyi mark fiyatıdır. protection
-    yalnızca girişte bulunur.
+    yalnızca girişte bulunur. by_last SL'nin son fiyatla tetiklendiğini söyler.
     """
 
     id: int
@@ -129,6 +133,7 @@ class Order:
     protection: tuple[Protection, ...]
     expires_at: int | None
     created_at: int
+    by_last: bool = False
 
 
 # Bir pozisyonun kapanan her parçası bir Trade'dir, tam kapanış da son
@@ -275,6 +280,7 @@ class PlaceOrder:
     trail_pct: float | None = None
     protection: tuple[Protection, ...] = ()
     valid_min: int | None = None
+    by_last: bool = False
 
 
 # Binance'teki gibi yalnızca limit emrin fiyatı ve miktarı değişir. qty None

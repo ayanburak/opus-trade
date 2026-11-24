@@ -22,7 +22,7 @@ from opus_trade.domain.models import Side
 from opus_trade.domain.trading import OrderType, PlaceOrder
 from opus_trade.market.models import Candle
 from opus_trade.strategy.base import Decision
-from tests.integration.harness import ECHO, FLAKY, SOL, T, Api, Echo, Flaky
+from tests.integration.harness import ECHO, FLAKY, RULE, SOL, T, Api, Echo, Flaky
 
 SECRETS = ("GIZLI-TALIMAT", "GIZLI-HAM", "GIZLI-CEVAP", "ornek@posta.com", "yöneticinin #", "FOMC notu")
 
@@ -159,6 +159,23 @@ async def test_account_hides_admin_alerts_and_restrictions(api):
     await api.step(r)
     acc = await pub.get("/account")
     assert [a["price"] for a in acc["alerts"]] == [90] and "restrictions" not in acc
+
+
+@run
+async def test_whole_market_profile_shows_the_symbols_it_listens_to(api):
+    """Bütün piyasa profilinin sabit listesi boştur. Sayfa yalnızca sabit listeye baksaydı yayındaki profilin hiçbir
+    grafiği açılmazdı. Açık pozisyonun paritesi en geç bir sonraki saniyede dinlenir ve sayfada görünür, mumu da
+    verilir."""
+    pub = Public(api)
+    pid, r = await api.running({**RULE, "symbols": [], "triggers": [], "universe": "market"})
+    r.on_candle(Candle("ETHUSDT", T // 60 * 60, 2000, 2000, 2000, 2000, 1, 1, 1, 1), False)
+    r.broker.prices["ETHUSDT"] = 2000
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": {
+        "type": "order", "order_type": "market", "symbol": "ETHUSDT", "side": "long", "qty": 0.01}})
+    await api.step(r)
+    await publish(api, pid)
+    assert (await pub.get("/profile"))["symbols"] == ["ETHUSDT"]
+    await pub.get("/candles", symbol="ETHUSDT")
 
 
 @run

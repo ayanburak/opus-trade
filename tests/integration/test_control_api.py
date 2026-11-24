@@ -520,7 +520,8 @@ def test_notebook_edit_is_refused_when_a_decision_rewrote_it(tmp_path, monkeypat
 @run
 async def test_account_carries_the_position_detail(api):
     """Masadaki pozisyon detayı hesap ucundan gelir: kapanan parçaların net'i ve sayısı, büyüklük ve her koruma
-    emrinin tahmini. Arayüz bunları kendisi hesaplamaz, giriş emri tahmine girmez."""
+    emrinin tahmini. Arayüz bunları kendisi hesaplamaz, giriş emri tahmine girmez. Profilin dinlediği pariteler de
+    buradan gelir, bütün piyasa profilinde masa hangi paritelerin grafiğini açacağını başka yerden bilemez."""
     pid, r = await api.running(RULE)
     entry = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1,
              "protection": [{"type": "stop", "price": 97}]}
@@ -540,3 +541,4 @@ async def test_account_carries_the_position_detail(api):
     assert p["by_admin"] is True and p["notes"] == []
     limit = next(o for o in acc["state"]["orders"] if not o["reduce"])
     assert limit["by_admin"] is True and limit["note"] is None
+    assert acc["watch"] == [{"symbol": SOL, "feeds": ["kline"]}]

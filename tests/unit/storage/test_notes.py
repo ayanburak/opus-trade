@@ -127,7 +127,7 @@ def test_migration_runs_on_an_empty_and_a_filled_database_and_fills_purpose(tmp_
         con.execute("INSERT INTO alerts (profile_id, number, symbol, price, below, actor, created_at) "
                     "VALUES (1, ?, 'BTCUSDT', 60000, 1, ?, ?)", (n, actor, T))
     con.commit()
-    assert migrate(con, MIGRATIONS, tmp_path / "bak", catalog=catalog()) == ["0009_decision_notes.sql"]
+    assert migrate(con, MIGRATIONS, tmp_path / "bak", catalog=catalog())[0] == "0009_decision_notes.sql"
     assert [(a.number, a.purpose) for a in StateRepo(con).alerts(1)] == [(1, "opus"), (2, "admin")]
 
     empty = connect(tmp_path / "empty.db")

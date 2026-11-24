@@ -1,12 +1,13 @@
 """
 file: profile.py
-importable: Area, State, ProfileConfig, Profile, Version
+importable: Area, State, Universe, ProfileConfig, Profile, Version
 
 Bir profilin kaydı ve sürümünün ayarları. Profile adını, alanını, durumunu,
 hesabını ve yürürlükteki sürümünü taşır. Version değişmez bir ayar
 kopyasıdır. ProfileConfig bir sürümün ayarlarıdır: strateji türü ve
-parametreleri, pariteler, başlangıç bakiyesi, tetikleyiciler ve risk
-sınırları.
+parametreleri, pariteler, evren, başlangıç bakiyesi, tetikleyiciler ve
+risk sınırları. Evren list ise profil yalnızca kendi paritelerinde, market
+ise katalogun bütün paritelerinde işlem yapabilir.
 
 description: Profil, sürüm ve profil ayarlarının tipleri.
 """
@@ -14,6 +15,9 @@ description: Profil, sürüm ve profil ayarlarının tipleri.
 # NOTE: Bakiye sürümün ayarıdır ama yalnızca hesap açılırken kullanılır. Çalışan
 # bir profilde bakiyeyi değiştiren yeni sürüm hesabı değiştirmez, kâğıt hesap
 # sıfırlanınca yeni hesap o bakiyeyle açılır.
+#
+# NOTE: universe sonradan eklendi. Kayıtlı eski sürümlerde alan yoktur ve
+# list sayılır, bu yüzden taşıma gerekmedi.
 #
 # NOTE: triggers her biri type anahtarlı sözlüklerdir, gerisi tetikleyicinin
 # parametreleridir. risk max_leverage, max_notional ve daily_loss anahtarlarını
@@ -27,6 +31,11 @@ from typing import Any
 class Area(StrEnum):
     PAPER = "paper"
     LIVE = "live"
+
+
+class Universe(StrEnum):
+    LIST = "list"
+    MARKET = "market"
 
 
 class State(StrEnum):
@@ -45,6 +54,7 @@ class ProfileConfig:
     balance: float
     triggers: tuple[dict[str, Any], ...] = ()
     risk: dict[str, float] = field(default_factory=dict)
+    universe: Universe = Universe.LIST
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -54,7 +64,8 @@ class ProfileConfig:
     @classmethod
     def from_dict(cls, d: dict) -> "ProfileConfig":
         return cls(strategy=d["strategy"], params=dict(d.get("params", {})), symbols=tuple(d["symbols"]),
-                   balance=float(d["balance"]), triggers=tuple(d.get("triggers", ())), risk=dict(d.get("risk", {})))
+                   balance=float(d["balance"]), triggers=tuple(d.get("triggers", ())), risk=dict(d.get("risk", {})),
+                   universe=Universe(d.get("universe", Universe.LIST)))
 
 
 @dataclass(frozen=True)

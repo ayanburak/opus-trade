@@ -70,6 +70,11 @@ def _candle(symbol: str, k: list) -> Candle:
 
 # lastFundingRate adı yanıltıcıdır, bu alan sıradaki fonlamada uygulanacak
 # tahmini oranı gösterir.
+def _daily(d: dict) -> DailyStats:
+    return DailyStats(symbol=d["symbol"], change_pct=float(d["priceChangePercent"]), high=float(d["highPrice"]),
+                      low=float(d["lowPrice"]), quote_volume=float(d["quoteVolume"]))
+
+
 def _premium(d: dict) -> Premium:
     return Premium(time=d["time"] // 1000, symbol=d["symbol"], mark=float(d["markPrice"]),
                    index=float(d["indexPrice"]), est_funding=float(d["lastFundingRate"]),
@@ -150,9 +155,10 @@ class BinanceRest(MarketData):
         return await self._get("/fapi/v1/exchangeInfo")
 
     async def daily_stats(self, symbol: str) -> DailyStats:
-        d = await self._get("/fapi/v1/ticker/24hr", symbol=symbol)
-        return DailyStats(symbol=symbol, change_pct=float(d["priceChangePercent"]), high=float(d["highPrice"]),
-                          low=float(d["lowPrice"]), quote_volume=float(d["quoteVolume"]))
+        return _daily(await self._get("/fapi/v1/ticker/24hr", symbol=symbol))
+
+    async def all_daily_stats(self) -> list[DailyStats]:
+        return [_daily(d) for d in await self._get("/fapi/v1/ticker/24hr")]
 
     async def premium(self, symbol: str | None = None) -> list[Premium]:
         d = await self._get("/fapi/v1/premiumIndex", symbol=symbol)

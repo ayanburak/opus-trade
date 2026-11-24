@@ -33,7 +33,7 @@ from typing import Callable
 
 from ..domain.catalog import Catalog
 from ..domain.clock import Clock
-from ..domain.profile import Area, Profile, ProfileConfig, State, Version
+from ..domain.profile import Area, Profile, ProfileConfig, State, Universe, Version
 from ..registry import validate
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
@@ -97,7 +97,14 @@ class ProfileService:
                 triggers.append({"type": kind, **validate(TRIGGERS.get(kind).params, spec)})
         except ValueError as e:
             raise ProfileError(str(e)) from None
-        if not config.symbols:
+        try:
+            universe = Universe(config.universe)
+        except ValueError:
+            raise ProfileError(f"Bilinmeyen evren: {config.universe}.") from None
+        # Bütün piyasada Opus'un istemine beş yüz paritenin kuralları girerdi.
+        if universe is Universe.MARKET and getattr(STRATEGIES.get(config.strategy).cls, "uses_model", False):
+            raise ProfileError("Bütün piyasa yalnızca kural stratejilerinde seçilebilir.")
+        if not config.symbols and universe is Universe.LIST:
             raise ProfileError("En az bir parite seçilmeli.")
         unknown = [s for s in config.symbols if s not in self.catalog]
         if unknown:
@@ -108,7 +115,7 @@ class ProfileService:
         if bad:
             raise ProfileError(f"Geçersiz risk sınırı: {', '.join(bad)}.")
         return ProfileConfig(config.strategy, params, tuple(config.symbols), config.balance, tuple(triggers),
-                             dict(config.risk))
+                             dict(config.risk), universe)
 
     def _get(self, profile_id: int) -> Profile:
         try:

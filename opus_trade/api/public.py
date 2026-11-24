@@ -231,13 +231,18 @@ def create_public_app(core: httpx.AsyncClient, max_clients: int = 50,
             raise HTTPException(404, "Yayında bir profil yok.")
         return found
 
+    # Pariteler profilin sabit listesi ve o an dinlediği paritelerdir. Bütün
+    # piyasa seçilmiş profilin sabit listesi boştur, sayfa grafiği dinlenen
+    # paritelerden, yani izleme listesinden ve açık pozisyonlardan açar.
     async def profile_view() -> dict:
         p = await published()
         detail = await call(f"/profiles/{p['id']}")
         versions = {v["id"]: v for v in detail["versions"]}
         current = versions.get(p.get("version_id"))
+        fixed = current["config"]["symbols"] if current else []
+        watch = [w["symbol"] for w in (await call(f"/profiles/{p['id']}/account")).get("watch", [])]
         return {**{k: p.get(k) for k in _PROFILE_KEYS},
-                "symbols": current["config"]["symbols"] if current else [], "account_id": p.get("account_id")}
+                "symbols": list(dict.fromkeys([*fixed, *watch])), "account_id": p.get("account_id")}
 
     async def cached() -> tuple[int, int | None, frozenset[str]] | None:
         if time.monotonic() - cache["at"] > 5:

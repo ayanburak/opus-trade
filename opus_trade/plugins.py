@@ -19,7 +19,9 @@ import importlib
 _MODULES = (
     "opus_trade.strategy.llm.kinds",
     "opus_trade.strategy.rules.liquidation_reversal",
+    "opus_trade.strategy.rules.spike_fade",
     "opus_trade.triggers.liquidation_wave",
+    "opus_trade.triggers.trade_burst",
 )
 
 

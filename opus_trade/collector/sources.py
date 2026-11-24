@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 from ..domain.clock import Clock
 from ..market.models import Candle, Liquidation
 from ..market.source import MarketData, MarketDataError, RatioKind
-from ..market.stream import MarketStream, StreamListener
+from ..market.stream import Feed, MarketStream, StreamListener
 from .store import CollectorStore
 
 log = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ class LiquidationSource(Source, StreamListener):
             self._flush()
 
     async def run(self) -> None:
-        await self._stream.watch({self._HEARTBEAT})
+        await self._stream.watch({self._HEARTBEAT: (Feed.KLINE,)})
         flusher = asyncio.create_task(self._flush_loop())
         try:
             await self._stream.run(self)

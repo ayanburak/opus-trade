@@ -107,6 +107,22 @@ def test_premium_reads_estimated_funding_for_one_or_all_symbols():
     assert [p.symbol for p in every] == ["BTCUSDT", "ETHUSDT"]
 
 
+def test_all_daily_stats_come_in_one_request_without_symbol():
+    """İzleme listesi bütün piyasayı saat başı sıralar. Parite başına istek atılsaydı beş yüz istek Binance'in ağırlık
+    sınırını doldururdu."""
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append((req.url.path, dict(req.url.params)))
+        row = {"priceChangePercent": "-12.5", "highPrice": "2", "lowPrice": "1", "quoteVolume": "3000000"}
+        return httpx.Response(200, json=[{"symbol": "AUSDT", **row}, {"symbol": "BUSDT", **row}])
+
+    out = run(handler, lambda b: b.all_daily_stats())
+    assert calls == [("/fapi/v1/ticker/24hr", {})]
+    assert [(d.symbol, d.change_pct, d.high, d.low, d.quote_volume) for d in out] == [
+        ("AUSDT", -12.5, 2, 1, 3_000_000), ("BUSDT", -12.5, 2, 1, 3_000_000)]
+
+
 def test_http_error_becomes_market_data_error_with_binance_reason():
     """Toplayıcı geçici hatayı programın kendi hatasından ayırabilmeli, nedeni de günlükte görünmeli."""
     handler = lambda req: httpx.Response(400, json={"code": -1130, "msg": "parameter 'startTime' is invalid."})

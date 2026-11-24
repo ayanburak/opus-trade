@@ -10,13 +10,16 @@ geri gelir.
 description: Uyandırma verisinin saklanabilir biçimi.
 """
 
-# NOTE: Saklanan türler hesap olayı, likidasyon dalgası, alarm ve düz metindir.
+# NOTE: Saklanan türler hesap olayı, likidasyon dalgası, alarm, düz metin ve
+# başka bir veri taşıyan bildirimdir. O son türün verisi dataclass olmalıdır,
+# geri kurulurken sözlük olarak döner. Hızlı yolun bildirimleri veritabanında
+# beklemez, yalnızca günlüğe bu yolla yazılır.
 # Düzeltme uyandırması saklanmaz, çünkü kararın hemen ardından aynı süreçte
 # verilir. Yeni bir veri türü uyandırmaya girerse buraya da eklenir, yoksa
 # encode() TypeError fırlatır.
 
 import json
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, is_dataclass
 from typing import Any
 
 from ..domain.models import Side
@@ -33,10 +36,10 @@ def encode(data: Any) -> str | None:
         return json.dumps({"type": "text", "text": data}, ensure_ascii=False)
     if isinstance(data, AccountEvent):
         return json.dumps({"type": "event", **asdict(data)}, ensure_ascii=False)
-    if isinstance(data, Fire) and isinstance(data.data, (Wave, Alert)):
-        inner = "wave" if isinstance(data.data, Wave) else "alert"
+    if isinstance(data, Fire) and is_dataclass(data.data):
+        inner = "wave" if isinstance(data.data, Wave) else "alert" if isinstance(data.data, Alert) else "raw"
         return json.dumps({"type": "fire", "kind": data.kind, "time": data.time, "symbol": data.symbol,
-                           "inner": inner, "data": asdict(data.data)}, ensure_ascii=False)
+                           "inner": inner, "data": asdict(data.data), "ms": data.ms}, ensure_ascii=False)
     raise TypeError(f"Saklanamayan uyandırma verisi: {type(data).__name__}")
 
 
@@ -69,5 +72,5 @@ def decode(text: str | None) -> Any:
         return d["text"]
     if kind == "event":
         return event_from_dict(d)
-    inner = Wave(**d["data"]) if d["inner"] == "wave" else Alert(**d["data"])
-    return Fire(d["kind"], d["time"], d["symbol"], inner)
+    inner = {"wave": lambda x: Wave(**x), "alert": lambda x: Alert(**x)}.get(d["inner"], dict)(d["data"])
+    return Fire(d["kind"], d["time"], d["symbol"], inner, d.get("ms"))

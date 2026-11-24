@@ -38,7 +38,7 @@ _POSITION_FIELDS = ("symbol", "side", "qty", "margin", "entry_price", "entry_tim
                     "worst_price", "worst_time", "liq_price", "fee", "funding")
 
 _ORDER_FIELDS = ("account_id", "number", "symbol", "side", "type", "reduce", "qty", "price", "trail_pct", "best",
-                 "margin", "protection", "expires_at", "created_at")
+                 "margin", "protection", "expires_at", "created_at", "by_last")
 
 
 def _protection_json(items: tuple[Protection, ...]) -> str:
@@ -58,7 +58,8 @@ def _order(r: sqlite3.Row) -> Order:
     return Order(id=r["id"], account_id=r["account_id"], number=r["number"], symbol=r["symbol"],
                  side=Side(r["side"]), type=OrderType(r["type"]), reduce=bool(r["reduce"]), qty=r["qty"],
                  price=r["price"], trail_pct=r["trail_pct"], best=r["best"], margin=r["margin"],
-                 protection=_protection(r["protection"]), expires_at=r["expires_at"], created_at=r["created_at"])
+                 protection=_protection(r["protection"]), expires_at=r["expires_at"], created_at=r["created_at"],
+                 by_last=bool(r["by_last"]))
 
 
 def _trade(r: sqlite3.Row) -> Trade:
@@ -211,7 +212,7 @@ class Ledger:
 
     def insert_order(self, o: Order) -> Order:
         row = {**{k: getattr(o, k) for k in _ORDER_FIELDS}, "side": str(o.side), "type": str(o.type),
-               "reduce": int(o.reduce), "protection": _protection_json(o.protection)}
+               "reduce": int(o.reduce), "protection": _protection_json(o.protection), "by_last": int(o.by_last)}
         cur = self.con.execute(f"INSERT INTO orders ({', '.join(row)}) VALUES ({', '.join('?' * len(row))})",
                                tuple(row.values()))
         return self.order(cur.lastrowid)

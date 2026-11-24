@@ -49,6 +49,9 @@ class Inner(MarketData):
     async def daily_stats(self, symbol):
         raise NotImplementedError
 
+    async def all_daily_stats(self):
+        raise NotImplementedError
+
     async def premium(self, symbol=None):
         raise NotImplementedError
 

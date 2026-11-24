@@ -1,12 +1,12 @@
 """
 file: models.py
-importable: Candle, Liquidation, Premium, Funding, OpenInterest, LongShortRatio, TakerVolume, DailyStats, OrderBook
+importable: Candle, Trade, Liquidation, Premium, Funding, OpenInterest, LongShortRatio, TakerVolume, DailyStats, OrderBook
 
-Piyasa verisinin değişmez tipleri. Bütün zamanlar unix saniyedir, fiyatlar ve
-hacimler float. Binance'in dizi ve kısaltmalı alanlı cevapları bu tiplere
+Piyasa verisinin değişmez tipleri. Tekil işlem dışında bütün zamanlar unix
+saniyedir, tekil işlemin zamanı milisaniyedir. Fiyatlar ve hacimler float. Binance'in dizi ve kısaltmalı alanlı cevapları bu tiplere
 binance paketinde çevrilir, kodun geri kalanı Binance'in biçimini bilmez.
 
-description: Mum, likidasyon, fonlama, açık pozisyon ve oran verisinin tipleri.
+description: Mum, tekil işlem, likidasyon, fonlama, açık pozisyon ve oran verisinin tipleri.
 """
 
 # NOTE: Mumun hacim alanları Binance'in verdiği dört değerdir: baz varlık
@@ -33,6 +33,25 @@ class Candle:
     quote_volume: float
     trades: int
     taker_buy_volume: float
+
+
+# Binance'in aggTrade akışındaki bir işlem: aynı anda aynı fiyattan aynı
+# alıcı tarafla gerçekleşen dolumların toplamı. buy işlemi başlatanın, yani
+# piyasa emriyle gelen tarafın alıcı olduğunu söyler. Binance bunu ters
+# anlamlı m alanıyla verir, alıcı defterdeki taraf ise m doğrudur. ms
+# Binance'in işlem damgasıdır, programın saatinden bağımsızdır, gecikme
+# ölçümü bu sayede yapılır.
+@dataclass(frozen=True, slots=True)
+class Trade:
+    symbol: str
+    ms: int
+    price: float
+    qty: float
+    buy: bool
+
+    @property
+    def usd(self) -> float:
+        return self.price * self.qty
 
 
 # side likide olan pozisyonun yönüdür. Binance'in akışındaki SELL emri bir

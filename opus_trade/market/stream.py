@@ -1,27 +1,38 @@
 """
 file: stream.py
-importable: MarketStream, StreamListener
+importable: MarketStream, StreamListener, Feed
 
 MarketStream canlı piyasa akışının soyut sınıfıdır. run() sonsuza kadar
 dinler, bağlantı koparsa kendisi yeniden bağlanır ve olayları kurulurken
-verilen StreamListener'a iletir. watch() dakikalık mumları ve mark fiyatı
-dinlenecek pariteleri değiştirir, akış çalışırken de çağrılabilir. Likidasyonlar her
-zaman bütün piyasadan gelir.
+verilen StreamListener'a iletir. watch() her parite için hangi akışların
+dinleneceğini verir: dakikalık mum, mark fiyatı ya da tekil işlemler. Akış
+çalışırken de çağrılabilir, verilen istek öncekinin yerine geçer. Bazı akışlar
+pariteye bağlı değildir ve uygulamanın kurulumunda seçilir, örneğin bütün
+piyasanın likidasyonları.
 
-description: Canlı mum, mark fiyatı ve likidasyon akışının soyut sınıfı.
+description: Canlı mum, mark fiyatı, tekil işlem ve likidasyon akışının soyut sınıfı.
 """
 
 # NOTE: Pariteler çalışırken değiştirilebilir, çünkü admin panelinden yeni bir
-# profil açıldığında programı yeniden başlatmadan onun paritelerinin de
-# dinlenmesi gerekiyor.
+# profil açıldığında ya da bir izleme listesi saat başı değiştiğinde programı
+# yeniden başlatmadan yeni paritelerin dinlenmesi gerekiyor.
 #
 # NOTE: Likidasyonların bütün piyasadan gelmesi bilerek seçildi. Akış küçüktür
 # ve geçmişi Binance'ten sonradan alınamaz. Toplayıcı hepsini saklar, stratejiler
-# kendi paritelerini süzer.
+# kendi paritelerini süzer. Çekirdek mark fiyatını da bütün piyasadan tek
+# akışla alır, parite başına mark akışı bağlantının akış sınırını tüketiyordu.
 
 from abc import ABC, abstractmethod
+from collections.abc import Collection, Mapping
+from enum import StrEnum
 
-from .models import Candle, Liquidation
+from .models import Candle, Liquidation, Trade
+
+
+class Feed(StrEnum):
+    KLINE = "kline"
+    MARK = "mark"
+    TRADE = "trade"
 
 
 # Metotlar varsayılan olarak hiçbir şey yapmaz. Bir dinleyici yalnızca ihtiyaç
@@ -36,6 +47,9 @@ class StreamListener:
     async def on_mark(self, symbol: str, mark: float, time: int) -> None:
         """Paritenin mark fiyatı her güncellendiğinde çağrılır, Binance'te saniyede bir."""
 
+    async def on_trade(self, trade: Trade) -> None:
+        """Dinlenen bir paritedeki her tekil işlemde çağrılır."""
+
     async def on_liquidation(self, liq: Liquidation) -> None:
         """Bütün piyasadaki her likidasyonda çağrılır."""
 
@@ -46,5 +60,5 @@ class MarketStream(ABC):
         """Akışı sonsuza kadar dinler, iptal edilene kadar dönmez."""
 
     @abstractmethod
-    async def watch(self, symbols: set[str]) -> None:
-        """Dakikalık mumları dinlenecek pariteleri verilen kümeyle değiştirir."""
+    async def watch(self, wants: Mapping[str, Collection[Feed]]) -> None:
+        """Dinlenecek pariteleri ve her paritenin akışlarını verilen istekle değiştirir."""

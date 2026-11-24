@@ -36,14 +36,14 @@ import uvicorn
 from .. import plugins
 from ..api.control import Core, create_app
 from ..config import AppConfig
-from ..domain.catalog import Catalog
+from ..domain.catalog import SYMBOLS, Catalog
 from ..domain.clock import Clock, SystemClock
 from ..domain.fees import BINANCE_STANDARD
 from ..domain.profile import Profile
-from ..domain.catalog import SYMBOLS
 from ..market.binance.rest import BASE_URL, BinanceRest
-from ..market.binance.specs import load_brackets, specs_from
-from ..market.binance.stream import BinanceStream
+from ..market.binance.specs import load_brackets, specs_from, tradable
+from ..market.binance.stream import ALL_MARKS, LIQUIDATIONS, BinanceStream
+from ..market.screen import MarketScreen
 from ..market.source import MarketData, MarketDataError
 from ..market.stream import MarketStream
 from ..runtime.bus import EventBus
@@ -95,7 +95,7 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
         return Deps(clock, catalog, llm, {"work_dir": cfg.work_dir(p.id), "tool_env": env, "market_db": cfg.market_db})
 
     sup = Supervisor(repo, ledger, journal, state, market, stream, clock, bus, access, catalog, BINANCE_STANDARD,
-                     deps, NotesRepo(con))
+                     deps, NotesRepo(con), MarketScreen(market, clock))
     iv = Interventions(con, state, clock, sup.runners.get)
     sup.interventions = iv
     service = ProfileService(repo, ledger, journal, state, catalog, clock, sup.refresh)
@@ -106,10 +106,11 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
 
 
 # Binance'e ulaşılamazsa çekirdek son okunan kopyayla açılır, ikisi de yoksa
-# açılmaz. Kopya yalnızca masanın paritelerini tutar, cevabın tamamı birkaç
-# megabayttır.
+# açılmaz. Kopya yalnızca katalogun girebileceği pariteleri tutar, cevabın
+# tamamı birkaç megabayttır. Paritelerin hacmi de kopyaya girer, kayma
+# kademesi ondan bulunur.
 async def load_catalog(rest: BinanceRest, saved: Path) -> Catalog:
-    """Masanın paritelerinin kurallarını kurar.
+    """Katalogun parite kurallarını kurar.
 
     Raises:
         MarketDataError: Binance'e ulaşılamazsa ve kayıtlı kopya yoksa.
@@ -117,14 +118,15 @@ async def load_catalog(rest: BinanceRest, saved: Path) -> Catalog:
     """
     try:
         info = await rest.exchange_info()
-        info = {"symbols": [s for s in info["symbols"] if s["symbol"] in SYMBOLS]}
+        volumes = {d.symbol: d.quote_volume for d in await rest.all_daily_stats()}
+        info = {"symbols": [s for s in info["symbols"] if tradable(s) or s["symbol"] in SYMBOLS], "volumes": volumes}
         saved.write_text(json.dumps(info))
     except MarketDataError:
         if not saved.exists():
             raise
         log.warning("Binance'ten parite kuralları okunamadı, son kopyayla açılıyor.")
         info = json.loads(saved.read_text())
-    return Catalog(specs_from(info, load_brackets()))
+    return Catalog(specs_from(info, load_brackets(), info.get("volumes")))
 
 
 async def _watch_collector(watch: CollectorWatch, clock: Clock) -> None:
@@ -143,7 +145,8 @@ async def _main(cfg: AppConfig) -> None:
         loop.add_signal_handler(sig, stop.set)
     async with httpx.AsyncClient(base_url=BASE_URL, timeout=20) as client:
         rest = BinanceRest(client)
-        core = assemble(cfg, SystemClock(), rest, BinanceStream(), ClaudeCliClient(Path(sys.executable), _ROOT),
+        stream = BinanceStream(fixed=(LIQUIDATIONS, ALL_MARKS))
+        core = assemble(cfg, SystemClock(), rest, stream, ClaudeCliClient(Path(sys.executable), _ROOT),
                         await load_catalog(rest, cfg.exchange_info))
         # Arka plan görevleri kapanışta iptal edilir, sunucu ise should_exit ile
         # süren isteklerini bitirip kendisi kapanır.

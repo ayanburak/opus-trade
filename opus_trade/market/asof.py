@@ -80,6 +80,12 @@ class AsOfMarket(MarketData):
         return DailyStats(symbol, (hours[-1].close / hours[0].open - 1) * 100, max(h.high for h in hours),
                           min(h.low for h in hours), sum(h.quote_volume for h in hours))
 
+    # Geçmiş bir anda bütün piyasanın özeti için her paritenin saatlik mumu
+    # gerekirdi, yüzlerce istek. Geçmişe dönük izleme listesi bugün
+    # kullanılmıyor, bu yüzden açıkça reddedilir.
+    async def all_daily_stats(self) -> list[DailyStats]:
+        raise MarketDataError("Geçmiş bir anda bütün piyasanın özeti alınamaz.")
+
     # Endeks fiyatının geçmişi yoktur, mark fiyatı yerine geçer. Tahmini
     # fonlama o ana kadar gerçekleşen son fonlamadır.
     async def premium(self, symbol: str | None = None) -> list[Premium]:

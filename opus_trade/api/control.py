@@ -333,9 +333,14 @@ def create_app(core: Core) -> FastAPI:
             x["by_admin"] = positions.get(x["id"]) == "admin"
         for x in st["orders"]:
             x["by_admin"] = orders.get(x["id"]) == "admin"
+        # watch profilin o an dinlediği paritelerdir: akış türleri ve varsa
+        # izleme listesinin yirmi dört saatlik sıralama değerleri.
+        screen = core.supervisor.screen
+        watch = [{"symbol": sym, "feeds": sorted(str(f) for f in feeds),
+                  **((screen.describe(sym) or {}) if screen else {})} for sym, feeds in sorted(r.wants.items())]
         return {"state": st, "prices": r.prices, "alerts": _plain(r.alerts.alerts),
                 "triggers": [t.snapshot() for t in r.triggers if t.snapshot() is not None],
-                "restrictions": core.interventions.active(pid, core.clock.time())}
+                "restrictions": core.interventions.active(pid, core.clock.time()), "watch": watch}
 
     @app.get("/profiles/{pid}/trades")
     async def trades(pid: int):
@@ -368,7 +373,7 @@ def create_app(core: Core) -> FastAPI:
 
     @app.get("/candles")
     async def candles(symbol: str, interval: str = "15m", limit: int = 300):
-        if symbol not in core.catalog.symbols:
+        if symbol not in core.catalog:
             raise ValueError(f"Bilinmeyen parite: {symbol}")
         if interval not in INTERVALS:
             raise ValueError(f"Bilinmeyen aralık: {interval}")

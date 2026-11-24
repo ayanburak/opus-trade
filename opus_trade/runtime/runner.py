@@ -2,15 +2,16 @@
 file: runner.py
 importable: ProfileRunner, describe, FUNDING_EVERY_S
 
-ProfileRunner tek bir profili yürütür. Canlı mumları ve likidasyonları
-broker'a ve tetikleyicilere verir, uyandırmaları kalıcı bir sırada biriktirir
+ProfileRunner tek bir profili yürütür. Canlı mumları, tekil işlemleri ve
+likidasyonları broker'a ve tetikleyicilere verir, uyandırmaları kalıcı bir sırada biriktirir
 ve tick() her saniye çağrıldıkça sıradakileri tek bir kararda stratejiye
 verir. Kararın komutlarını kapıdan geçirir, alarm işlemlerini uygular,
 hafızayı, günlüğü, girişlerin notlarını ve sınıflandırmaları yazar.
 Strateji kararı kontrol hatasıyla reddettiyse hiçbir şey uygulamaz.
 Reddedilen bir karar ya da komut varsa ve strateji isterse hemen düzeltme
 için yeniden uyandırır. describe() bir komutun olaylarını
-kısa bir Türkçe sonuca çevirir.
+kısa bir Türkçe sonuca çevirir. wants profilin dinlemek istediği
+pariteler ve akışlarıdır, değişince on_wants çağrılır.
 
 description: Bir profilin uyandırma, karar ve uygulama döngüsü.
 """
@@ -31,9 +32,24 @@ description: Bir profilin uyandırma, karar ve uygulama döngüsü.
 #
 # NOTE: Fiyatla işleyen hesaplarda kâğıt broker'ın kendi olayları burada olay
 # yoluna yayılır. Komutların olaylarını kapı zaten yayar.
+#
+# NOTE: Hızlı stratejinin uyandırmaları veritabanına değil bellekteki
+# sıraya girer ve karar saniyelik tick beklenmeden hemen başlar. Karar
+# sürerken gelenler sırada bekler, karar bitince hemen sıradaki başlar. Kararın
+# süresi ve olaydan emre geçen süre günlüğe yazılır. Sürüm değişince eski
+# çalıştırıcının sırası taşınmaz, bekleyen bildirim o anın piyasasında zaten
+# geçerliliğini yitirmiş olur.
+#
+# NOTE: Dinlenen pariteler profilin sabit listesiyle sınırlı değildir.
+# Tetikleyici wanted() ile bir izleme listesi isteyebilir, açık pozisyonu,
+# emri ya da alarmı olan parite de her zaman dinlenir. Tekil işlemi dinlenen
+# paritede broker işlemlerle fiyatlanır, mumla fiyatlanmaz. Mumun bir önceki
+# güncellemeden beri gördüğü aralık emirden önceki fiyatları da içerir,
+# işlemle zaten görülmüş bir fiyat emri ikinci kez doldurmaya kalkardı.
 
 import asyncio
 import logging
+from collections.abc import Collection
 from dataclasses import replace
 from typing import Callable
 
@@ -43,8 +59,9 @@ from ..domain.clock import Clock
 from ..domain.errors import RuleError
 from ..domain.profile import Profile, State, Version
 from ..domain.trading import AccountEvent, Actor, CancelOrder, EventKind, Ref
-from ..market.models import Candle, Liquidation
+from ..market.models import Candle, Liquidation, Trade
 from ..market.source import MarketData, MarketDataError
+from ..market.stream import Feed
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
 from ..storage.notes import NotesRepo
@@ -137,6 +154,8 @@ class ProfileRunner:
         feed: Yönetici bölümünü ve gösterilecek müdahalelerin kimliklerini veren fonksiyon.
         delivered: Başarılı bir karardan sonra gösterilen müdahalelerin kimlikleriyle çağrılır.
         notes: Giriş notları ve sınıflandırmalar. Verilmezse hesap gerçekleri boş gider ve not yazılmaz.
+        universe: Bütün piyasa seçilmiş profilde katalogun pariteleri. None ise evren profilin listesidir.
+        on_wants: Dinlenmek istenen pariteler değişince çağrılır.
     """
 
     def __init__(self, profile: Profile, version: Version, strategy: Strategy, broker: Broker, gate: Gate,
@@ -144,7 +163,8 @@ class ProfileRunner:
                  state: StateRepo, market: MarketData, clock: Clock, bus: EventBus, access: ModelAccess,
                  lock: asyncio.Lock, history: int = 8, retry_s: int = 600, max_corrections: int = 2,
                  feed: Callable[[], tuple[dict, list[int]]] | None = None,
-                 delivered: Callable[[list[int]], None] | None = None, notes: NotesRepo | None = None) -> None:
+                 delivered: Callable[[list[int]], None] | None = None, notes: NotesRepo | None = None,
+                 universe: Collection[str] | None = None, on_wants: Callable[[], None] | None = None) -> None:
         self.profile = profile
         self.version = version
         self.strategy = strategy
@@ -178,6 +198,10 @@ class ProfileRunner:
         self._last_minute = 0
         self._seen: dict[str, Candle] = {}
         self._task: asyncio.Task | None = None
+        self._queue: list[Wake] = []
+        self.universe = tuple(universe) if universe is not None else None
+        self.on_wants = on_wants or (lambda: None)
+        self.wants: dict[str, frozenset[Feed]] = self._wanted()
 
     @property
     def pid(self) -> int:
@@ -187,6 +211,11 @@ class ProfileRunner:
     def symbols(self) -> tuple[str, ...]:
         return self.version.config.symbols
 
+    # Stratejinin işlem yapabildiği pariteler. Bütün piyasada katalogun tamamıdır.
+    @property
+    def tradable(self) -> tuple[str, ...]:
+        return self.universe if self.universe is not None else self.symbols
+
     @property
     def running(self) -> bool:
         return self.profile.state is State.RUNNING
@@ -195,11 +224,68 @@ class ProfileRunner:
         found = self.journal.entries(self.pid, limit=1)
         return found[0]["next_wake"] if found else None
 
+    # --- Dinlenen pariteler ---
+
+    # Hiçbir tetikleyici liste istemiyorsa profilin sabit listesinin mumu
+    # dinlenir, bugünkü profillerin hepsi böyledir. Tekil işlem isteyen bir
+    # profilde açık pozisyonun paritesi de işlemle dinlenir, yoksa izleme
+    # listesinden düşen paritedeki pozisyon mumla fiyatlanırdı.
+    def _wanted(self) -> dict[str, frozenset[Feed]]:
+        out: dict[str, set[Feed]] = {}
+        declared = [w for t in self.triggers if (w := t.wanted()) is not None]
+        if not declared:
+            for s in self.symbols:
+                out.setdefault(s, set()).add(Feed.KLINE)
+        for w in declared:
+            for s, feeds in w.items():
+                out.setdefault(s, set()).update(feeds)
+        trades = any(Feed.TRADE in f for f in out.values())
+        live = set(self.broker.live_symbols()) if isinstance(self.broker, PriceDriven) else set()
+        for s in live | {a.symbol for a in self.alerts.alerts}:
+            out.setdefault(s, set()).add(Feed.KLINE)
+            if trades:
+                out[s].add(Feed.TRADE)
+        return {s: frozenset(f) for s, f in out.items()}
+
+    # Kümeye yeni giren paritenin görülen son dakikası şimdiye çekilir. Parite
+    # daha önce dinlenip bırakıldıysa kaydı eskidir, yeniden bağlanmada o
+    # aradaki dakikalar yeni emirlere karşı oynatılır ve emri geçmişin
+    # fiyatıyla doldururdu.
+    def _refresh_wants(self) -> None:
+        found = self._wanted()
+        if found == self.wants:
+            return
+        minute = self.clock.time() // 60 * 60 - 60
+        for s in found.keys() - self.wants.keys():
+            self.state.set_setting(f"price_seen:{self.pid}:{s}", minute)
+        self.wants = found
+        self.on_wants()
+
     # --- Uyandırma ---
 
     def wake(self, kind: str, data=None) -> None:
-        if self.running:
-            self.state.push_wake(self.pid, self.clock.time(), kind, wake_codec.encode(data))
+        if not self.running:
+            return
+        if self.strategy.fast:
+            self._queue.append(Wake(kind, self.clock.time(), data))
+            self._kick()
+            return
+        self.state.push_wake(self.pid, self.clock.time(), kind, wake_codec.encode(data))
+
+    # Hızlı yolda karar hemen başlar. Döngü yoksa, örneğin bir test olayı
+    # döngü dışından verdiyse, karar bir sonraki tick'e kalır.
+    def _kick(self) -> None:
+        if self.busy or self.retiring or self.clock.time() < self.retry_at:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self.busy = True
+        self._task = loop.create_task(self._process())
+
+    def _waiting(self) -> bool:
+        return bool(self._queue) if self.strategy.fast else bool(self.state.wakes(self.pid))
 
     # Çalışan bir profil hiç karar vermediyse ilk kararı hemen alır. Duraklatılmış
     # ya da durdurulmuş bir profil yeniden çalıştırılınca strateji bunu bilerek
@@ -229,6 +315,8 @@ class ProfileRunner:
                 self.notes.attach_position(e.order_id, e.position_id)
             if e.kind in _WAKING:
                 self.wake("account", e)
+        if events:
+            self._refresh_wants()
 
     # --- Piyasa ---
 
@@ -249,12 +337,14 @@ class ProfileRunner:
         return replace(candle, high=high, low=low)
 
     def on_candle(self, candle: Candle, closed: bool) -> None:
-        if candle.symbol not in self.symbols:
+        if candle.symbol not in self.wants:
             return
+        traded = Feed.TRADE in self.wants[candle.symbol]
         before = self.prices.get(candle.symbol, candle.open)
-        self.prices[candle.symbol] = candle.close
+        if not traded:
+            self.prices[candle.symbol] = candle.close
         fresh = self._fresh(candle)
-        if isinstance(self.broker, PriceDriven):
+        if isinstance(self.broker, PriceDriven) and not traded:
             self._account(self.broker.on_price(candle.symbol, before, fresh.high, fresh.low, candle.close,
                                                self.clock.time()))
         for t in self.triggers:
@@ -267,11 +357,24 @@ class ProfileRunner:
     # Mark fiyatı saniyede bir tek değer olarak gelir, aralığın iki ucu da odur.
     # SL o anın son fiyatından dolar.
     def on_mark(self, symbol: str, mark: float, time: int) -> None:
-        if symbol not in self.symbols:
+        if symbol not in self.wants:
             return
         self.marks[symbol] = mark
         if isinstance(self.broker, PriceDriven):
             self._account(self.broker.on_mark(symbol, mark, mark, mark, time, self.prices.get(symbol)))
+
+    # Tekil işlem aralığı tek bir fiyattır. open_ bir önceki işlemin fiyatıdır,
+    # tetikli emir seviyenin ötesinden açılan bir sıçramada oradan dolar.
+    def on_trade(self, trade: Trade) -> None:
+        if Feed.TRADE not in self.wants.get(trade.symbol, ()):
+            return
+        before = self.prices.get(trade.symbol, trade.price)
+        self.prices[trade.symbol] = trade.price
+        if isinstance(self.broker, PriceDriven):
+            self._account(self.broker.on_price(trade.symbol, before, trade.price, trade.price, trade.price,
+                                               trade.ms // 1000))
+        for t in self.triggers:
+            self._fire(t.on_trade(trade))
 
     def on_liquidation(self, liq: Liquidation) -> None:
         for t in self.triggers:
@@ -287,7 +390,7 @@ class ProfileRunner:
             return
         now = self.clock.time()
         end = now // 60 * 60
-        for s in self.symbols:
+        for s in sorted(self.wants):
             seen = self.state.setting(f"price_seen:{self.pid}:{s}")
             if seen is None or seen + 60 >= end:
                 continue
@@ -313,7 +416,7 @@ class ProfileRunner:
         if not isinstance(self.broker, PriceDriven):
             return
         now = self.clock.time()
-        for s in self.symbols:
+        for s in sorted(set(self.symbols) | self.broker.live_symbols()):
             key = f"funding_seen:{self.pid}:{s}"
             seen = self.state.setting(key)
             if seen is None:
@@ -368,6 +471,7 @@ class ProfileRunner:
     # --- Zaman ---
 
     def tick(self, now: int) -> None:
+        self._refresh_wants()
         if self._cancels:
             task = asyncio.create_task(self.flush_cancels())
             self._side_tasks.add(task)
@@ -382,7 +486,7 @@ class ProfileRunner:
         if self.running and self.next_wake is not None and now >= self.next_wake:
             self.next_wake = None
             self.wake("timer")
-        if not self.running or self.busy or self.retiring or now < self.retry_at or not self.state.wakes(self.pid):
+        if not self.running or self.busy or self.retiring or now < self.retry_at or not self._waiting():
             return
         if self.strategy.uses_model and self.access.closed():
             return
@@ -403,14 +507,20 @@ class ProfileRunner:
     async def _process(self) -> None:
         try:
             async with self.lock:
-                rows = self.state.wakes(self.pid)
-                found = [Wake(kind, t, wake_codec.decode(data)) for _, t, kind, data in rows]
-                await self._decide(found, [r[0] for r in rows], 0)
+                if self.strategy.fast:
+                    found, ids, self._queue = self._queue, [], []
+                else:
+                    rows = self.state.wakes(self.pid)
+                    found = [Wake(kind, t, wake_codec.decode(data)) for _, t, kind, data in rows]
+                    ids = [r[0] for r in rows]
+                await self._decide(found, ids, 0)
         except Exception:
             log.exception("[%s] Karar döngüsünde beklenmeyen hata.", self.profile.short)
             self.retry_at = self.clock.time() + self.retry_s
         finally:
             self.busy = False
+        if self.strategy.fast and self._queue and self.running:
+            self._kick()
 
     async def wait_idle(self) -> None:
         if self._side_tasks:
@@ -420,14 +530,22 @@ class ProfileRunner:
 
     # --- Karar ---
 
+    # Hızlı yolun bağlamı yalnızca hesabın halini, fiyatları ve hafızayı
+    # taşır. Hazır gerçekler, işlem özeti ve son kararlar defterin ve günlüğün
+    # tamamını okur, her kararda milisaniyeler tutardı.
     def _context(self, wakes: list[Wake], now: int, admin: dict) -> Context:
+        state = self.broker.state()
+        if self.strategy.fast:
+            return Context(now=now, wakes=wakes, state=state, prices=dict(self.prices), marks=dict(self.marks),
+                           symbols=self.tradable, market=self.market, memory=self.journal.memory(self.pid),
+                           alerts=self.alerts.alerts,
+                           start_balance=self.ledger.start_balance(self.broker.account_id))
         trades = self.ledger.trades(self.broker.account_id)
         nets = [t.net for t in trades]
-        state = self.broker.state()
         found = (facts_.build(self.ledger, self.journal, self.notes, self.pid, state, self.version.created_at, now,
                               describe) if self.notes else Facts())
         return Context(now=now, wakes=wakes, state=state, prices=dict(self.prices),
-                       marks=dict(self.marks), symbols=self.symbols, market=self.market,
+                       marks=dict(self.marks), symbols=self.tradable, market=self.market,
                        memory=self.journal.memory(self.pid),
                        history=self.journal.recent(self.pid, self.history),
                        admin=admin,
@@ -528,14 +646,31 @@ class ProfileRunner:
         for r in d.reviews:
             self.notes.add_review(r["position_id"], self.pid, jid, r["verdict"], r["text"], now)
 
+    @staticmethod
+    def _stored(wakes: list[Wake]) -> list[dict]:
+        return [{"kind": w.kind, "time": w.time, "data": wake_codec.encode(w.data) if w.kind != "correction"
+                 else None} for w in wakes]
+
+    # Hızlı yolda kararın süresi, komutların süresi ve bildirimi doğuran
+    # piyasa olayından komutların bitişine kadar geçen süre kayda girer.
+    # Olayın damgası Binance'in, bitiş programın saatidir, aradaki farka ağ
+    # gecikmesi de dahildir.
+    def _latency(self, wakes: list[Wake], t0: int, t1: int, t2: int) -> dict:
+        out = {"decide": t1 - t0, "apply": t2 - t1}
+        stamps = [w.data.ms for w in wakes if isinstance(w.data, Fire) and w.data.ms]
+        if stamps:
+            out["event"] = t2 - min(stamps)
+        return out
+
     async def _decide(self, wakes: list[Wake], ids: list[int], corrections: int) -> None:
-        now = self.clock.time()
-        stored = [{"kind": w.kind, "time": w.time, "data": wake_codec.encode(w.data) if w.kind != "correction"
-                   else None} for w in wakes]
+        now, t0 = self.clock.time(), self.clock.ms()
         admin, shown = self.feed() if self.strategy.accepts_messages else ({}, [])
         try:
             d = await self.strategy.decide(self._context(wakes, now, admin))
         except Exception as e:
+            if self.strategy.fast:
+                self._queue[:0] = [w for w in wakes if w.kind != "correction"]
+            stored = self._stored(wakes)
             text = str(e) or type(e).__name__
             limited = self.access.report_error(text)
             self.retry_at = now + self.retry_s
@@ -547,6 +682,7 @@ class ProfileRunner:
             self.bus.publish({"profile": self.pid, "decide_error": text, "limit": limited})
             log.warning("[%s] Karar alınamadı: %s", self.profile.short, text)
             return
+        t1 = self.clock.ms()
         self.state.drop_wakes(ids)
         self.delivered(shown)
         can_correct = self.strategy.corrects and corrections < self.max_corrections
@@ -554,9 +690,12 @@ class ProfileRunner:
         if d.suggestion:
             self.bus.publish({"profile": self.pid, "suggestion": d.suggestion})
         if d.rejection:
-            await self._rejected(d, now, stored, corrections, can_correct, left)
+            await self._rejected(d, now, self._stored(wakes), corrections, can_correct, left)
             return
         results, noted = await self._apply(d, now)
+        if self.strategy.fast:
+            d.record = {**d.record, "latency_ms": self._latency(wakes, t0, t1, self.clock.ms())}
+        stored = self._stored(wakes)
         if d.memory:
             self.journal.set_memory(self.pid, d.memory)
         self.next_wake = now + d.wait_s if d.wait_s else None

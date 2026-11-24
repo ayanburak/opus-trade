@@ -99,6 +99,9 @@ class FakeMarket(MarketData):
     async def daily_stats(self, *a, **k):
         raise NotImplementedError
 
+    async def all_daily_stats(self):
+        raise NotImplementedError
+
     async def open_interest(self, *a, **k):
         raise NotImplementedError
 

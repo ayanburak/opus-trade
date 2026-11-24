@@ -25,6 +25,11 @@ description: Strateji soyut sınıfı, bağlamı, kararı ve tür kayıt defteri
 # düzeltme için yeniden uyandırılmak isteyen stratejidedir. Kural stratejisi
 # ikisini de istemez, aynı girdiyle aynı reddi tekrar alırdı. uses_model model
 # çağıran stratejidedir, model erişimi kapalıyken o strateji bekletilir.
+# fast milisaniyelik stratejidedir: uyandırma veritabanına yazılmadan
+# bellekte bekler, karar saniyelik tick beklenmeden hemen başlar ve bağlam
+# hazır gerçekleri, işlem özetini ve son kararları taşımaz. Program yeniden
+# başlarsa bellekteki uyandırmalar kaybolur, strateji hesabın son halini
+# restart uyandırmasıyla görür.
 #
 # NOTE: memory stratejinin uyanmalar arasında taşıdığı kendi durumudur,
 # örneğin Opus'un not defteri. Çalıştırıcı onu JSON olarak saklar ve bir
@@ -223,6 +228,7 @@ class Strategy(ABC):
     accepts_messages: ClassVar[bool] = False
     corrects: ClassVar[bool] = False
     uses_model: ClassVar[bool] = False
+    fast: ClassVar[bool] = False
 
     @abstractmethod
     async def decide(self, ctx: Context) -> Decision:

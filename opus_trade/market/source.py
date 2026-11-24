@@ -75,6 +75,12 @@ class MarketData(ABC):
     async def daily_stats(self, symbol: str) -> DailyStats:
         """Son yirmi dört saatin değişimini, uçlarını ve dolar hacmini döndürür."""
 
+    # İzleme listeleri saat başı bütün piyasayı sıralar. Tek istekle gelir,
+    # parite başına istek Binance'in ağırlık sınırını hızla doldururdu.
+    @abstractmethod
+    async def all_daily_stats(self) -> list[DailyStats]:
+        """Bütün paritelerin son yirmi dört saatinin değişimini, uçlarını ve dolar hacmini döndürür."""
+
     @abstractmethod
     async def premium(self, symbol: str | None = None) -> list[Premium]:
         """Mark fiyatını, endeksi ve tahmini fonlamayı döndürür. symbol verilmezse bütün pariteler için."""

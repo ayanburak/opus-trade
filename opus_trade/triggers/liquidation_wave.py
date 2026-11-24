@@ -146,5 +146,5 @@ TRIGGERS.register(
     (Param("min_usd", "symbol_map", "Parite başına eşik, dolar", low=0),
      Param("quiet_s", "int", "Durulma süresi, saniye", default=120, low=10, high=3600),
      Param("cooldown_s", "int", "Bekleme süresi, saniye", default=60, low=_MIN_COOLDOWN_S, high=86400)),
-    lambda symbols, **p: LiquidationWave(symbols, **p),
+    lambda setup, **p: LiquidationWave(setup.symbols, **p),
 )

@@ -4,10 +4,11 @@ importable: Supervisor
 
 Supervisor bütün profillerin çalıştırıcılarını yönetir. refresh() bir
 profilin çalıştırıcısını veritabanındaki son haline göre kurar, değiştirir
-ya da kaldırır, program yeniden başlamadan. run() canlı akışı ve saniyelik
-zamanlayıcıyı çalıştırır. Akıştan gelen mumları ve likidasyonları ilgili
-çalıştırıcılara dağıtır, bağlantı her kurulduğunda kopukken kaçan dakikaları
-işletir. check_stream() iki dakikadan uzun mum gelmezse akışın koptuğunu olay
+ya da kaldırır, program yeniden başlamadan. run() canlı akışı, saniyelik
+zamanlayıcıyı ve saatlik izleme listesi yenilemesini çalıştırır. Akıştan
+gelen mumları, tekil işlemleri ve likidasyonları ilgili çalıştırıcılara
+dağıtır, bağlantı her kurulduğunda kopukken kaçan dakikaları işletir. Akışın
+aboneliği çalıştırıcıların dinlemek istediği paritelerin birleşimidir. check_stream() iki dakikadan uzun mum gelmezse akışın koptuğunu olay
 yoluna yayar.
 
 description: Profillerin çalıştırıcılarını kuran ve canlı veriyi onlara dağıtan yönetici.
@@ -36,10 +37,12 @@ from ..broker.paper import PaperBroker
 from ..domain.catalog import Catalog
 from ..domain.clock import Clock
 from ..domain.fees import FeeSchedule
-from ..domain.profile import Area, Profile, State
-from ..market.models import Candle, Liquidation
-from ..market.source import MarketData
-from ..market.stream import MarketStream, StreamListener
+from ..domain.profile import Area, Profile, State, Universe
+from ..market.flow import TradeFlow
+from ..market.models import Candle, Liquidation, Trade
+from ..market.screen import MarketScreen
+from ..market.source import MarketData, MarketDataError
+from ..market.stream import Feed, MarketStream, StreamListener
 from ..registry import Entry
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
@@ -47,7 +50,7 @@ from ..storage.notes import NotesRepo
 from ..storage.profiles import ProfileRepo
 from ..storage.runtime_state import StateRepo
 from ..strategy.base import STRATEGIES, Deps
-from ..triggers.base import TRIGGERS
+from ..triggers.base import TRIGGERS, Setup
 from ..triggers.price_alert import PriceAlerts
 from .bus import EventBus
 from .gate import Gate
@@ -79,6 +82,8 @@ class Supervisor(StreamListener):
         fees: Kâğıt hesapların komisyon oranları.
         deps: Bir profil için strateji bağımlılıklarını kuran fonksiyon.
         notes: Giriş notları ve sınıflandırmalar, verilmezse defterin bağlantısıyla kurulur.
+        screen: İzleme listelerinin kaynağı, verilirse saat başı yenilenir.
+        flow: Tekil işlemlerin saniyelik özeti, bütün profillerin ortak kopyası.
 
     interventions kurulumdan sonra verilir, çünkü müdahaleler de çalıştırıcılara
     Supervisor üzerinden ulaşır.
@@ -87,7 +92,8 @@ class Supervisor(StreamListener):
     def __init__(self, repo: ProfileRepo, ledger: Ledger, journal: JournalRepo, state: StateRepo,
                  market: MarketData, stream: MarketStream, clock: Clock, bus: EventBus, access: ModelAccess,
                  catalog: Catalog, fees: FeeSchedule, deps: Callable[[Profile], Deps],
-                 notes: NotesRepo | None = None) -> None:
+                 notes: NotesRepo | None = None, screen: MarketScreen | None = None,
+                 flow: TradeFlow | None = None) -> None:
         self.repo = repo
         self.ledger = ledger
         self.journal = journal
@@ -109,6 +115,13 @@ class Supervisor(StreamListener):
         self._deferred: set[int] = set()
         self.last_candle = clock.time()
         self._candle_sent: dict[str, int] = {}
+        self.watched: set[str] = set()
+        self.screen = screen
+        self.flow = flow or TradeFlow()
+        self._by_trade: dict[str, list[int]] = {}
+        self._sent: dict[str, tuple[Feed, ...]] | None = None
+        self._pending: dict[str, tuple[Feed, ...]] | None = None
+        self._pusher: asyncio.Task | None = None
         self.stream_down = False
 
     # --- Kurulum ---
@@ -129,17 +142,19 @@ class Supervisor(StreamListener):
         guard = RiskGuard(self.ledger, self.clock, limits, cfg.risk.get("daily_loss"))
         iv = self.interventions
         gate = Gate(broker, self.bus, self.catalog, guard, iv.restriction_source(p.id) if iv else None)
+        universe = tuple(self.catalog.symbols) if cfg.universe is Universe.MARKET else None
+        setup = Setup(cfg.symbols, frozenset(universe or cfg.symbols), self.screen, self.flow)
         triggers = []
         for t in cfg.triggers:
             spec = dict(t)
-            triggers.append(TRIGGERS.get(spec.pop("type")).build(cfg.symbols, **spec))
+            triggers.append(TRIGGERS.get(spec.pop("type")).build(setup, **spec))
         alerts = PriceAlerts()
         alerts.load(self.state.alerts(p.id))
         lock = self._locks.setdefault(p.id, asyncio.Lock())
         return ProfileRunner(p, v, strategy, broker, gate, triggers, alerts, self.ledger, self.journal, self.state,
                              self.market, self.clock, self.bus, self.access, lock,
                              feed=(lambda: iv.feed(p.id)) if iv else None, delivered=iv.delivered if iv else None,
-                             notes=self.notes)
+                             notes=self.notes, universe=universe, on_wants=self._watch)
 
     def refresh(self, profile_id: int) -> None:
         """Bir profilin çalıştırıcısını son haline göre kurar, değiştirir ya da kaldırır. Süren bir karar varsa
@@ -180,18 +195,48 @@ class Supervisor(StreamListener):
         r.start(old.profile.state if old else None)
         self._watch()
 
-    # Akışın dinlediği pariteler çalışan bütün çalıştırıcıların paritelerinin
-    # birleşimidir. asyncio görevlere yalnızca zayıf referans tutar, referansı
-    # saklanmayan bir görev çalışmadan çöpe gidebilir, bu yüzden görev bitene
-    # kadar _background'da durur. Döngü yokken, örneğin testlerde, abonelik atlanır.
+    # Akışın isteği çalıştırıcıların isteklerinin birleşimidir. Mark fiyatı
+    # bütün piyasadan tek akışla gelir, burada istenmez. Tekil işlemler
+    # pariteye göre yalnızca onu isteyen çalıştırıcılara dağıtılır, dizin
+    # burada kurulur.
+    def _wants(self) -> dict[str, tuple[Feed, ...]]:
+        merged: dict[str, set[Feed]] = {}
+        by_trade: dict[str, list[int]] = {}
+        for pid, r in self.runners.items():
+            for sym, feeds in r.wants.items():
+                merged.setdefault(sym, set()).update(f for f in feeds if f is not Feed.MARK)
+                if Feed.TRADE in feeds:
+                    by_trade.setdefault(sym, []).append(pid)
+        self.watched, self._by_trade = set(merged), by_trade
+        self.flow.forget(set(by_trade))
+        return {sym: tuple(sorted(f)) for sym, f in merged.items()}
+
+    # İstek değiştikçe akışa gider. Abonelik mesajları sırayla gitmeli, bu
+    # yüzden tek bir görev bekleyen son isteği gönderir, arada gelen istekler
+    # birbirinin yerine geçer. asyncio görevlere yalnızca zayıf referans tutar,
+    # görev _pusher'da saklanır. Döngü yokken, örneğin testlerde, abonelik
+    # atlanır.
     def _watch(self) -> None:
-        symbols = {s for r in self.runners.values() for s in r.symbols}
+        wants = self._wants()
+        if wants == self._sent:
+            self._pending = None
+            return
+        self._pending = wants
+        if self._pusher is not None and not self._pusher.done():
+            return
         try:
-            task = asyncio.get_running_loop().create_task(self.stream.watch(symbols))
+            self._pusher = asyncio.get_running_loop().create_task(self._push())
         except RuntimeError:
             return
-        self._background.add(task)
-        task.add_done_callback(self._background.discard)
+
+    async def _push(self) -> None:
+        while self._pending is not None:
+            wants, self._pending = self._pending, None
+            try:
+                await self.stream.watch(wants)
+                self._sent = wants
+            except Exception:
+                log.exception("Akışın aboneliği değiştirilemedi.")
 
     # --- Akış ---
 
@@ -229,9 +274,25 @@ class Supervisor(StreamListener):
         for pid, r in list(self.runners.items()):
             self._guard(pid, lambda r=r: r.on_candle(candle, closed))
 
+    # Mark fiyatı bütün piyasadan gelir, saniyede yüzlerce parite. Hiçbir
+    # çalıştırıcının dinlemediği parite çalıştırıcılara hiç gitmez.
     async def on_mark(self, symbol: str, mark: float, time: int) -> None:
+        if symbol not in self.watched:
+            return
         for pid, r in list(self.runners.items()):
             self._guard(pid, lambda r=r: r.on_mark(symbol, mark, time))
+
+    # İşlem önce ortak özete girer, tetikleyiciler kendi kararlarını o işlemi
+    # de sayan özetle verir.
+    async def on_trade(self, trade: Trade) -> None:
+        pids = self._by_trade.get(trade.symbol)
+        if not pids:
+            return
+        self.flow.add(trade)
+        for pid in pids:
+            r = self.runners.get(pid)
+            if r is not None:
+                self._guard(pid, lambda r=r: r.on_trade(trade))
 
     async def on_liquidation(self, liq: Liquidation) -> None:
         for pid, r in list(self.runners.items()):
@@ -263,6 +324,19 @@ class Supervisor(StreamListener):
                     log.exception("[%s] Fonlama uygulanamadı.", r.profile.short)
             await asyncio.sleep(FUNDING_EVERY_S)
 
+    # Özet saat başını beş saniye geçe yenilenir, Binance'in saatlik verisi
+    # o ana kadar oturmuş olur. Açılışta hemen bir kez yenilenir. Hata
+    # olursa bir dakika sonra yeniden denenir, eski liste yerinde kalır.
+    async def _screening(self) -> None:
+        while True:
+            try:
+                await self.screen.refresh()
+                wait = 3600 - self.clock.time() % 3600 + 5
+            except (MarketDataError, NotImplementedError) as e:
+                log.warning("İzleme listesinin özeti alınamadı: %s", e)
+                wait = 60
+            await asyncio.sleep(wait)
+
     async def run(self) -> None:
         """Bütün profilleri kurar ve iptal edilene kadar akışı ve zamanlayıcıları çalıştırır."""
         for p in self.repo.all():
@@ -271,9 +345,12 @@ class Supervisor(StreamListener):
             except Exception:
                 log.exception("[%s] Profil kurulamadı.", p.short)
         log.info("%d profil kuruldu.", len(self.runners))
-        await self.stream.watch({s for r in self.runners.values() for s in r.symbols})
+        self._sent = self._wants()
+        await self.stream.watch(self._sent)
         self.last_candle = self.clock.time()
         tasks = [asyncio.create_task(self._ticker()), asyncio.create_task(self._funding())]
+        if self.screen is not None:
+            tasks.append(asyncio.create_task(self._screening()))
         try:
             await self.stream.run(self)
         finally:

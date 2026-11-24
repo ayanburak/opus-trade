@@ -4,7 +4,7 @@ importable: Clock, SystemClock, HOME_TZ
 
 Clock zamanın tek kaynağıdır. Saate ihtiyaç duyan her parça onu yapıcısından
 alır ve time modülünü doğrudan çağırmaz. now() saat dilimi UTC olan bir an,
-time() unix saniye döndürür. SystemClock gerçek saattir.
+time() unix saniye, ms() unix milisaniye döndürür. SystemClock gerçek saattir.
 
 description: Programın ve testlerin aynı arayüzle kullandığı saat.
 """
@@ -31,6 +31,9 @@ class Clock(ABC):
 
     def time(self) -> int:
         return int(self.now().timestamp())
+
+    def ms(self) -> int:
+        return int(self.now().timestamp() * 1000)
 
 
 class SystemClock(Clock):

@@ -4,7 +4,8 @@ importable: yok
 
 BinanceStream'in testleri. Yerelde açılan sahte bir websocket sunucusu
 Binance'in birleşik akışını taklit eder. Testler mesaj çevirisini, çalışırken
-abonelik değişikliğini ve donan bağlantıdan sonra yeniden bağlanmayı korur.
+abonelik değişikliğini, donan bağlantıdan sonra yeniden bağlanmayı ve akış
+sınırında bağlantının bölünmesini korur.
 
 description: market.binance.stream için birim testleri.
 """
@@ -15,21 +16,26 @@ import json
 import websockets
 
 from opus_trade.domain.models import Side
-from opus_trade.market.binance.stream import BinanceStream
-from opus_trade.market.stream import StreamListener
+from opus_trade.market.binance.stream import ALL_MARKS, LIQUIDATIONS, BinanceStream
+from opus_trade.market.stream import Feed, StreamListener
 
 KLINE = {"stream": "btcusdt@kline_1m", "data": {"e": "kline", "s": "BTCUSDT", "k": {
     "t": 1_790_000_040_000, "s": "BTCUSDT", "o": "1", "h": "2", "l": "0.5", "c": "1.5", "v": "10", "q": "15",
     "n": 7, "V": "4", "x": True}}}
 MARK = {"stream": "btcusdt@markPrice@1s", "data": {"e": "markPriceUpdate", "E": 1_790_000_045_000, "s": "BTCUSDT",
                                                    "p": "1.4", "i": "1.39", "r": "0.0001", "T": 1_790_006_400_000}}
+TRADE = {"stream": "dogeusdt@aggTrade", "data": {"e": "aggTrade", "E": 1_790_000_046_010, "s": "DOGEUSDT",
+                                                "p": "0.2", "q": "500", "T": 1_790_000_046_003, "m": True}}
+MARKS = {"stream": ALL_MARKS, "data": [
+    {"e": "markPriceUpdate", "E": 1_790_000_047_000, "s": "SOLUSDT", "p": "150.5"},
+    {"e": "markPriceUpdate", "E": 1_790_000_047_000, "s": "XRPUSDT", "p": "0.6"}]}
 LIQ = {"stream": "!forceOrder@arr", "data": {"e": "forceOrder", "o": {
     "s": "ETHUSDT", "S": "SELL", "ap": "2000", "z": "3", "l": "1", "T": 1_790_000_001_000}}}
 
 
 class Recorder(StreamListener):
     def __init__(self):
-        self.connects, self.candles, self.liquidations, self.marks = 0, [], [], []
+        self.connects, self.candles, self.liquidations, self.marks, self.trades = 0, [], [], [], []
 
     async def on_connect(self):
         self.connects += 1
@@ -42,6 +48,9 @@ class Recorder(StreamListener):
 
     async def on_liquidation(self, liq):
         self.liquidations.append(liq)
+
+    async def on_trade(self, trade):
+        self.trades.append(trade)
 
 
 # Sunucu her bağlantıda adresi ve gelen mesajları kaydeder. send listesi
@@ -70,7 +79,7 @@ def test_messages_are_translated_and_ack_is_ignored():
         seen = {"paths": [], "received": []}
         server = await _serve([{"result": None, "id": 1}, KLINE, MARK, LIQ], seen)
         stream, rec = BinanceStream(url=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"), Recorder()
-        await stream.watch({"BTCUSDT"})
+        await stream.watch({"BTCUSDT": (Feed.KLINE, Feed.MARK)})
         task = asyncio.create_task(stream.run(rec))
         await _until(lambda: rec.candles and rec.marks and rec.liquidations)
         task.cancel()
@@ -92,10 +101,10 @@ def test_watch_while_connected_subscribes_the_difference():
         seen = {"paths": [], "received": []}
         server = await _serve([], seen)
         stream, rec = BinanceStream(url=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"), Recorder()
-        await stream.watch({"BTCUSDT"})
+        await stream.watch({"BTCUSDT": (Feed.KLINE, Feed.MARK)})
         task = asyncio.create_task(stream.run(rec))
         await _until(lambda: rec.connects == 1)
-        await stream.watch({"ETHUSDT"})
+        await stream.watch({"ETHUSDT": (Feed.KLINE, Feed.MARK)})
         await _until(lambda: len(seen["received"]) == 2)
         task.cancel()
         server.close()
@@ -140,7 +149,7 @@ def test_watch_during_connect_is_not_lost():
         stream, rec = BinanceStream(url=f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"), Recorder()
         task = asyncio.create_task(stream.run(rec))
         await asyncio.sleep(0.1)
-        await stream.watch({"ETHUSDT"})
+        await stream.watch({"ETHUSDT": (Feed.KLINE,)})
         await _until(lambda: rec.connects == 1)
         await asyncio.sleep(0.2)
         task.cancel()
@@ -151,3 +160,78 @@ def test_watch_during_connect_is_not_lost():
     asked = "ethusdt@kline_1m" in seen["paths"][0] or any(
         m["method"] == "SUBSCRIBE" and "ethusdt@kline_1m" in m["params"] for m in seen["received"])
     assert asked, seen
+
+
+def test_trades_and_market_wide_marks_are_translated():
+    """m alıcının defterdeki taraf olduğunu söyler, işlemi satıcı başlatmıştır. Ters çeviri patlamanın yönünü ve
+    alıcı payını tersine çevirirdi. Bütün piyasanın mark akışı tek mesajda birçok parite taşır, hepsi iletilmeli."""
+    async def main():
+        seen = {"paths": [], "received": []}
+        server = await _serve([TRADE, MARKS], seen)
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"
+        stream, rec = BinanceStream(url=url, fixed=(LIQUIDATIONS, ALL_MARKS)), Recorder()
+        await stream.watch({"DOGEUSDT": (Feed.TRADE, Feed.KLINE)})
+        task = asyncio.create_task(stream.run(rec))
+        await _until(lambda: rec.trades and len(rec.marks) == 2)
+        task.cancel()
+        server.close()
+        return seen, rec
+
+    seen, rec = asyncio.run(main())
+    assert seen["paths"][0] == ("/stream?streams=!forceOrder@arr/!markPrice@arr@1s/dogeusdt@aggTrade/"
+                                "dogeusdt@kline_1m")
+    t = rec.trades[0]
+    assert (t.symbol, t.ms, t.price, t.qty, t.buy) == ("DOGEUSDT", 1_790_000_046_003, 0.2, 500, False)
+    assert t.usd == 100
+    assert rec.marks == [("SOLUSDT", 150.5, 1_790_000_047), ("XRPUSDT", 0.6, 1_790_000_047)]
+
+
+def test_streams_beyond_the_limit_open_a_second_connection():
+    """Binance tek bağlantıda sınırdan fazla akışı reddeder. İzleme listesi büyüyünce fazlası yeni bağlantıya
+    girmeli, var olan akışların yeri değişmemeli, yoksa her saat başı bütün bağlantılar yeniden kurulurdu."""
+    async def main():
+        seen = {"paths": [], "received": []}
+        server = await _serve([], seen)
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"
+        stream, rec = BinanceStream(url=url, max_streams=3), Recorder()
+        await stream.watch({"AUSDT": (Feed.TRADE,), "BUSDT": (Feed.TRADE,)})
+        task = asyncio.create_task(stream.run(rec))
+        await _until(lambda: rec.connects == 1)
+        await stream.watch({"AUSDT": (Feed.TRADE,), "BUSDT": (Feed.TRADE,), "CUSDT": (Feed.TRADE,)})
+        await _until(lambda: rec.connects == 2)
+        await stream.watch({"BUSDT": (Feed.TRADE,), "CUSDT": (Feed.TRADE,), "DUSDT": (Feed.TRADE,)})
+        await _until(lambda: len(seen["received"]) == 2)
+        task.cancel()
+        server.close()
+        return seen
+
+    seen = asyncio.run(main())
+    assert seen["paths"] == ["/stream?streams=!forceOrder@arr/ausdt@aggTrade/busdt@aggTrade",
+                             "/stream?streams=cusdt@aggTrade"]
+    assert sorted((m["method"], tuple(m["params"])) for m in seen["received"]) == [
+        ("SUBSCRIBE", ("dusdt@aggTrade",)), ("UNSUBSCRIBE", ("ausdt@aggTrade",))]
+
+
+def test_empty_extra_connection_closes_and_is_reused():
+    """İzleme listesi küçülünce akışı kalmayan ek bağlantı kapanmalı. Açık kalsaydı sessizlikten her dakika
+    yeniden bağlanır, her bağlanışta bütün profillerin kaçan dakikaları REST'ten çekilirdi."""
+    async def main():
+        seen = {"paths": [], "received": []}
+        server = await _serve([], seen)
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/stream"
+        stream, rec = BinanceStream(url=url, max_streams=2), Recorder()
+        await stream.watch({"AUSDT": (Feed.TRADE,), "BUSDT": (Feed.TRADE,)})
+        task = asyncio.create_task(stream.run(rec))
+        await _until(lambda: rec.connects == 2)
+        await stream.watch({"AUSDT": (Feed.TRADE,)})
+        await asyncio.sleep(0.1)
+        extra = stream._conns[1].task
+        await stream.watch({"AUSDT": (Feed.TRADE,), "CUSDT": (Feed.TRADE,)})
+        await _until(lambda: rec.connects == 3)
+        task.cancel()
+        server.close()
+        return seen, extra
+
+    seen, extra = asyncio.run(main())
+    assert extra is None
+    assert seen["paths"][1:] == ["/stream?streams=busdt@aggTrade", "/stream?streams=cusdt@aggTrade"]
