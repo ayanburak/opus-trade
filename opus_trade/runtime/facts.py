@@ -7,7 +7,8 @@ deposundan hesaplar ve stratejiye Context.facts olarak gider: günün
 işlemleri, art arda kayıp, son kapanan pozisyonlar, dolma oranı, parite ve
 yön başına son stop, açık pozisyonların ve emirlerin kaynağı ve giriş
 notları, sınıflandırılmayı bekleyen pozisyonlar, kör kalınan süre ve
-yöneticinin son yirmi dört saatteki işlemleri. Hiçbir şey yazmaz.
+yöneticinin son yirmi dört saatteki işlemleri ve bugün çalışan alt görevler.
+Hiçbir şey yazmaz.
 
 description: Stratejiye giden hazır hesap gerçeklerinin hesabı.
 """
@@ -163,4 +164,4 @@ def build(ledger: Ledger, journal: JournalRepo, notes: NotesRepo, profile_id: in
                  order_origins={k: v for k, v in order_origins.items() if k in open_orders},
                  unreviewed=unreviewed, position_notes=position_notes, order_notes=order_notes,
                  invalidated=invalidated, last_call=last_call, late_min=late, admin_24h=admin,
-                 version_start=version_start)
+                 version_start=version_start, team_today=journal.team_counts(profile_id, day))

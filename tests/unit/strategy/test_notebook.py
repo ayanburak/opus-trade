@@ -35,7 +35,7 @@ def test_plan_review_decides_which_plan_survives(review, kept):
     """Geçerli denen planın metni ve bozulma koşulu Opus farklı yazsa da kalır, yalnızca geçerlilik saati yenisinden
     alınır. Diğer durumlarda yeni plan alınır."""
     old = Notebook(plan=PLAN, note="eski", agenda="eski")
-    merged, carried = nbk.merge(old, _new(), review, SWINGS, NOW)
+    merged, carried = nbk.merge(old, _new(), review, NOW, SWINGS)
     assert merged.plan == ({**PLAN, "gecerlilik": NEW_PLAN["gecerlilik"]} if kept else NEW_PLAN)
     assert carried is kept
     assert (merged.note, merged.agenda, merged.swings) == ("62320 direnç.", "Salı FOMC tutanakları.", SWINGS)
@@ -45,13 +45,13 @@ def test_expired_plan_is_replaced_even_if_called_valid():
     """Süresi dolan plan sınanmadan süremez. Opus geçerli dese de yeni plan alınır."""
     old = Notebook(plan={**PLAN, "gecerlilik": "22.11.2026 11:00"})
     assert nbk.plan_state(old, NOW) == EXPIRED
-    merged, carried = nbk.merge(old, _new(), "gecerli", {}, NOW)
+    merged, carried = nbk.merge(old, _new(), "gecerli", NOW)
     assert merged.plan == NEW_PLAN and carried is False
 
 
 def test_valid_plan_with_same_text_is_not_reported_as_carried():
     """Opus geçerli planı aynen yazdıysa sonuca not düşmeye gerek yok."""
-    merged, carried = nbk.merge(Notebook(plan=PLAN), _new(PLAN), "gecerli", {}, NOW)
+    merged, carried = nbk.merge(Notebook(plan=PLAN), _new(PLAN), "gecerli", NOW)
     assert merged.plan == PLAN and carried is False
 
 
@@ -59,7 +59,7 @@ def test_valid_plan_can_be_extended_without_rewriting_it():
     """Trend 23.11 03:57'de süren planını uzatmak istedi, metin kilitli olduğu için uzatamadı. Geçerli denen plan
     aynı metinle yeni geçerlilik saatini alır, bu bir taşıma notu sayılmaz."""
     longer = {**PLAN, "gecerlilik": "23.11.2026 15:00"}
-    merged, carried = nbk.merge(Notebook(plan=PLAN), _new(longer), "gecerli", {}, NOW)
+    merged, carried = nbk.merge(Notebook(plan=PLAN), _new(longer), "gecerli", NOW)
     assert merged.plan == longer and carried is False
 
 

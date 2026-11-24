@@ -119,7 +119,8 @@ def test_history_tools_show_the_review_and_the_entry_thesis(tmp_path, monkeypatc
 
 
 def test_decision_history_reads_both_record_shapes(tmp_path, monkeypatch):
-    """Eski kayıtlar görüş ve güven, yenileri rejim taşır. Araç ikisini de okur, eski kayıt yüzünden çökmez."""
+    """Eski kayıtlar görüş ve güven, yapı okumalı kayıtlar rejim taşır, serbest türün kaydında ikisi de yoktur.
+    Araç üçünü de okur, eski kayıt yüzünden çökmez, boş başlık yüzünden satır bozulmaz."""
     import json
     from opus_trade.storage.journal import JournalRepo
     con = connect(tmp_path / "core.db")
@@ -130,11 +131,13 @@ def test_decision_history_reads_both_record_shapes(tmp_path, monkeypatch):
           None)
     new = {"ozet": "yeni", "analiz": "", "pariteler": {"BTCUSDT": {"rejim": {"rejim": "donus", "uygun": "hayir"}}}}
     j.add(1, 1, NOW, [], [], {"decision": new, "rejection": ["x"]}, None, None)
+    j.add(1, 1, NOW + 60, [], [], {"decision": {"ozet": "serbest", "analiz": ""}}, None, None)
     monkeypatch.setenv("OPUS_CORE_DB", str(tmp_path / "core.db"))
     monkeypatch.setenv("OPUS_PROFILE", "1")
     text = tools.gecmis_kararlarim(5)
     assert "BTCUSDT dönüş, uygun değil, kontrol hatasıyla reddedildi\n  özet: yeni" in text
     assert "görüş dusus, güven 60\n  özet: eski" in text
+    assert "18.11.2026 14:07\n  özet: serbest" in text
 
 
 def test_as_of_cuts_the_clock_and_the_order_book(tmp_path, monkeypatch):

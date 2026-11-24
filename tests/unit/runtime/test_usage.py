@@ -51,3 +51,16 @@ def test_rule_strategy_rows_are_not_calls_and_old_rows_are_dropped():
     out = summarize(rows, NOW, days=2)
     assert [d["total"]["calls"] for d in out["days"]] == [0, 0]
     assert out["days"][0]["profiles"] == {"3": out["days"][0]["profiles"]["3"]}
+
+
+def test_team_tasks_add_to_their_profile_and_models_are_split():
+    """Alt görevler aynı abonelikten düşer, çağrısının profiline eklenir. Ana çağrı hatalı olsa da tamamlanan alt
+    görev sayılır, hiç başlamayan sayılmaz. Model başına ayrım ana çağrıları ve alt görevleri birlikte sayar."""
+    sub = {"role": "haiku", "model": "haiku", "usage": {"usage": {"input_tokens": 40, "output_tokens": 4}},
+           "cost_usd": 0.02, "error": None}
+    team = json.dumps([sub, {**sub, "error": "zaman aşımı"}, {**sub, "skipped": True, "error": "süre"}])
+    rows = [(*call(1, NOW - 60), "opus", team), (*call(1, NOW - 30, error=True), "opus", json.dumps([sub]))]
+    t = summarize(rows, NOW, days=1)["days"][0]["profiles"]["1"]
+    assert (t["calls"], t["errors"], t["sub_calls"], t["sub_errors"]) == (1, 1, 2, 1)
+    assert t["input"] == 100 + 40 + 40 and round(t["cost_usd"], 2) == 0.54
+    assert t["models"] == {"opus": {"calls": 1, "cost_usd": 0.5}, "haiku": {"calls": 2, "cost_usd": 0.04}}

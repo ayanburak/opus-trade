@@ -1,41 +1,52 @@
 """
 file: strategy.py
-importable: LLMStrategy, REJECT_WAIT_MIN
+importable: LLMStrategy, Template, REJECT_WAIT_MIN
 
 LLMStrategy kararı bir dil modeline, bugün Opus'a soran stratejidir. Her
-uyanmada talimatı ve istemi kurar, LLMClient ile modeli çağırır, kararın
-kontrol adımlarını checks.py ile denetler. Kontrol hatası varsa kararı
+uyanmada talimatı ve istemi kurar, LLMClient ile modeli çağırır, kararı
+strateji türünün karar adımlarıyla denetler. Kontrol hatası varsa kararı
 reddeder. Geçerse Türkçe eylemleri komutlara ve alarm işlemlerine çevirir,
-girişlerin notlarını komutlara bağlar, defteri eskisiyle birleştirir.
-Model çağrısı başarısız olursa LLMError yükselir, yeniden deneme
-çalıştırıcının işidir.
+girişleri adımların giriş denetiminden geçirir, notlarını komutlara bağlar,
+defteri eskisiyle birleştirir. Model çağrısı başarısız olursa LLMError
+yükselir, yeniden deneme çalıştırıcının işidir. Strateji türleri ve
+kayıtları kinds.py'dedir.
 
-description: Kararı Opus'a soran strateji türü.
+description: Kararı Opus'a soran stratejinin evrensel makinesi.
 """
 
 # NOTE: Hafızası Opus'un not defteridir, notebook.py. Kontrol hatasıyla
 # reddedilen kararda hafıza boş döner, çalıştırıcı eski defteri korur.
 #
-# NOTE: Çeviride ya da girişin kontrolünde takılan bir eylem kapıya hiç
+# NOTE: Çeviride ya da girişin denetiminde takılan bir eylem kapıya hiç
 # gitmez ve reddedilmiş sonuç olarak errors listesine girer. Düzeltme
 # çağrısı onu da kapıdan dönen redlerle birlikte gösterir. Çevirinin bir notu
 # varsa, örneğin miktar bakiyeye sığdırıldıysa, not kabul edilmiş bir sonuç
 # olarak notes listesine girer.
 #
-# NOTE: Bozuldu denen bekleyen girişlerin iptali kontrolün çıktısıdır ve
+# NOTE: Bozuldu denen bekleyen girişlerin iptali denetimin çıktısıdır ve
 # eylemlerden önce gönderilir. Opus aynı kararda o yönde yeni bir giriş
 # verirse eski emir önce iptal olur.
+#
+# NOTE: Bu sınıf hiçbir piyasa okuma yöntemini bilmez. Rozet, beklenti
+# alarmları, deftere taşınan tepe ve dipler ve bir sonraki çağrının en geç
+# anı adımlardan gelir.
+
+from dataclasses import dataclass
 
 from ...domain.catalog import Catalog
 from ...domain.fees import FeeSchedule, BINANCE_STANDARD
 from ...domain.trading import CancelOrder, PlaceOrder, SetLeverage
-from ...registry import Param
-from ..base import STRATEGIES, ActionResult, Context, Decision, Deps, Strategy
-from . import actions, checks, prompt
+from ...llm.base import LLMClient, LLMError, LLMRequest
+from ...team import log as team_log
+from ...team.policy import TeamPolicy
+from ..base import ActionResult, Context, Decision, Strategy
+from . import actions, prompt
 from . import notebook as nbk
 from . import schema as schema_
-from .cards import INTERVALS, cards_text
-from .client import LLMClient, LLMRequest
+from .cards import cards_text
+from .checks import Review
+from .steps.base import Steps
+from .toolkit import TeamGrant, team_deadline, toolset
 
 # Düzeltme hakkı biten bir retten sonra bir sonraki çağrıya kadar en az bu
 # kadar dakika geçer, profilin en kısa beklemesi daha uzunsa o. Kısa bekleyen
@@ -51,31 +62,23 @@ def _label(a: dict) -> str:
     return f"{a.get('tip', '?')}{ref}{sym}"
 
 
-# Opus'un 2. adımda yazdığı tepe ve dipler deftere aralığın adıyla taşınır.
-def _swings(k: dict, structure: tuple[str, str]) -> dict:
-    return {sym: {interval: {"tepeler": pair["yapi"][key]["tepeler"], "dipler": pair["yapi"][key]["dipler"]}
-                  for key, interval in zip(schema_.LEVELS, structure)}
-            for sym, pair in k["pariteler"].items()}
+@dataclass(frozen=True)
+class Template:
+    """Bir LLM strateji türünün talimata kattığı sabitler.
+
+    Args:
+        version: Talimatın sürümü, her çağrının kaydına yazılır.
+        goal: Talimatın Hedefin bölümünün metni.
+    """
+
+    version: int
+    goal: str
 
 
-# Arayüzlerin ortak rozeti kayıttan okunur, etiketler burada bir kez kurulur.
-# waiting uygun olmayan rejimde beklenen fiyat ya da saattir, sayıyı arayüz
-# kendi biçimiyle yazar.
-def _badge(k: dict, structure: tuple[str, str]) -> dict:
-    out = {}
-    for sym, pair in k["pariteler"].items():
-        r = pair["rejim"]
-        wait = r["bekledigi"]
-        waiting = None
-        if r["uygun"] != "evet" and wait["tur"] == "fiyat":
-            waiting = {"price": wait["fiyat"]}
-        elif r["uygun"] != "evet" and wait["tur"] == "saat":
-            waiting = {"time": wait["saat"]}
-        out[sym] = {"structure": [{"interval": interval, "dir": pair["yapi"][key]["yon"]}
-                                  for key, interval in zip(schema_.LEVELS, structure)],
-                    "regime": schema_.REGIMES[r["rejim"]], "fit": r["uygun"] == "evet", "waiting": waiting,
-                    "hint": schema_.REGIME_HINTS[r["rejim"]]}
-    return out
+# Alt görevlerin araçları ana çağrının araç listesine alt işaretiyle eklenir,
+# panel ve herkese açık sayfa onları alt ajan araçları gibi gösterir.
+def _sub_tools(team: list[dict]) -> list[dict]:
+    return [{**t, "sub": True} for rec in team for t in rec.get("tools", [])]
 
 
 def _note(a: dict) -> dict:
@@ -102,13 +105,11 @@ class LLMStrategy(Strategy):
         max_wait: En uzun bekleme, dakika.
         step_limit: Opus'a bildirilen araç adımı sınırı. Sert sınır bunun beş üstüdür.
         timeout_s: Bir çağrının en uzun süresi.
-        structure_high: Yapının üst aralığı, cards.INTERVALS'tan biri.
-        structure_low: Yapının alt aralığı, üst aralıktan kısa olmalı.
-        fit_regimes: Stratejinin çalıştığı rejimler, schema.REGIMES anahtarları.
+        template: Türün talimat sürümü ve hedef metni.
+        steps: Türün karar adımları.
+        cards: Parite kartlarındaki son tepe ve diplerin aralıkları, üstten alta.
+        team: Ekip kotası. Çağrı kotası hep sıfırsa ekip aracı verilmez.
         fees: Komisyon oranları, talimattaki oranlar ve girişin maliyeti için.
-
-    Raises:
-        ValueError: Üst aralık alt aralıktan uzun değilse.
     """
 
     accepts_messages = True
@@ -117,10 +118,8 @@ class LLMStrategy(Strategy):
 
     def __init__(self, llm: LLMClient, catalog: Catalog, work_dir, tool_env: dict, market_db, style: str,
                  model: str, effort: str, min_wait: int, max_wait: int, step_limit: int, timeout_s: int,
-                 structure_high: str = "4h", structure_low: str = "1h",
-                 fit_regimes: tuple[str, ...] = ("duzenli_trend",), fees: FeeSchedule = BINANCE_STANDARD) -> None:
-        if INTERVALS.index(structure_high) <= INTERVALS.index(structure_low):
-            raise ValueError("Yapının üst aralığı alt aralığından uzun olmalı.")
+                 template: Template, steps: Steps, cards: tuple[str, ...] = ("4h", "1h"),
+                 team: TeamPolicy = TeamPolicy(), fees: FeeSchedule = BINANCE_STANDARD) -> None:
         self.llm = llm
         self.catalog = catalog
         self.work_dir = work_dir
@@ -133,44 +132,60 @@ class LLMStrategy(Strategy):
         self.max_wait = max_wait
         self.step_limit = step_limit
         self.timeout_s = timeout_s
-        self.structure = (structure_high, structure_low)
-        self.fit_regimes = tuple(fit_regimes)
+        self.template = template
+        self.steps = steps
+        self.cards = tuple(cards)
+        self.team = team
         self.fees = fees
 
     def system(self, ctx: Context) -> str:
         return prompt.system_prompt(ctx.start_balance, [self.catalog.get(s) for s in ctx.symbols], self.fees,
-                                    self.style, self.min_wait, self.max_wait, self.step_limit, self.structure,
-                                    self.fit_regimes, ctx.now)
+                                    self.style, self.min_wait, self.max_wait, self.step_limit, self.steps,
+                                    self.template.goal, self.team.per_call, ctx.now)
+
+    def schema(self, symbols: list[str]) -> dict:
+        return schema_.schema(symbols, self.steps)
 
     async def decide(self, ctx: Context) -> Decision:
         old = nbk.read(ctx.memory)
-        cards = await cards_text(ctx.market, self.market_db, ctx.symbols, ctx.prices, ctx.now, self.structure)
+        cards = await cards_text(ctx.market, self.market_db, ctx.symbols, ctx.prices, ctx.now, self.cards)
         text = prompt.build_prompt(ctx, cards, ctx.memory.get("notebook_at"))
-        req = LLMRequest(system=self.system(ctx), prompt=text, schema=schema_.schema(list(ctx.symbols), self.structure),
+        grant = self._grant(ctx)
+        req = LLMRequest(system=self.system(ctx), prompt=text, schema=self.schema(list(ctx.symbols)),
                          model=self.model, effort=self.effort, max_turns=self.step_limit + 5,
-                         work_dir=self.work_dir, tool_env=self.tool_env, timeout_s=self.timeout_s)
-        res = await self.llm.call(req, ctx.on_tool)
+                         work_dir=self.work_dir, toolset=toolset(self.tool_env, grant), timeout_s=self.timeout_s,
+                         env={"MCP_TOOL_TIMEOUT": str(grant.tool_timeout_ms())} if grant else {})
+        if grant:
+            grant.log.unlink(missing_ok=True)
+        try:
+            res = await self.llm.call(req, ctx.on_tool)
+        except LLMError as e:
+            team = team_log.collect(grant.log) if grant else []
+            if team:
+                e.tools = e.tools + _sub_tools(team)
+                e.record = {**e.record, "team": team}
+            raise
+        team = team_log.collect(grant.log) if grant else []
         k = res.decision
-        review = checks.validate(k, ctx, self.structure, self.fit_regimes, old)
+        review = self.steps.validate(k, ctx, old)
         suggestion = (k.get("yoneticiye_oneri") or "").strip() or None
-        record = {"template_version": prompt.TEMPLATE_VERSION, "model": self.model, "effort": self.effort,
-                  "prompt": text, "decision": k, "raw": res.raw, "tools": res.tools, "usage": res.usage,
+        record = {"template_version": self.template.version, "model": self.model, "effort": self.effort,
+                  "prompt": text, "decision": k, "raw": res.raw, "tools": res.tools + _sub_tools(team),
+                  "usage": res.usage, "team": team,
                   "cost_usd": res.cost_usd, "duration_s": res.duration_s, "summary": k["ozet"],
-                  "reply": k["yoneticiye_cevap"], "suggestion": suggestion, "badge": _badge(k, self.structure),
+                  "reply": k["yoneticiye_cevap"], "suggestion": suggestion, **self.steps.record(k),
                   "checks": {"errors": review.errors, "notes": review.notes,
                              "cancels": [f"#{r.number} {r.symbol} {r.side}" for r in review.cancels],
-                             "expectations": [[s, p] for s, p in review.expectations],
-                             "wait_until": review.wait_until}}
+                             **self.steps.checks(review)}}
         if review.errors:
             record["rejection"] = review.errors
             return Decision(rejection=review.errors, wait_s=max(self.min_wait, REJECT_WAIT_MIN) * 60, record=record,
                             suggestion=suggestion)
 
         wait = max(self.min_wait, min(self.max_wait, int(k["sonraki_cagri_dk"]))) * 60
-        if review.wait_until is not None:
-            wait = min(wait, max(60, review.wait_until - ctx.now))
-        nb, _ = nbk.merge(old, k["not_defteri"], k["defter_sinamasi"]["plan"]["durum"], _swings(k, self.structure),
-                          ctx.now)
+        if (until := self.steps.wait_until(review)) is not None:
+            wait = min(wait, max(60, until - ctx.now))
+        nb, _ = nbk.merge(old, k["not_defteri"], k["defter_sinamasi"]["plan"]["durum"], ctx.now, self.steps.swings(k))
         d = Decision(wait_s=wait, memory={"notebook": nb.to_memory(), "notebook_at": ctx.now}, record=record,
                      suggestion=suggestion,
                      reviews=[{"position_id": x["pozisyon_no"], "verdict": x["sinif"], "text": x["aciklama"]}
@@ -181,17 +196,16 @@ class LLMStrategy(Strategy):
         busy: set[tuple[str, str]] = set()
         for a in k["eylemler"]:
             self._action(a, k, review, ctx, d, busy)
-        # Bir paritenin beklenti alarmı yalnızca bu kararın beklediği fiyattır.
-        # Rejim uygun okunduysa ya da Opus bir saat bekliyorsa eski alarm kalkar,
-        # yoksa Opus artık beklemediği bir fiyatta yanıltıcı notla çağrılırdı.
-        expected = {sym for sym, _ in review.expectations}
-        for sym, level in review.expectations:
-            d.alarms.append({"op": "expect", "symbol": sym, "price": level, "label": f"beklenti {sym}",
-                             "note": "Rejimi uygun bulmadığın çağrıda beklediğin fiyat."})
-        for sym in k["pariteler"]:
-            if sym not in expected:
-                d.alarms.append({"op": "unexpect", "symbol": sym, "label": f"beklenti {sym}"})
+        d.alarms += self.steps.alarms(k, review)
         return d
+
+    # Ekip hakkı yalnızca çağrı kotası olan türde verilir. Günlük sınır dolsa da
+    # araç kalır, talimat onu anlatır, kalan hak sıfır olarak gider.
+    def _grant(self, ctx: Context) -> TeamGrant | None:
+        if not any(self.team.per_call.values()):
+            return None
+        return TeamGrant(self.team.remaining(ctx.facts.team_today), self.work_dir / "ekip.jsonl",
+                         team_deadline(self.timeout_s))
 
     @staticmethod
     def _add(d: Decision, cmds: list, label: str, note: dict | None) -> None:
@@ -200,7 +214,7 @@ class LLMStrategy(Strategy):
         d.chained += [False] + [True] * (len(cmds) - 1)
         d.annotations += [None] * (len(cmds) - 1) + [note]
 
-    def _action(self, a: dict, k: dict, review: checks.Review, ctx: Context, d: Decision,
+    def _action(self, a: dict, k: dict, review: Review, ctx: Context, d: Decision,
                 busy: set[tuple[str, str]]) -> None:
         label = _label(a)
         try:
@@ -215,7 +229,7 @@ class LLMStrategy(Strategy):
         if a["tip"] in _ENTRIES:
             entry = next(c for c in t.item if isinstance(c, PlaceOrder))
             lev = next((c.leverage for c in t.item if isinstance(c, SetLeverage)), ctx.state.leverage(entry.symbol))
-            if why := checks.entry_problem(a, entry, k, review, ctx, self.fees, lev, busy):
+            if why := self.steps.entry_problem(a, entry, k, review, ctx, lev, busy):
                 d.errors.append(ActionResult(label, False, f"{label} reddedildi. {why}"))
                 return
             busy.add((entry.symbol, str(entry.side)))
@@ -223,30 +237,3 @@ class LLMStrategy(Strategy):
         if t.note:
             d.notes.append(ActionResult(label, True, f"{label}: {t.note}"))
         self._add(d, t.item, label, note)
-
-
-def _build(deps: Deps, **p) -> LLMStrategy:
-    return LLMStrategy(deps.llm, deps.catalog, deps.paths["work_dir"], deps.paths["tool_env"],
-                       deps.paths["market_db"], **p)
-
-
-STRATEGIES.register(
-    "llm", "Opus",
-    "Kararı her uyanmada Opus'a sorar. Opus piyasayı araçlarla inceler, talimattaki kontrol adımları ve tarz "
-    "metniyle karar verir.",
-    (Param("style", "text", "Tarz metni", default="", help="Talimata Çalışma tarzın bölümü olarak eklenir."),
-     Param("model", "choice", "Model", default="opus", choices=("opus", "sonnet", "haiku")),
-     Param("effort", "choice", "Effort", default="high", choices=("low", "medium", "high")),
-     Param("min_wait", "int", "En kısa bekleme, dakika", default=15, low=1, high=1440),
-     Param("max_wait", "int", "En uzun bekleme, dakika", default=180, low=1, high=10080),
-     Param("step_limit", "int", "Araç adımı sınırı", default=25, low=1, high=100),
-     Param("timeout_s", "int", "Çağrı süresi sınırı, saniye", default=600, low=60, high=3600),
-     Param("structure_high", "choice", "Yapının üst aralığı", default="4h", choices=INTERVALS,
-           help="Ana yönün okunduğu grafik. Alt aralıktan uzun olmalı."),
-     Param("structure_low", "choice", "Yapının alt aralığı", default="1h", choices=INTERVALS,
-           help="Geri çekilmenin bittiğinin okunduğu grafik."),
-     Param("fit_regimes", "multi", "Uygun rejimler", default=("duzenli_trend",), choices=tuple(schema_.REGIMES),
-           labels=tuple(schema_.REGIMES.values()), help="Stratejinin işlem açabildiği rejimler.")),
-    _build,
-    LLMStrategy,
-)

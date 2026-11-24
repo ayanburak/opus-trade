@@ -22,7 +22,11 @@ from opus_trade.domain.fees import BINANCE_STANDARD as FEES
 from opus_trade.domain.models import Side
 from opus_trade.domain.trading import AccountState, Order, OrderType, PlaceOrder, Position
 from opus_trade.strategy.base import ClosedPosition, Context, Facts
-from opus_trade.strategy.llm import checks
+from opus_trade.strategy.llm.steps.base import Steps
+from opus_trade.strategy.llm.steps.book import BookStep
+from opus_trade.strategy.llm.steps.closed import ClosedStep
+from opus_trade.strategy.llm.steps.entry import RISK_SLACK, EntryStep
+from opus_trade.strategy.llm.steps.structure import StructureStep
 from opus_trade.strategy.llm.notebook import Notebook
 
 NOW = int(datetime(2026, 11, 21, 10, 54, tzinfo=HOME_TZ).timestamp())
@@ -75,8 +79,11 @@ def ctx(positions=(), orders=(), facts=None, equity=10.0) -> Context:
                    facts=facts or Facts())
 
 
+STEPS = Steps([BookStep(), StructureStep(STRUCT, FIT), ClosedStep(), EntryStep(FEES)])
+
+
 def validate(k, c, old=Notebook(plan=PLAN)):
-    return checks.validate(k, c, STRUCT, FIT, old)
+    return STEPS.validate(k, c, old)
 
 
 def entry(side=Side.SHORT, price=None, qty=0.002, sl=61000.0, risk=10.0, inv=61100.0, **over) -> tuple[dict, PlaceOrder]:
@@ -88,9 +95,9 @@ def entry(side=Side.SHORT, price=None, qty=0.002, sl=61000.0, risk=10.0, inv=611
 
 
 def problem(a, cmd, k, c, busy=frozenset()):
-    review = checks.validate(k, c, STRUCT, FIT, Notebook(plan=PLAN))
+    review = STEPS.validate(k, c, Notebook(plan=PLAN))
     assert review.errors == []
-    return checks.entry_problem(a, cmd, k, review, c, FEES, 20, set(busy))
+    return STEPS.entry_problem(a, cmd, k, review, c, 20, set(busy))
 
 
 # --- Adım 1 ---
@@ -98,7 +105,7 @@ def problem(a, cmd, k, c, busy=frozenset()):
 def test_clean_decision_passes_every_control():
     """Kontrolleri tutan bir karar reddedilmez, yoksa Opus her çağrıda boşuna düzeltme yapar."""
     r = validate(decision(), ctx())
-    assert (r.errors, r.fit, r.aligned, r.trend) == ([], {BTC: True}, {BTC: "short"}, {BTC: "short"})
+    assert (r.errors, r.parts["structure"].fit, r.parts["structure"].aligned, r.parts["structure"].trend) == ([], {BTC: True}, {BTC: "short"}, {BTC: "short"})
 
 
 def test_missing_and_extra_orders_and_positions_reject_the_decision():
@@ -180,14 +187,14 @@ def test_flat_and_unclear_are_always_allowed():
                  pariteler__BTCUSDT__rejim={"rejim": "belirsiz", "kanit": "x", "uygun": "hayir",
                                             "bekledigi": {"tur": "fiyat", "fiyat": 60000, "saat": ""}})
     r = validate(k, ctx())
-    assert r.errors == [] and r.trend == {BTC: None} and r.expectations == [(BTC, 60000.0)]
+    assert r.errors == [] and r.parts["structure"].trend == {BTC: None} and r.parts["structure"].expectations == [(BTC, 60000.0)]
 
 
 def test_regular_trend_needs_alignment_on_the_lower_interval():
     """Düzenli trend için alt aralıkta trend yönünde ilk yapı oluşmalı. Düşüşte alt aralığın tepesi alçalmalı."""
     k = decision(pariteler__BTCUSDT__yapi__alt=_level("yukselen", (60500, 60900), (60050, 60300)))
     r = validate(k, ctx())
-    assert r.aligned == {BTC: None} and any("uyum yok" in e for e in r.errors)
+    assert r.parts["structure"].aligned == {BTC: None} and any("uyum yok" in e for e in r.errors)
 
 
 def test_fit_must_match_the_profiles_regimes_and_unfit_needs_what_it_waits_for():
@@ -199,7 +206,7 @@ def test_fit_must_match_the_profiles_regimes_and_unfit_needs_what_it_waits_for()
     assert any("neyi beklediğini yazmadın" in e for e in validate(decision(pariteler__BTCUSDT__rejim=rejim), ctx()).errors)
     rejim["bekledigi"] = {"tur": "saat", "fiyat": 0, "saat": "21.11.2026 14:00"}
     r = validate(decision(pariteler__BTCUSDT__rejim=rejim), ctx())
-    assert r.errors == [] and r.wait_until == int(datetime(2026, 11, 21, 14, 0, tzinfo=HOME_TZ).timestamp())
+    assert r.errors == [] and r.parts["structure"].wait_until == int(datetime(2026, 11, 21, 14, 0, tzinfo=HOME_TZ).timestamp())
 
 
 def test_open_position_may_wait_for_nothing_but_still_cannot_enter():
@@ -210,9 +217,9 @@ def test_open_position_may_wait_for_nothing_but_still_cannot_enter():
         {"sembol": BTC, "yon": "short", "durum": "gecerli", "gerekce": "Tez sürüyor."}])
     c = ctx(positions=[_position()])
     r = validate(k, c)
-    assert r.errors == [] and r.expectations == [] and r.wait_until is None
+    assert r.errors == [] and r.parts["structure"].expectations == [] and r.parts["structure"].wait_until is None
     a, cmd = entry()
-    assert "giriş yapamazsın" in checks.entry_problem(a, cmd, k, r, c, FEES, 20, set())
+    assert "giriş yapamazsın" in STEPS.entry_problem(a, cmd, k, r, c, 20, set())
 
 
 def test_saturday_1532_entry_is_rejected_at_step_3():
@@ -223,7 +230,7 @@ def test_saturday_1532_entry_is_rejected_at_step_3():
     c = ctx()
     review = validate(k, c)
     a, cmd = entry()
-    assert "adım 3" in checks.entry_problem(a, cmd, k, review, c, FEES, 20, set())
+    assert "adım 3" in STEPS.entry_problem(a, cmd, k, review, c, 20, set())
 
 
 # --- Adım 4 ---
@@ -300,7 +307,7 @@ def test_saturday_0941_risk_statement_is_checked_against_the_real_risk():
     msg = problem(a, cmd, decision(), ctx())
     assert "risk beyanı" in msg and "gerçek risk yüzde" in msg
     loss = 0.002 * (61000 - 60600) + 0.002 * 60600 * FEES.taker + 0.002 * 61000 * FEES.taker
-    a, cmd = entry(risk=loss / 10 * 100 / checks.RISK_SLACK + 0.01)
+    a, cmd = entry(risk=loss / 10 * 100 / RISK_SLACK + 0.01)
     assert problem(a, cmd, decision(), ctx()) is None
 
 
@@ -348,7 +355,7 @@ def test_rising_direction_needs_both_tops_and_bottoms_rising():
 def test_risk_just_over_the_slack_is_rejected():
     """Pay 1,25 kattır. Biraz fazlası bile reddedilir, yoksa beyan Opus'u bağlamaz."""
     loss = 0.002 * (61000 - 60600) + 0.002 * 60600 * FEES.taker + 0.002 * 61000 * FEES.taker
-    a, cmd = entry(risk=loss / 10 * 100 / checks.RISK_SLACK - 0.05)
+    a, cmd = entry(risk=loss / 10 * 100 / RISK_SLACK - 0.05)
     assert "risk beyanı" in problem(a, cmd, decision(), ctx())
 
 

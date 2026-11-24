@@ -415,7 +415,9 @@ async def test_llm_registry_lists_what_opus_really_gets(api):
     assert [a["type"] for a in out["actions"]] == [a[0] for a in ACTIONS]
     mumlar = next(t for t in out["tools"] if t["name"] == "mumlar")
     assert {"name": "sembol", "type": "string", "default": None, "required": True} in mumlar["params"]
-    assert out["builtin"] == ["WebSearch", "WebFetch", "Agent"] and out["agents"][0]["name"] == "arastirmaci"
+    assert out["builtin"] == ["WebSearch", "WebFetch"]
+    assert [a["name"] for a in out["agents"]] == ["opus", "sonnet", "haiku"]
+    assert out["agents"][2]["tools"] == ["WebSearch", "WebFetch", "piyasa"]
 
 
 @run

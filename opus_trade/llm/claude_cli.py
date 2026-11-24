@@ -1,24 +1,31 @@
 """
-file: client.py
-importable: LLMRequest, LLMResult, LLMError, LLMClient, ClaudeCliClient, BUILTIN_TOOLS, RESEARCHER
+file: claude_cli.py
+importable: ClaudeCliClient, process_env, TOKEN_VAR, TOKEN_PASS
 
-LLMClient bir istemi modele gönderip şemaya uyan kararı döndüren parçanın
-soyut sınıfıdır. ClaudeCliClient onu Burak'ın Claude aboneliğinden claude
-komutunun print moduyla uygular: araç kullanımını izler, her araç için
-on_tool'u çağırır ve son satırdaki yapılandırılmış çıktıyı döndürür. Çağrı
-başarısız olursa LLMError fırlatır, o ana kadar kullanılan araçlar hatada
-da taşınır.
+ClaudeCliClient LLMClient'ı Burak'ın Claude aboneliğinden claude komutunun
+print moduyla uygular. Komutu isteğin araç takımından kurar, araç kullanımını
+izler, her araç için on_tool'u çağırır ve son satırdaki cevabı döndürür.
+Şemalı istekte cevap yapılandırılmış çıktıdır, şemasızda modelin son metni.
 
-description: Model çağrısının soyut sınıfı ve claude komutuyla uygulaması.
+    llm = ClaudeCliClient(Path(sys.executable), root)
+
+description: Model çağrısının claude komutuyla uygulaması.
 """
 
 # NOTE: Kullanıcı ayarları, hook'lar ve kullanıcının MCP sunucuları yüklenmez,
-# oturum diske yazılmaz. Opus'a yalnızca web arama, web sayfası okuma, Haiku
-# araştırmacısı ve piyasa araçları verilir. Dosya, terminal ve kod çalıştırma
-# araçları güvenlik için bilerek verilmez.
+# oturum diske yazılmaz. Modelin hangi araçları kullanabileceğini yalnızca
+# isteğin araç takımı söyler. Takımda yerleşik araç yoksa --tools boş verilir
+# ve claude'un bütün yerleşik araçları kapanır.
 #
-# NOTE: claude komutu oturumu diske yazmasa da Haiku araştırmacısı
-# kullanıldığında ~/.claude/projects altında çalışma klasörünün adıyla küçük
+# NOTE: MCP sunucuları istemcinin Python yorumlayıcısıyla, proje kökü
+# PYTHONPATH'te olacak şekilde başlar. Takım yalnızca modülü ve ortamı verir.
+# Model çağıran sunucu, ekip sunucusu gibi, alt görevleri aynı yorumlayıcı ve
+# aynı claude komutuyla çalıştırır, komutun adı ona OPUS_CLAUDE ile gider.
+# Sunucu claude'un ortamını devralır ama abonelik anahtarını almaz, anahtar
+# ona process_env() ile ayrı adla gider.
+#
+# NOTE: claude komutu oturumu diske yazmasa da Agent aracıyla bir alt ajan
+# çalıştığında ~/.claude/projects altında çalışma klasörünün adıyla küçük
 # bir alt ajan kaydı bırakıyor. Her çağrıdan sonra o çağrının klasörü silinir,
 # klasör boş kalırsa o da silinir. Klasör adı çalışma yolundaki her / ve nokta
 # yerine - konarak oluşur.
@@ -29,87 +36,22 @@ description: Model çağrısının soyut sınıfı ve claude komutuyla uygulamas
 
 import asyncio
 import json
+import os
 import shutil
 import time
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-# Opus'un piyasa araçları dışında kullanabildiği yerleşik araçlar. Agent
-# araştırmacıyı çağırmak içindir. Kontrol API'si de listeyi buradan okur.
-BUILTIN_TOOLS = ("WebSearch", "WebFetch", "Agent")
+from .base import LLMClient, LLMError, LLMRequest, LLMResult
 
-# Ajanın adı Opus'a görünür, Agent aracını bu adla çağırır.
-RESEARCHER = {
-    "arastirmaci": {
-        "description": "Web'de haber ve piyasa araştırması yapıp özet getiren yardımcı. Ne araştırılacağını açıkça yaz.",
-        "prompt": "Bir kripto ve emtia yatırımcısı için araştırma yapan yardımcısın. Verilen konuyu web'de araştır, "
-                  "güncel ve güvenilir kaynaklara öncelik ver. Bulduklarını tarih ve kaynak belirterek, "
-                  "kısa ve yoğun bir Türkçe özetle döndür. Yorum katmadan bulguları aktar.",
-        "model": "haiku",
-        "tools": ["WebSearch", "WebFetch"],
-    }
-}
+# Abonelik anahtarının claude'daki adı ve model çağıran MCP sunucusuna
+# taşındığı ad.
+TOKEN_VAR = "CLAUDE_CODE_OAUTH_TOKEN"
+TOKEN_PASS = "OPUS_CLAUDE_TOKEN"
 
 # claude'un stderr çıktısından saklanan son bayt sayısı. Hata mesajına bunun
 # yalnızca son beş yüz karakteri girer.
 _STDERR_KEEP = 8192
-
-
-@dataclass(frozen=True)
-class LLMRequest:
-    """Bir model çağrısı.
-
-    Args:
-        system: Talimat.
-        prompt: Bu çağrının istemi.
-        schema: Cevabın uyması gereken JSON şeması.
-        model: Model takma adı, örneğin opus.
-        effort: low, medium ya da high.
-        max_turns: Araç adımlarının sert sınırı.
-        work_dir: claude komutunun çalışma klasörü.
-        tool_env: Piyasa araçları sunucusunun ortam değişkenleri.
-        timeout_s: Çağrı bundan uzun sürerse süreç öldürülür.
-    """
-
-    system: str
-    prompt: str
-    schema: dict
-    model: str
-    effort: str
-    max_turns: int
-    work_dir: Path
-    tool_env: dict[str, str] = field(default_factory=dict)
-    timeout_s: int = 600
-
-
-@dataclass(frozen=True)
-class LLMResult:
-    """Başarılı bir çağrının sonucu. cost_usd çağrının API liste fiyatıyla karşılığıdır, abonelikten ayrıca ücret alınmaz."""
-
-    decision: dict
-    raw: str
-    tools: list[dict]
-    usage: dict
-    duration_s: float
-    cost_usd: float | None
-
-
-class LLMError(Exception):
-    def __init__(self, message: str, tools: list[dict] | None = None) -> None:
-        super().__init__(message)
-        self.tools = tools or []
-
-
-class LLMClient(ABC):
-    @abstractmethod
-    async def call(self, req: LLMRequest, on_tool: Callable[[dict], None] | None = None) -> LLMResult:
-        """İstemi modele gönderir ve kararı döndürür.
-
-        Raises:
-            LLMError: Çağrı başarısız olursa, zaman aşımına ya da adım sınırına uğrarsa veya karar okunamazsa.
-        """
 
 
 # --- claude komutu ---
@@ -132,6 +74,15 @@ def _result_text(content: Any) -> str:
     return "" if content is None else str(content)
 
 
+# MCP araçlarının adı mcp__sunucu__araç biçimindedir, arayüzde sunucu.araç
+# olarak görünür, örneğin piyasa.mumlar.
+def _short_name(name: str) -> str:
+    if name.startswith("mcp__") and name.count("__") >= 2:
+        server, tool = name[5:].split("__", 1)
+        return f"{server}.{tool}"
+    return name
+
+
 # Bir araç çağrısının arayüzde gösterilecek kısa hali. Girdinin tamamı ayrıca
 # saklanır, burada yalnızca okunabilir bir başlık üretilir.
 def _tool_record(block: dict, sub: bool) -> dict:
@@ -144,16 +95,30 @@ def _tool_record(block: dict, sub: bool) -> dict:
         title = inp.get("description") or inp.get("prompt", "")[:120]
     else:
         title = ", ".join(f"{k}={v}" for k, v in inp.items())
-    return {"name": name.replace("mcp__piyasa__", "piyasa."), "title": title, "input": inp, "sub": sub,
+    return {"name": _short_name(name), "title": title, "input": inp, "sub": sub,
             "id": block.get("id"), "result": None, "is_error": None, "duration_s": None}
+
+
+# claude MCP sunucularına abonelik anahtarını geçirmez, 24.11'de sunucuda
+# doğrulandı: CLAUDE_CODE_OAUTH_TOKEN düşer, diğer değişkenler geçer. Model
+# çağıran sunucu varsa anahtar claude sürecinin ortamına OPUS_CLAUDE_TOKEN
+# adıyla da konur, sunucu onu eski adına çevirir. Anahtar komut satırına
+# hiç yazılmaz, ps ile görünmez.
+def process_env(req: LLMRequest) -> dict[str, str] | None:
+    """claude sürecinin ortamını döndürür. Eklenecek bir şey yoksa None, süreç çekirdeğin ortamını devralır."""
+    extra = dict(req.env)
+    token = os.environ.get(TOKEN_VAR)
+    if token and any(s.model for s in req.toolset.servers.values()):
+        extra[TOKEN_PASS] = token
+    return {**os.environ, **extra} if extra else None
 
 
 class ClaudeCliClient(LLMClient):
     """claude komutunu alt süreç olarak çalıştıran istemci.
 
     Args:
-        python: Piyasa araçları sunucusunu çalıştıracak Python yorumlayıcısı.
-        root: Projenin kökü, araç sunucusunun PYTHONPATH'i.
+        python: MCP sunucularını çalıştıracak Python yorumlayıcısı.
+        root: Projenin kökü, sunucuların PYTHONPATH'i.
         claude: claude komutunun adı ya da yolu.
     """
 
@@ -163,10 +128,12 @@ class ClaudeCliClient(LLMClient):
         self.claude = claude
 
     def command(self, req: LLMRequest) -> list[str]:
-        env = {"PYTHONPATH": str(self.root), **req.tool_env}
-        servers = {"piyasa": {"type": "stdio", "command": str(self.python), "args": ["-m", "opus_trade.tools.market"],
-                              "env": env}}
-        return [
+        ts = req.toolset
+        servers = {name: {"type": "stdio", "command": str(self.python), "args": ["-m", srv.module],
+                          "env": {"PYTHONPATH": str(self.root), **srv.env,
+                                  **({"OPUS_CLAUDE": self.claude} if srv.model else {})}}
+                   for name, srv in ts.servers.items()}
+        cmd = [
             self.claude, "-p",
             "--model", req.model,
             "--effort", req.effort,
@@ -174,22 +141,29 @@ class ClaudeCliClient(LLMClient):
             "--setting-sources", "",
             "--strict-mcp-config",
             "--mcp-config", json.dumps({"mcpServers": servers}),
-            "--agents", json.dumps(RESEARCHER, ensure_ascii=False),
-            "--tools", ",".join(BUILTIN_TOOLS),
-            "--allowedTools", ",".join((*BUILTIN_TOOLS, "mcp__piyasa")),
+        ]
+        if ts.agents:
+            cmd += ["--agents", json.dumps(ts.agents, ensure_ascii=False)]
+        cmd += ["--tools", ",".join(ts.builtin)]
+        if ts.allowed:
+            cmd += ["--allowedTools", ",".join(ts.allowed)]
+        cmd += [
             "--permission-mode", "dontAsk",
             "--max-turns", str(req.max_turns),
             "--system-prompt", req.system,
             "--output-format", "stream-json",
             "--verbose",
-            "--json-schema", json.dumps(req.schema, ensure_ascii=False),
         ]
+        if req.schema is not None:
+            cmd += ["--json-schema", json.dumps(req.schema, ensure_ascii=False)]
+        return cmd
 
     async def call(self, req: LLMRequest, on_tool: Callable[[dict], None] | None = None) -> LLMResult:
         started = time.monotonic()
         req.work_dir.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(
             *self.command(req), cwd=req.work_dir, limit=16 * 1024 * 1024,
+            env=process_env(req),
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         proc.stdin.write(req.prompt.encode())
         await proc.stdin.drain()
@@ -263,10 +237,19 @@ class ClaudeCliClient(LLMClient):
             raise LLMError(f"claude komutu sonuç vermedi: {text[-500:]}", tools)
         if result.get("subtype") == "error_max_turns":
             raise LLMError(f"Model {req.max_turns} adım sınırına ulaştı ve karar yazmadı.", tools)
-        if result.get("is_error") or not result.get("structured_output"):
+        # Şemalı çağrının hata metni eskisi gibi kalır, model erişiminin limit
+        # uyarısı bu metnin içinde limit ifadelerini arar.
+        if result.get("is_error"):
+            head = "Model geçerli bir karar döndürmedi" if req.schema is not None else "Model hata döndürdü"
+            raise LLMError(f"{head}: {str(result.get('result'))[:500]}", tools)
+        usage = {"usage": result.get("usage"), "model_usage": result.get("modelUsage"),
+                 "num_turns": result.get("num_turns")}
+        raw = json.dumps(result, ensure_ascii=False)
+        duration = round(time.monotonic() - started, 1)
+        if req.schema is None:
+            return LLMResult(decision=None, raw=raw, tools=tools, usage=usage, duration_s=duration,
+                             cost_usd=result.get("total_cost_usd"), text=str(result.get("result") or ""))
+        if not result.get("structured_output"):
             raise LLMError(f"Model geçerli bir karar döndürmedi: {str(result.get('result'))[:500]}", tools)
-        return LLMResult(decision=result["structured_output"], raw=json.dumps(result, ensure_ascii=False),
-                         tools=tools,
-                         usage={"usage": result.get("usage"), "model_usage": result.get("modelUsage"),
-                                "num_turns": result.get("num_turns")},
-                         duration_s=round(time.monotonic() - started, 1), cost_usd=result.get("total_cost_usd"))
+        return LLMResult(decision=result["structured_output"], raw=raw, tools=tools, usage=usage,
+                         duration_s=duration, cost_usd=result.get("total_cost_usd"))

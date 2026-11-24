@@ -104,11 +104,24 @@ class JournalRepo:
     # Yalnızca gereken alanlar SQLite'ın içinde çıkarılır, kayıt Python'a
     # hiç taşınmaz.
     def usage_rows(self, since: int) -> list[tuple]:
-        """since anından sonraki günlük satırlarını (profile_id, time, error, usage, cost_usd, duration_s) olarak döndürür.
+        """since anından sonraki günlük satırlarını döndürür.
 
-        usage claude komutunun usage sözlüğünün JSON metnidir, çağrı yoksa None. error hata varsa 1'dir.
+        Satır (profile_id, time, error, usage, cost_usd, duration_s, model, team) biçimindedir. usage claude
+        komutunun usage sözlüğünün JSON metnidir, çağrı yoksa None. error hata varsa 1'dir. team alt görevlerin
+        kayıtlarının JSON metnidir, yoksa None.
         """
         return [tuple(r) for r in self.con.execute(
             "SELECT profile_id, time, error IS NOT NULL, json_extract(record, '$.usage.usage'), "
-            "json_extract(record, '$.cost_usd'), json_extract(record, '$.duration_s') FROM journal WHERE time >= ?",
+            "json_extract(record, '$.cost_usd'), json_extract(record, '$.duration_s'), "
+            "json_extract(record, '$.model'), json_extract(record, '$.team') FROM journal WHERE time >= ?",
             (since,))]
+
+    # Atlanan görev, yani ana çağrının süresi yetmediği için hiç başlamayan,
+    # aboneliğe dokunmadığı için sayılmaz.
+    def team_counts(self, profile_id: int, since: int) -> dict[str, int]:
+        """Profilin since anından sonra çalışan alt görevlerini rol başına sayar."""
+        rows = self.con.execute(
+            "SELECT json_extract(t.value, '$.role'), count(*) FROM journal, json_each(journal.record, '$.team') t "
+            "WHERE journal.profile_id = ? AND journal.time >= ? AND json_extract(t.value, '$.skipped') IS NOT 1 "
+            "GROUP BY 1", (profile_id, since)).fetchall()
+        return {r: n for r, n in rows if r}

@@ -17,7 +17,7 @@ description: Eklenti modüllerinin yüklendiği tek yer.
 import importlib
 
 _MODULES = (
-    "opus_trade.strategy.llm.strategy",
+    "opus_trade.strategy.llm.kinds",
     "opus_trade.strategy.rules.liquidation_reversal",
     "opus_trade.triggers.liquidation_wave",
 )

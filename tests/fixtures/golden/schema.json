@@ -1,0 +1,1144 @@
+{
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "defter_sinamasi",
+  "pariteler",
+  "kapanan_islemler",
+  "analiz",
+  "eylemler",
+  "not_defteri",
+  "ozet",
+  "sonraki_cagri_dk",
+  "yoneticiye_cevap",
+  "yoneticiye_oneri"
+ ],
+ "properties": {
+  "defter_sinamasi": {
+   "type": "object",
+   "additionalProperties": false,
+   "description": "Adım 1. Eski defterin her bölümünü ve hesaptaki her bekleyen giriş emrini ve açık pozisyonu bugünkü veriyle sına. Hepsi listede olmalı, fazlası da eksiği de karar reddine yol açar.",
+   "required": [
+    "plan",
+    "yapi",
+    "gundem",
+    "emirler",
+    "pozisyonlar"
+   ],
+   "properties": {
+    "plan": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "durum",
+      "gerekce"
+     ],
+     "description": "Plan bugünkü veriyle geçerli mi, zayıfladı mı, beklediği kurulum oluşup gerçekleşti mi, bozuldu mu. Süresi dolan planı burada geçerli desen de yenisini yazarsın.",
+     "properties": {
+      "durum": {
+       "type": "string",
+       "enum": [
+        "gecerli",
+        "zayifladi",
+        "gerceklesti",
+        "bozuldu"
+       ]
+      },
+      "gerekce": {
+       "type": "string",
+       "minLength": 1
+      }
+     }
+    },
+    "yapi": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "durum",
+      "gerekce"
+     ],
+     "description": "Defterdeki yapı aynı mı, güncellendi mi, bozuldu mu.",
+     "properties": {
+      "durum": {
+       "type": "string",
+       "enum": [
+        "ayni",
+        "guncellendi",
+        "bozuldu"
+       ]
+      },
+      "gerekce": {
+       "type": "string",
+       "minLength": 1
+      }
+     }
+    },
+    "gundem": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "durum",
+      "gerekce"
+     ],
+     "description": "Yakın olaylar bugünkü kararı etkiliyor mu. Olay yoksa gerekçe tek kelime olabilir.",
+     "properties": {
+      "durum": {
+       "type": "string",
+       "enum": [
+        "etkisi_yok",
+        "etkiliyor"
+       ]
+      },
+      "gerekce": {
+       "type": "string",
+       "minLength": 1
+      }
+     }
+    },
+    "emirler": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "numara",
+       "sembol",
+       "yon",
+       "durum",
+       "gerekce"
+      ],
+      "properties": {
+       "numara": {
+        "type": "integer"
+       },
+       "sembol": {
+        "type": "string"
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "durum": {
+        "type": "string",
+        "enum": [
+         "gecerli",
+         "zayifladi",
+         "bozuldu"
+        ]
+       },
+       "gerekce": {
+        "type": "string",
+        "minLength": 1
+       }
+      }
+     },
+     "description": "Her bekleyen giriş emri için bir satır. Koruma emirleri yazılmaz. Bozuldu dediğin emri sistem iptal eder."
+    },
+    "pozisyonlar": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+       "sembol",
+       "yon",
+       "durum",
+       "gerekce"
+      ],
+      "properties": {
+       "sembol": {
+        "type": "string"
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "durum": {
+        "type": "string",
+        "enum": [
+         "gecerli",
+         "zayifladi",
+         "bozuldu"
+        ]
+       },
+       "gerekce": {
+        "type": "string",
+        "minLength": 1
+       }
+      }
+     },
+     "description": "Her açık pozisyon için bir satır. Bozuldu dediğin pozisyonu aynı kararda pozisyon_kapat ile kapatırsın, yönetici açtıysa zorunlu değil."
+    }
+   }
+  },
+  "pariteler": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "XAUUSDT",
+    "BTCUSDT"
+   ],
+   "properties": {
+    "XAUUSDT": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "yapi",
+      "rejim"
+     ],
+     "properties": {
+      "yapi": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "ust",
+        "alt"
+       ],
+       "description": "Adım 2. Yönü kendi yazdığın tepe ve diplerle çelişemez.",
+       "properties": {
+        "ust": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "yon",
+          "tepeler",
+          "dipler"
+         ],
+         "description": "4 saatlik grafik.",
+         "properties": {
+          "yon": {
+           "type": "string",
+           "enum": [
+            "yukselen",
+            "alcalan",
+            "yatay",
+            "belirsiz"
+           ]
+          },
+          "tepeler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki tepe, eskiden yeniye."
+          },
+          "dipler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki dip, eskiden yeniye."
+          }
+         }
+        },
+        "alt": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "yon",
+          "tepeler",
+          "dipler"
+         ],
+         "description": "1 saatlik grafik.",
+         "properties": {
+          "yon": {
+           "type": "string",
+           "enum": [
+            "yukselen",
+            "alcalan",
+            "yatay",
+            "belirsiz"
+           ]
+          },
+          "tepeler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki tepe, eskiden yeniye."
+          },
+          "dipler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki dip, eskiden yeniye."
+          }
+         }
+        }
+       }
+      },
+      "rejim": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "rejim",
+        "kanit",
+        "uygun",
+        "bekledigi"
+       ],
+       "description": "Adım 3. Piyasanın rejimi ve stratejine uygun olup olmadığı.",
+       "properties": {
+        "rejim": {
+         "type": "string",
+         "enum": [
+          "duzenli_trend",
+          "yatay",
+          "asiri_uzama",
+          "donus",
+          "belirsiz"
+         ]
+        },
+        "kanit": {
+         "type": "string",
+         "minLength": 1,
+         "description": "Rakamlarla: hareketin büyüklüğü, RSI, ATR'deki değişim, likidasyon dalgası."
+        },
+        "uygun": {
+         "type": "string",
+         "enum": [
+          "evet",
+          "hayir"
+         ]
+        },
+        "bekledigi": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "tur",
+          "fiyat",
+          "saat"
+         ],
+         "description": "Uygun değilse neyi beklediğin. Fiyat beklersen sistem oraya alarm kurar, saat beklersen o saatte çağrılırsın. Uygunsa tur yok olur. Uygun değilken yok yalnızca paritede açık pozisyonun varsa seçilebilir.",
+         "properties": {
+          "tur": {
+           "type": "string",
+           "enum": [
+            "fiyat",
+            "saat",
+            "yok"
+           ]
+          },
+          "fiyat": {
+           "type": "number",
+           "description": "tur fiyat ise beklenen fiyat, değilse 0."
+          },
+          "saat": {
+           "type": "string",
+           "description": "tur saat ise 22.11.2026 18:00 biçiminde, değilse boş."
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "BTCUSDT": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "yapi",
+      "rejim"
+     ],
+     "properties": {
+      "yapi": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "ust",
+        "alt"
+       ],
+       "description": "Adım 2. Yönü kendi yazdığın tepe ve diplerle çelişemez.",
+       "properties": {
+        "ust": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "yon",
+          "tepeler",
+          "dipler"
+         ],
+         "description": "4 saatlik grafik.",
+         "properties": {
+          "yon": {
+           "type": "string",
+           "enum": [
+            "yukselen",
+            "alcalan",
+            "yatay",
+            "belirsiz"
+           ]
+          },
+          "tepeler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki tepe, eskiden yeniye."
+          },
+          "dipler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki dip, eskiden yeniye."
+          }
+         }
+        },
+        "alt": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "yon",
+          "tepeler",
+          "dipler"
+         ],
+         "description": "1 saatlik grafik.",
+         "properties": {
+          "yon": {
+           "type": "string",
+           "enum": [
+            "yukselen",
+            "alcalan",
+            "yatay",
+            "belirsiz"
+           ]
+          },
+          "tepeler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki tepe, eskiden yeniye."
+          },
+          "dipler": {
+           "type": "array",
+           "items": {
+            "type": "number"
+           },
+           "minItems": 2,
+           "maxItems": 2,
+           "description": "Son iki dip, eskiden yeniye."
+          }
+         }
+        }
+       }
+      },
+      "rejim": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "rejim",
+        "kanit",
+        "uygun",
+        "bekledigi"
+       ],
+       "description": "Adım 3. Piyasanın rejimi ve stratejine uygun olup olmadığı.",
+       "properties": {
+        "rejim": {
+         "type": "string",
+         "enum": [
+          "duzenli_trend",
+          "yatay",
+          "asiri_uzama",
+          "donus",
+          "belirsiz"
+         ]
+        },
+        "kanit": {
+         "type": "string",
+         "minLength": 1,
+         "description": "Rakamlarla: hareketin büyüklüğü, RSI, ATR'deki değişim, likidasyon dalgası."
+        },
+        "uygun": {
+         "type": "string",
+         "enum": [
+          "evet",
+          "hayir"
+         ]
+        },
+        "bekledigi": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "tur",
+          "fiyat",
+          "saat"
+         ],
+         "description": "Uygun değilse neyi beklediğin. Fiyat beklersen sistem oraya alarm kurar, saat beklersen o saatte çağrılırsın. Uygunsa tur yok olur. Uygun değilken yok yalnızca paritede açık pozisyonun varsa seçilebilir.",
+         "properties": {
+          "tur": {
+           "type": "string",
+           "enum": [
+            "fiyat",
+            "saat",
+            "yok"
+           ]
+          },
+          "fiyat": {
+           "type": "number",
+           "description": "tur fiyat ise beklenen fiyat, değilse 0."
+          },
+          "saat": {
+           "type": "string",
+           "description": "tur saat ise 22.11.2026 18:00 biçiminde, değilse boş."
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "kapanan_islemler": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "pozisyon_no",
+     "sinif",
+     "aciklama"
+    ],
+    "properties": {
+     "pozisyon_no": {
+      "type": "integer"
+     },
+     "sinif": {
+      "type": "string",
+      "enum": [
+       "tez_dogruydu",
+       "tez_yanlisti",
+       "zamanlama_yanlisti",
+       "koruma_yanlis_yerdeydi",
+       "beklenmedik_olay"
+      ]
+     },
+     "aciklama": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Bir cümle."
+     }
+    }
+   },
+   "description": "Adım 4. Hesap bölümünde sınıflandırılmayı bekleyen her pozisyon bir kez. Bekleyen yoksa boş liste."
+  },
+  "analiz": {
+   "type": "string",
+   "description": "Adımlara sığmayan değerlendirmen ve kararının gerekçesi."
+  },
+  "eylemler": {
+   "type": "array",
+   "items": {
+    "anyOf": [
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Paritenin kaldıracını ayarlar. Kaldıraç long ve short için ortaktır ve sonraki girişlere uygulanır. Paritede açık pozisyon varken düşürülemez.",
+      "required": [
+       "tip",
+       "sembol",
+       "kaldirac"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "kaldirac_ayarla"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "kaldirac": {
+        "type": "integer"
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Piyasa fiyatından giriş. marjin_usd ayıracağın marjin, kaldirac verirsen önce ayarlanacak kaldıraç. tp ya da tp_kademeleri, sl ve iz_yuzde bu girişin miktarına kurulacak korumalar.",
+      "required": [
+       "tip",
+       "sembol",
+       "yon",
+       "marjin_usd",
+       "karsi_kanit",
+       "risk_beyani",
+       "gecersizlik"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "piyasa_giris"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "marjin_usd": {
+        "type": "number"
+       },
+       "karsi_kanit": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Girişe aykırı en güçlü veri ve neden ağır basmadığı. Boş ya da yok olamaz."
+       },
+       "risk_beyani": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "yuzde",
+         "gerekce"
+        ],
+        "description": "SL'de kaybedeceğin tutarın özkaynağa oranı, aynı yöndeki açık pozisyonla birlikte, ve bu riski neden aldığın.",
+        "properties": {
+         "yuzde": {
+          "type": "number"
+         },
+         "gerekce": {
+          "type": "string",
+          "minLength": 1
+         }
+        }
+       },
+       "gecersizlik": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "metin",
+         "fiyat"
+        ],
+        "description": "Tezini bozan koşul ve fiyatı. Emir dolmadan fiyat oraya değerse emir iptal olur, pozisyon açıkken değerse çağrılırsın.",
+        "properties": {
+         "metin": {
+          "type": "string",
+          "minLength": 1
+         },
+         "fiyat": {
+          "type": "number"
+         }
+        }
+       },
+       "kaldirac": {
+        "type": "integer"
+       },
+       "tp": {
+        "type": "number"
+       },
+       "tp_kademeleri": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "fiyat",
+          "yuzde"
+         ],
+         "properties": {
+          "fiyat": {
+           "type": "number"
+          },
+          "yuzde": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "sl": {
+        "type": "number"
+       },
+       "iz_yuzde": {
+        "type": "number"
+       },
+       "son_stoptan_farki": {
+        "type": "string",
+        "description": "Bu parite ve yöndeki son işlemin stopla kapandıysa bu girişin ondan farkı. O durumda zorunlu."
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bekleyen giriş emri. tur limit, kirilim ya da geri_cekilme, fiyat emrin fiyatı ya da tetiği. gecerlilik_dk emrin dolmazsa iptal olacağı süre. marjin_usd ayıracağın marjin, kaldirac verirsen önce ayarlanacak kaldıraç. tp ya da tp_kademeleri, sl ve iz_yuzde bu girişin miktarına kurulacak korumalar.",
+      "required": [
+       "tip",
+       "sembol",
+       "yon",
+       "tur",
+       "fiyat",
+       "marjin_usd",
+       "karsi_kanit",
+       "risk_beyani",
+       "gecersizlik"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "emir_ver"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "tur": {
+        "type": "string",
+        "enum": [
+         "limit",
+         "kirilim",
+         "geri_cekilme"
+        ]
+       },
+       "fiyat": {
+        "type": "number"
+       },
+       "marjin_usd": {
+        "type": "number"
+       },
+       "karsi_kanit": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Girişe aykırı en güçlü veri ve neden ağır basmadığı. Boş ya da yok olamaz."
+       },
+       "risk_beyani": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "yuzde",
+         "gerekce"
+        ],
+        "description": "SL'de kaybedeceğin tutarın özkaynağa oranı, aynı yöndeki açık pozisyonla birlikte, ve bu riski neden aldığın.",
+        "properties": {
+         "yuzde": {
+          "type": "number"
+         },
+         "gerekce": {
+          "type": "string",
+          "minLength": 1
+         }
+        }
+       },
+       "gecersizlik": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "metin",
+         "fiyat"
+        ],
+        "description": "Tezini bozan koşul ve fiyatı. Emir dolmadan fiyat oraya değerse emir iptal olur, pozisyon açıkken değerse çağrılırsın.",
+        "properties": {
+         "metin": {
+          "type": "string",
+          "minLength": 1
+         },
+         "fiyat": {
+          "type": "number"
+         }
+        }
+       },
+       "kaldirac": {
+        "type": "integer"
+       },
+       "tp": {
+        "type": "number"
+       },
+       "tp_kademeleri": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "fiyat",
+          "yuzde"
+         ],
+         "properties": {
+          "fiyat": {
+           "type": "number"
+          },
+          "yuzde": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "sl": {
+        "type": "number"
+       },
+       "iz_yuzde": {
+        "type": "number"
+       },
+       "gecerlilik_dk": {
+        "type": "integer"
+       },
+       "son_stoptan_farki": {
+        "type": "string",
+        "description": "Bu parite ve yöndeki son işlemin stopla kapandıysa bu girişin ondan farkı. O durumda zorunlu."
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bekleyen bir limit emrin fiyatını değiştirir, miktarı aynı kalır. numara, sembol ve yon emrin hesaptaki değerleridir.",
+      "required": [
+       "tip",
+       "numara",
+       "sembol",
+       "yon",
+       "fiyat"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "emir_degistir"
+       },
+       "numara": {
+        "type": "integer"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "fiyat": {
+        "type": "number"
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bekleyen bir giriş emrini ya da bir koruma emrini iptal eder. numara, sembol ve yon emrin hesaptaki değerleridir.",
+      "required": [
+       "tip",
+       "numara",
+       "sembol",
+       "yon"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "emir_iptal"
+       },
+       "numara": {
+        "type": "integer"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Açık bir pozisyona koruma emirleri ekler: tp ya da tp_kademeleri, sl ve iz_yuzde. yuzde pozisyonun yüzde kaçını koruyacaklarıdır, vermezsen tamamı. Tamamını koruyan emir tetiklendiği an pozisyonda kalan miktarın tamamını kapatır. tp_kademeleri en fazla dört kademedir, kademelerin yuzde alanı korunan miktarın yüzde kaçını kapatacaklarıdır.",
+      "required": [
+       "tip",
+       "sembol",
+       "yon"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "koruma_ekle"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "tp": {
+        "type": "number"
+       },
+       "tp_kademeleri": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "additionalProperties": false,
+         "required": [
+          "fiyat",
+          "yuzde"
+         ],
+         "properties": {
+          "fiyat": {
+           "type": "number"
+          },
+          "yuzde": {
+           "type": "number"
+          }
+         }
+        }
+       },
+       "sl": {
+        "type": "number"
+       },
+       "iz_yuzde": {
+        "type": "number"
+       },
+       "yuzde": {
+        "type": "number"
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bir koruma emrinin seviyesini değiştirir. TP ve SL için fiyat, iz için iz_yuzde verirsin, miktar aynı kalır. Önce yeni emir kurulur, sonra eskisi iptal edilir. numara, sembol ve yon emrin hesaptaki değerleridir.",
+      "required": [
+       "tip",
+       "numara",
+       "sembol",
+       "yon"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "koruma_degistir"
+       },
+       "numara": {
+        "type": "integer"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "fiyat": {
+        "type": "number"
+       },
+       "iz_yuzde": {
+        "type": "number"
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Bir pozisyonu piyasa fiyatından kapatır. yuzde verirsen o kadarını kapatır, vermezsen tamamını. Pozisyon tamamen kapanınca ona bağlı koruma emirleri iptal olur.",
+      "required": [
+       "tip",
+       "sembol",
+       "yon"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "pozisyon_kapat"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "yon": {
+        "type": "string",
+        "enum": [
+         "long",
+         "short"
+        ]
+       },
+       "yuzde": {
+        "type": "number"
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "sembol, fiyat ve not ile bir fiyat alarmı kurar.",
+      "required": [
+       "tip",
+       "sembol",
+       "fiyat",
+       "not"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "alarm_kur"
+       },
+       "sembol": {
+        "type": "string",
+        "enum": [
+         "XAUUSDT",
+         "BTCUSDT"
+        ]
+       },
+       "fiyat": {
+        "type": "number"
+       },
+       "not": {
+        "type": "string"
+       }
+      }
+     },
+     {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "alarm_no ile bir alarmı iptal eder.",
+      "required": [
+       "tip",
+       "alarm_no"
+      ],
+      "properties": {
+       "tip": {
+        "type": "string",
+        "const": "alarm_iptal"
+       },
+       "alarm_no": {
+        "type": "integer"
+       }
+      }
+     }
+    ]
+   }
+  },
+  "not_defteri": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "plan",
+    "seviyeler_notu",
+    "gundem"
+   ],
+   "description": "Not defterin. Defter sınamasında planı geçerli dediysen planın metni ve bozulma koşulu aynen taşınır, buradaki planından yalnızca geçerlilik saati alınır.",
+   "properties": {
+    "plan": {
+     "type": "object",
+     "additionalProperties": false,
+     "required": [
+      "metin",
+      "bozulma",
+      "gecerlilik"
+     ],
+     "properties": {
+      "metin": {
+       "type": "string",
+       "maxLength": 300,
+       "description": "İki üç cümle: hangi koşulda ne yapacağın."
+      },
+      "bozulma": {
+       "type": "string",
+       "maxLength": 100,
+       "description": "Planı bozan tek koşul, mümkünse bir fiyatla."
+      },
+      "gecerlilik": {
+       "type": "string",
+       "pattern": "^[0-3][0-9]\\.[01][0-9]\\.20[0-9]{2} [0-2][0-9]:[0-5][0-9]$",
+       "description": "Planın geçerli olduğu son an, Türkiye saatiyle, 22.11.2026 18:00 biçiminde."
+      }
+     }
+    },
+    "seviyeler_notu": {
+     "type": "string",
+     "maxLength": 600,
+     "description": "Kilit seviyeler ve neden önemli oldukları. Tepe ve dip rakamlarını sistem pariteler alanından taşır."
+    },
+    "gundem": {
+     "type": "string",
+     "maxLength": 500,
+     "description": "Etkisi süren haberler ve yaklaşan olaylar, tarihleriyle."
+    }
+   }
+  },
+  "ozet": {
+   "type": "string",
+   "description": "Tek cümle."
+  },
+  "sonraki_cagri_dk": {
+   "type": "integer"
+  },
+  "yoneticiye_cevap": {
+   "type": "string",
+   "description": "Yöneticinin sorularına, verdiği haberlere ve araştırmanı istediği konulara cevabın. Böyle bir müdahale yoksa boş bırak."
+  },
+  "yoneticiye_oneri": {
+   "type": "string",
+   "description": "İşlemlerinde gördüğün bir örüntü ve tarzına önerin. Yoksa boş bırak. Deftere değil buraya yazılır."
+  }
+ }
+}

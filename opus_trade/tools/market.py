@@ -48,7 +48,8 @@ from ..market.binance.rest import BASE_URL, BinanceRest
 from ..market.source import MarketData, MarketDataError, RatioKind
 from ..storage.ledger import Ledger
 from ..storage.notes import NotesRepo
-from ..strategy.llm.schema import REGIMES, VERDICTS
+from ..strategy.llm.steps.closed import VERDICTS
+from ..strategy.llm.steps.structure import REGIMES
 from ..strategy.llm.cards import indicator_summary, LABELS
 from ..strategy.llm.texts import REASONS, local
 
@@ -518,16 +519,18 @@ def gecmis_kararlarim(adet: int = 20, atla: int = 0, analiz_dahil: bool = False)
         if not k:
             continue
         done = "; ".join(x["message"] for x in json.loads(results)) or "eylem yok"
-        # Şablon 6'dan önceki kararlar görüş ve güven, sonrakiler parite başına rejim taşır.
+        # Şablon 6'dan önceki kararlar görüş ve güven, sonrakiler yapı okumalı
+        # türde parite başına rejim taşır. Serbest türün kararında ikisi de yoktur.
         if "gorus" in k:
-            head = f"görüş {k['gorus']}, güven {k['guven']}"
+            heads = [f"görüş {k['gorus']}, güven {k['guven']}"]
         else:
-            head = "; ".join(f"{sym} {REGIMES.get(p['rejim']['rejim'], p['rejim']['rejim'])}, "
-                             f"{'uygun' if p['rejim']['uygun'] == 'evet' else 'uygun değil'}"
-                             for sym, p in k.get("pariteler", {}).items())
+            heads = [f"{sym} {REGIMES.get(p['rejim']['rejim'], p['rejim']['rejim'])}, "
+                     f"{'uygun' if p['rejim']['uygun'] == 'evet' else 'uygun değil'}"
+                     for sym, p in k.get("pariteler", {}).items()]
+            heads = ["; ".join(heads)] if heads else []
         if r.get("rejection"):
-            head += ", kontrol hatasıyla reddedildi"
-        text = f"{_clock(t)}, {head}\n  özet: {k['ozet']}\n  sonuç: {done}"
+            heads.append("kontrol hatasıyla reddedildi")
+        text = ", ".join([_clock(t), *heads]) + f"\n  özet: {k['ozet']}\n  sonuç: {done}"
         if analiz_dahil:
             text += f"\n  analiz: {k['analiz']}"
         parts.append(text)

@@ -1,0 +1,719 @@
+{
+ "adim1_ayni_plan": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 1, plan. Neden: Planın bozuldu dedin, aynı planı yeniden yazamazsın. Bugünkü veriyle yeni bir plan yaz."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim1_bozuldu_emir_iptal": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [
+    "Ref(number=2, symbol='XAUUSDT', side=<Side.LONG: 'long'>)"
+   ],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim1_bozuldu_kapatmadan": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 1, pozisyonlar. Neden: BTCUSDT short pozisyonunun tezi bozuldu dedin ama aynı kararda pozisyon_kapat ile tamamını kapatmadın. Ya kapat ya da sınamanı düzelt."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim1_eksik_emir": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 1, emirler. Neden: #2 XAUUSDT long bekleyen giriş emri listede yok. Her bekleyen giriş emrini sına."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim1_fazla_pozisyon": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 1, pozisyonlar. Neden: Açık XAUUSDT long pozisyonun yok."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim1_gecerli_plan_tasinir": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [
+    "Planı geçerli dediğin için metni ve bozulma koşulu aynen taşındı, yeni yazdığın plandan yalnızca geçerlilik saati alındı."
+   ],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim2_celiski": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": null
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 2, XAUUSDT 1 saatlik yapı. Neden: yönü yükselen seçtin ama yazdığın dipler 4055.0 ve 4045.0, yani yükselmiyor.",
+    "Kontrol: adım 3, XAUUSDT rejim. Neden: düzenli trend seçtin ama 2. adımda uyum yok: 4 saatlik yön yükselen, 1 saatlik son tepeler 4080.0 ve 4090.0, son dipler 4055.0 ve 4045.0. Düzenli trend için üst yön belli olmalı ve alt aralıkta o yönde ilk yapı oluşmalı."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim3_beklenti_yok": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 1, pozisyonlar. Neden: Açık BTCUSDT short pozisyonun yok.",
+    "Kontrol: adım 3, XAUUSDT bekledigi. Neden: rejimi uygun bulmadın ama neyi beklediğini yazmadın. Bir fiyat ya da bir saat yaz. Paritede açık pozisyonun yoksa yok seçilemez."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": false
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim3_saat": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": 1795561200
+  }
+ },
+ "adim3_uygun_olmayan_rejim": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 3, BTCUSDT rejim. Neden: uygun dedin ama yatay stratejinin çalıştığı rejimlerden değil. Uygun rejimler: düzenli trend."
+   ],
+   "expectations": [],
+   "fit": {
+    "BTCUSDT": true,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim3_uyumsuz_trend": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": null
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 3, XAUUSDT rejim. Neden: düzenli trend seçtin ama 2. adımda uyum yok: 4 saatlik yön yükselen, 1 saatlik son tepeler 4080.0 ve 4090.0, son dipler 4055.0 ve 4050.0. Düzenli trend için üst yön belli olmalı ve alt aralıkta o yönde ilk yapı oluşmalı."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "adim4_eksik": {
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 4, kapanan işlemler. Neden: Sınıflandırılmayı bekleyen pozisyonlar listede yok: #5."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "gecen_karar": {
+  "entry": null,
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_ayni_kararda_ikinci": {
+  "entry": "Kontrol: adım 5, aynı yönde ekleme. Neden: XAUUSDT long yönünde zaten bekleyen bir giriş var. Aynı yönde ikinci giriş ilk pozisyonun stopu girişe taşınmadan verilmez."
+ },
+ "giris_ekleme_bekleyen": {
+  "entry": "Kontrol: adım 5, aynı yönde ekleme. Neden: XAUUSDT long yönünde zaten bekleyen bir giriş var. Aynı yönde ikinci giriş ilk pozisyonun stopu girişe taşınmadan verilmez.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_ekleme_iptal_edilen": {
+  "entry": null,
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [
+    "Ref(number=2, symbol='XAUUSDT', side=<Side.LONG: 'long'>)"
+   ],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_ekleme_stop": {
+  "entry": "Kontrol: adım 5, aynı yönde ekleme. Neden: açık XAUUSDT long pozisyonunun stopu girişe, 4060.0, taşınmadı. Önce stopu girişe taşı.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 1, emirler. Neden: #2 XAUUSDT long diye bekleyen bir giriş emrin yok. Yalnızca hesap bölümündeki bekleyen giriş emirlerini yaz.",
+    "Kontrol: adım 1, pozisyonlar. Neden: XAUUSDT long pozisyonu listede yok. Her açık pozisyonu sına.",
+    "Kontrol: adım 1, pozisyonlar. Neden: Açık BTCUSDT short pozisyonun yok."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_ekleme_stop_giriste": {
+  "entry": null,
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [
+    "Kontrol: adım 1, emirler. Neden: #2 XAUUSDT long diye bekleyen bir giriş emrin yok. Yalnızca hesap bölümündeki bekleyen giriş emirlerini yaz.",
+    "Kontrol: adım 1, pozisyonlar. Neden: XAUUSDT long pozisyonu listede yok. Her açık pozisyonu sına.",
+    "Kontrol: adım 1, pozisyonlar. Neden: Açık BTCUSDT short pozisyonun yok."
+   ],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_gecersizlik": {
+  "entry": "Kontrol: adım 5, geçersizlik. Neden: long girişte geçersizlik fiyatı girişin altında olmalı. Giriş 4070.0, geçersizlik 4080.0.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_karsi_kanit": {
+  "entry": "Kontrol: adım 5, karşı kanıt. Neden: girişe aykırı en güçlü veriyi ve neden ağır basmadığını yaz. Boş ya da yok anlamında bir cevap kabul edilmez.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_rejim": {
+  "entry": "Kontrol: adım 3, BTCUSDT rejim. Neden: bu çağrıda rejimi stratejine uygun bulmadın, giriş yapamazsın.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_risk": {
+  "entry": "Kontrol: adım 5, risk beyanı. Neden: beyanın yüzde 0,50, gerçek risk yüzde 1,00: SL'deki zarar ve komisyon 0,12 dolar, özkaynak 12,00 dolar. Beyanını gerçek rakamla yaz ya da girişi değiştir.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_risk_slsiz": {
+  "entry": "Kontrol: adım 5, risk beyanı. Neden: beyanın yüzde 3,00, gerçek risk yüzde 17,04: SL olmadığı için marjinin tamamı ve komisyon 2,05 dolar, özkaynak 12,00 dolar. Beyanını gerçek rakamla yaz ya da girişi değiştir.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_seviye": {
+  "entry": "Kontrol: adım 5, giriş seviyesi. Neden: long giriş 4050.0, yazdığın son alt aralık dibi 4055.0 ya da altında. Giriş o dibin üstünde olur. Önceki dip stopunun yeridir, girişin değil.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_sl_seviye": {
+  "entry": "Kontrol: adım 5, giriş seviyesi. Neden: SL 4060.0, son alt aralık dibi 4055.0 ya da üstünde. Stop o dibin ötesinde durur.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_son_stop": {
+  "entry": "Kontrol: adım 5, son stoptan farkı. Neden: XAUUSDT long yönündeki son işlemin stopla kapandı. Bu girişin ondan farkını son_stoptan_farki alanına yaz.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ },
+ "giris_yon": {
+  "entry": "Kontrol: adım 5, XAUUSDT yön. Neden: üst aralığın yönünü yükselen yazdın, short giriş bununla çelişiyor.",
+  "review": {
+   "aligned": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "cancels": [],
+   "errors": [],
+   "expectations": [
+    [
+     "BTCUSDT",
+     61500.0
+    ]
+   ],
+   "fit": {
+    "BTCUSDT": false,
+    "XAUUSDT": true
+   },
+   "notes": [],
+   "trend": {
+    "BTCUSDT": null,
+    "XAUUSDT": "long"
+   },
+   "wait_until": null
+  }
+ }
+}

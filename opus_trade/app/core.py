@@ -62,7 +62,8 @@ from ..storage.notifications import NotificationRepo
 from ..storage.profiles import ProfileRepo
 from ..storage.runtime_state import StateRepo
 from ..strategy.base import Deps
-from ..strategy.llm.client import ClaudeCliClient, LLMClient
+from ..llm.base import LLMClient
+from ..llm.claude_cli import ClaudeCliClient
 
 _ROOT = Path(__file__).resolve().parents[2]
 

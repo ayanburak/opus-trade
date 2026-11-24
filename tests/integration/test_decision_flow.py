@@ -18,7 +18,7 @@ import copy
 from opus_trade.domain.models import Side
 from opus_trade.market.models import Candle
 from opus_trade.strategy.llm import strategy as llm_strategy
-from opus_trade.strategy.llm.client import LLMResult
+from opus_trade.llm.base import LLMResult
 from tests.integration.harness import SOL, T, Api
 
 LLM = {"strategy": "llm", "params": {"min_wait": 15}, "symbols": [SOL], "balance": 100}

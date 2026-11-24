@@ -540,6 +540,7 @@ class ProfileRunner:
             limited = self.access.report_error(text)
             self.retry_at = now + self.retry_s
             record = {"tools": e.tools} if getattr(e, "tools", None) else {}
+            record.update(getattr(e, "record", None) or {})
             self.journal.add(self.pid, self.version.id, now, stored, [], record, text, None)
             self.state.system_event(self.pid, now, "decide_error", "Karar alınamadı.",
                                     {"error": text, "limit": limited})

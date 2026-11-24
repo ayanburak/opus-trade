@@ -249,3 +249,23 @@ def test_public_account_hides_entry_notes_and_origin():
              "orders": [{"id": 2, "note": {"reason": {}}, "by_admin": False}]}
     out = public.public_state(state)
     assert out == {"cash": 1, "positions": [{"id": 1}], "orders": [{"id": 2}]}
+
+
+@run
+async def test_free_kind_record_without_badge_passes_and_team_tasks_stay_inside(api):
+    """Serbest türün kaydında rozet ve pariteler yoktur, iki API de onu sorunsuz verir. Alt görevlerin metni yöneticinin
+    panelinde görünür, dışarı çıkmaz. Alt görevlerin araçları alt işaretiyle iki tarafta da görünür."""
+    pub = Public(api)
+    pid, r = await api.running(ECHO)
+    await publish(api, pid)
+    await api.step(r)
+    team = [{"role": "haiku", "model": "haiku", "task": "GIZLI-GOREV", "result": "GIZLI-SONUC", "error": None}]
+    Echo.script = [Decision(record={"summary": "Serbest.", "decision": {"ozet": "Serbest.", "kapanan_islemler": []},
+                                    "team": team, "tools": [{"name": "WebSearch", "title": "fed", "sub": True}]})]
+    r.wake("timer")
+    await api.step(r, 1)
+    [inside] = [e for e in await api.call("GET", f"/profiles/{pid}/journal") if e["record"].get("summary") == "Serbest."]
+    assert inside["record"]["team"] == team and "badge" not in inside["record"]
+    [out] = [e for e in await pub.get("/journal") if e["record"].get("summary") == "Serbest."]
+    assert "team" not in out["record"] and "GIZLI" not in json.dumps(out, ensure_ascii=False)
+    assert [t["sub"] for t in await pub.get(f"/journal/{out['id']}/tools")] == [1]

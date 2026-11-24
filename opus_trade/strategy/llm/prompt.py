@@ -1,19 +1,20 @@
 """
 file: prompt.py
-importable: TEMPLATE_VERSION, system_prompt, wake_text, build_prompt
+importable: system_prompt, wake_text, build_prompt
 
 Opus'un talimatı ve her çağrının istemi. system_prompt() profilin bakiyesi,
-pariteleri, yapı aralıkları, uygun rejimleri, bekleme aralığı ve tarz metniyle
-talimatı kurar. build_prompt() bir çağrının istemini kurar: önce dünün
-düşünceleri, yani yönetici, not defteri ve son kararlar, sonra bugünün
-gerçekleri, yani hesap, piyasa saatleri ve parite kartları. TEMPLATE_VERSION
-talimatın ortak çekirdeğinin sürümüdür. Karar şeması schema.py'dedir.
+pariteleri, bekleme aralığı, tarz metni ve strateji türünün hedef metni ile
+karar adımlarıyla talimatı kurar. build_prompt() bir çağrının istemini kurar:
+önce dünün düşünceleri, yani yönetici, not defteri ve son kararlar, sonra
+bugünün gerçekleri, yani hesap, piyasa saatleri ve parite kartları. Karar
+şeması schema.py'de, talimatın sürümü strateji türünün kaydındadır.
 
 description: Opus'un talimatı ve istemi.
 """
 
 # NOTE: Talimatın çekirdeği bütün LLM profillerinde ortaktır, talimat/
-# cekirdek.md. Değişince TEMPLATE_VERSION artırılır, günlük her çağrının
+# cekirdek.md. Türe özgü olan yalnızca hedef metni ve karar adımlarıdır.
+# Talimat değişince değişen türün sürümü artırılır, günlük her çağrının
 # hangi sürümle yapıldığını kaydeder ve sonuçlar sürüme göre ayrılarak
 # incelenir. Hiçbir profil sıfırlanmaz.
 #
@@ -43,13 +44,12 @@ from ...domain.trading import AccountEvent, AccountState, Order, OrderType, Posi
 from ...triggers.base import Fire
 from ..base import Context, Thesis, Wake
 from . import notebook as nbk
-from .checks import RISK_SLACK
 from .hours import hours_text, releases_text
-from .schema import REGIMES, VERDICTS
-from .texts import (INTERVAL_NAMES, ORDER_NAMES, REASONS, TZ_LABEL, clock, date_text, event_text, fire_text,
+from ...team.roles import ROLE_KEYS, ROLES
+from .steps.base import Steps
+from .steps.structure import REGIMES
+from .texts import (ORDER_NAMES, REASONS, TZ_LABEL, clock, date_text, event_text, fire_text,
                     guard_text, price)
-
-TEMPLATE_VERSION = 7
 
 # İstemde emrin ve pozisyonun yanında yazılan risk gerekçesinin en uzun hali.
 _REASON_SHOWN = 160
@@ -72,22 +72,43 @@ def _symbol_table(specs: list[SymbolSpec]) -> str:
     return "\n".join(lines)
 
 
-def _regimes_text(structure: tuple[str, str]) -> str:
-    top, low = INTERVAL_NAMES[structure[0]], INTERVAL_NAMES[structure[1]]
-    return f"""- Düzenli trend: {top} grafikte tepe ve dipler aynı yönde ilerliyor, {low} grafik bu yönde yapı \
-kuruyor, hareketler olağan oynaklık içinde.
-- Yatay: Tepe ve dipler bir bant içinde, yükselen ya da alçalan bir sıra yok.
-- Aşırı uzama: Fiyat kısa sürede olağanın çok ötesine gitmiş: {top} ATR'nin birkaç katı hareket, uç RSI \
-değerleri, büyük likidasyon dalgaları. Ardından çoğu zaman sert ve iki yönlü hareket gelir.
-- Dönüş: Trendin son yapısı bozulmuş, ters yönde ilk tepe ve dipler oluşuyor, yeni yön henüz yerleşmemiş.
-- Belirsiz: Veri bu dört durumdan birini açıkça göstermiyor.
+# Nasıl karar verirsin bölümü adımlardan kurulur: giriş paragrafı, numaralı
+# adımlar, girişlerin denetimi, ortak paragraf ve adımların ek bölümleri.
+def _steps_text(steps: Steps, releases: str) -> str:
+    rules = steps.entry_rules()
+    parts = [f"""Cevabını şemanın sırasıyla yazarsın, bu sıra kararının sırasıdır. İlk {steps.count_word()} adım \
+atlanamayan kontrollerdir. Bir kontrolde yazdığın seni bağlar: eylemin onunla çelişirse sistem eylemini reddeder. Bu \
+adımların içinde yön, seviye, zamanlama, hedef, araştırma ve bekleme süresi tamamen senin kararındır.""",
+             "\n".join(steps.numbered())]
+    if rules:
+        parts.append(rules)
+    parts.append(f"""Adımlardan sonra analizini, eylemlerini, not defterini ve özetini yazarsın. Her çağrıda bütün \
+pariteleri değerlendirirsin, bir pariteyi değerlendirmek orada işlem açman gerektiği anlamına gelmez. Fiyatı yalnızca \
+grafik hareket ettirmez: haberler, makro veriler, merkez bankası kararları ve büyük piyasaların açılış ve kapanışları \
+da etkiler. ABD'nin ekonomik verileri ve Fed kararları açıklandığı günlerde şu saatlerde gelir: {releases}.""")
+    parts += steps.sections()
+    return "\n\n".join(parts)
 
-Rejimlerin rakam eşiği yoktur, rakamları kanıt alanında sen yazarsın."""
+
+# Ekip aracının satırı yalnızca kotası olan rolleri sayar. Günlük sınırı
+# araç her cevabında kalan hak olarak söyler, talimatta rakamı yoktur.
+def _team_text(team: dict[str, int]) -> str:
+    roles = [ROLES[r] for r in ROLE_KEYS if team.get(r, 0) > 0]
+    if not roles:
+        return ""
+    lines = "\n".join(f"  - {r.key}, {r.name}, en fazla {team[r.key]}: {r.description}" for r in roles)
+    return f"""- ekip aracıyla gorev_ver: Araştırma ve analiz görevlerini alt ajanlara devreder. Görevler aynı anda \
+çalışır, her alt ajan web'de arar, sayfa okur ve piyasa araçlarını kullanır, sana bir rapor getirir. Hesabına \
+dokunamazlar. Bu, kendi bağlamını uzun sayfalarla doldurmadan geniş bir araştırma yapmanı sağlar. Alt ajan istemini \
+görmez, görevi açık ve kendi içinde yeterli yazarsın. Bir çağrıda verebileceğin görevler, role göre:
+{lines}
+  Günlük bir üst sınır da vardır, araç kalan hakkını her cevabında söyler. Görevler sürerken çağrının süresi işler, \
+kararını yazmaya zaman bırakırsın.
+"""
 
 
 def system_prompt(balance: float, specs: list[SymbolSpec], fees: FeeSchedule, style: str, min_wait: int,
-                  max_wait: int, step_limit: int, structure: tuple[str, str], fit_regimes: tuple[str, ...],
-                  now: int) -> str:
+                  max_wait: int, step_limit: int, steps: Steps, goal: str, team: dict[str, int], now: int) -> str:
     """Opus'un talimatını döndürür.
 
     Args:
@@ -98,23 +119,22 @@ def system_prompt(balance: float, specs: list[SymbolSpec], fees: FeeSchedule, st
         min_wait: Opus'un seçebileceği en kısa bekleme, dakika.
         max_wait: En uzun bekleme, dakika.
         step_limit: Opus'a bildirilen araç adımı sınırı.
-        structure: Profilin üst ve alt yapı aralığı.
-        fit_regimes: Profilin uygun rejimleri, REGIMES anahtarları.
+        steps: Strateji türünün karar adımları.
+        goal: Hedefin bölümünün metni, strateji türünündür.
+        team: Rolden bir çağrıdaki ekip görevi kotasına. Hepsi sıfırsa ekip aracı anlatılmaz.
         now: Şu an, ABD verilerinin Türkiye saatiyle açıklanma saatleri için.
     """
-    top, low = INTERVAL_NAMES[structure[0]], INTERVAL_NAMES[structure[1]]
-    fit = ", ".join(REGIMES[x] for x in fit_regimes)
-    verdicts = ", ".join(VERDICTS.values())
     style_part = f"## Çalışma tarzın\n\n{style}\n\n" if style else ""
     releases = releases_text(datetime.fromtimestamp(now, timezone.utc))
+    carried = steps.notebook_note()[0]
+    carried = f" {carried}" if carried else ""
+    alarm_rule = f" {steps.alarm_rule()}" if steps.alarm_rule() else ""
     return f"""Bir Binance USDT sürekli vadeli hesabını yönetiyorsun. Hesabın başlangıç bakiyesi {balance:g} dolar. \
 Fiyatlar, fonlama oranları ve piyasa verileri Binance'in gerçek ve canlı verileridir. Bütün saatler {TZ_LABEL}.
 
 ## Hedefin
 
-Amacın özkaynağını kalıcı olarak büyütmek. Kazanç iyi kurulumlarda bilerek alınan riskten gelir, kayıp zayıf \
-kurulumlarda alınan riskten. Yüzde 50'lik bir kaybı geri kazanmak için yüzde 100 kazanç gerekir. Bakiyenin \
-sıfırlanması hesabın kapanması demektir.
+{goal}
 
 ## Öncelik sırası
 
@@ -127,59 +147,7 @@ sıfırlanması hesabın kapanması demektir.
 
 ## Nasıl karar verirsin
 
-Cevabını şemanın sırasıyla yazarsın, bu sıra kararının sırasıdır. İlk beş adım atlanamayan kontrollerdir. Bir \
-kontrolde yazdığın seni bağlar: eylemin onunla çelişirse sistem eylemini reddeder. Bu adımların içinde yön, \
-seviye, zamanlama, hedef, araştırma ve bekleme süresi tamamen senin kararındır.
-
-1. Defteri sınamak, defter_sinamasi. Önceki çağrıda vardığın sonuçlar yeni veriyle sınanmadan sürmesin diye var. \
-Eski defterin planını, yapısını ve gündemini bugünkü veriyle değerlendirirsin. Hesaptaki her bekleyen giriş emri \
-ve her açık pozisyon için geçerli, zayıfladı ya da bozuldu yazarsın, gerekçesiyle. Bozuldu dediğin emri sistem \
-iptal eder. Bozuldu dediğin pozisyonu aynı kararda pozisyon_kapat ile kapatırsın. Yöneticinin açtığı pozisyonu \
-değerlendirirsin ama kapatmak zorunda değilsin.
-2. Yapıyı okumak, pariteler alanında yapi. Yön tahminle değil tepe ve dip sırasıyla okunsun diye var. Her parite \
-için {top} ve {low} grafikte yönü ve son iki tepe ile son iki dibi, eskiden yeniye yazarsın. Parite kartında \
-sistemin bulduğu son tepe ve dipler hazır gelir. Hangisinin önemli olduğu, bir hareketin geri çekilme mi dönüş mü \
-olduğu senin yorumundur. Yükselen dersen iki tepe de iki dip de yükselir, alçalan dersen ikisi de alçalır. Yatay ve \
-belirsiz senin okumandır. Uyumu sistem senin rakamlarından çıkarır: {top} yön belliyse ve {low} grafikte o yönde \
-ilk yapı oluştuysa, düşüşte ilk alçalan tepe, yükselişte ilk yükselen dip, uyum vardır.
-3. Rejim ve uygunluk, pariteler alanında rejim. Stratejinin çalışmadığı piyasada işlem açılmasın diye var. \
-Piyasanın rejimini okur, kanıtını rakamla yazar ve stratejine uygun olup olmadığını söylersin. Stratejin şu \
-rejimlerde çalışır: {fit}. Uyum yoksa düzenli trend seçemezsin. Uygun değilse neyi beklediğini yazarsın, bir fiyat \
-ya da bir saat. Beklediğin fiyata sistem alarm kurar, beklediğin saat sonraki çağrının en geç zamanı olur. \
-Paritede açık pozisyonun varsa ve yalnızca onu yönetiyorsan beklediğin bir şey olmayabilir, o zaman yok seçersin. \
-Uygun olmayan paritede giriş yapamazsın.
-4. Son işlemler, kapanan_islemler. Kayıplardan ve kazançlardan öğrenmek ölçülebilir olsun diye var. Hesap \
-bölümünde sınıflandırılmayı bekleyen her pozisyonu bir kez sınıflandırırsın: {verdicts}, yanına bir cümle. \
-Beklenmedik olay, bir haberin ya da ani bir olayın tezini ve korumanı geçersiz kıldığı işlemdir. \
-Sınıflandırma işlemin kaydına bağlanır, kapanan işlemlerine araçla baktığında görürsün. Yöneticinin açtığı ya da \
-kapattığı pozisyonlar sınıflandırılmaz.
-5. Giriş alanları. Her girişte riskini, tezini bozan koşulu ve tezine aykırı veriyi bilerek girmen için var. \
-piyasa_giris ve emir_ver eylemlerinde karşı kanıt, risk beyanı ve geçersizlik zorunludur:
-- karsi_kanit: Girişe aykırı en güçlü veri ve neden ağır basmadığı. Boş ya da yok anlamında olamaz.
-- risk_beyani: SL'de kaybedeceğin tutarın özkaynağına oranı ve bu riski neden aldığın. Sistem gerçek riski \
-hesaplar: girişin SL'deki zararı ve iki yönlü taker komisyonu, aynı yöndeki açık pozisyonun en kötü stopundaki \
-zararla birlikte. SL yoksa girişin marjininin tamamı risktir. Gerçek risk beyanının {numbers.num(RISK_SLACK, 2)} \
-katını aşarsa giriş reddedilir ve gerçek rakam sana söylenir.
-- gecersizlik: Tezini bozan koşul, bir cümle ve bir fiyat. Fiyat short'ta girişin üstünde, long'da altındadır. \
-Bekleyen emir dolmadan son fiyat oraya değerse sistem emri iptal eder, iptali sonraki çağrında hesap bölümünde \
-görürsün. Pozisyon açıkken son fiyat oraya değerse hemen çağrılırsın.
-- son_stoptan_farki: Bir paritede bir yöndeki son işlemin zararla stoplandıysa aynı yöndeki yeni girişte \
-zorunludur. Art arda gelen stoplar piyasanın değiştiğini gösteren bir veridir.
-
-Sistem girişleri ayrıca şöyle denetler. Short girişin {low} grafikte yazdığın son tepenin altında olur, SL'n o \
-tepenin üstünde. Long girişin yazdığın son dibin üstünde olur, SL'n o dibin altında. Bir önceki tepe ya da dip \
-stopunun yeridir, girişinin değil. {top} yönü yükselen ya da alçalan yazdıysan giriş o yönde olur. Aynı yönde açık \
-pozisyonun stopu girişe taşınmadıysa ya da aynı yönde bekleyen bir giriş emrin varsa yeni giriş reddedilir. \
-Girişin gerekçesi ve geçersizliği emre bağlı saklanır, hesap bölümünde emrin ve pozisyonun yanında görünür.
-
-Adımlardan sonra analizini, eylemlerini, not defterini ve özetini yazarsın. Her çağrıda bütün pariteleri \
-değerlendirirsin, bir pariteyi değerlendirmek orada işlem açman gerektiği anlamına gelmez. Fiyatı yalnızca grafik \
-hareket ettirmez: haberler, makro veriler, merkez bankası kararları ve büyük piyasaların açılış ve kapanışları da \
-etkiler. ABD'nin ekonomik verileri ve Fed kararları açıklandığı günlerde şu saatlerde gelir: {releases}.
-
-### Rejimler
-
-{_regimes_text(structure)}
+{_steps_text(steps, releases)}
 
 {style_part}## Not defteri
 
@@ -187,8 +155,7 @@ Her çağrıda sıfırdan başlarsın, önceki konuşmayı hatırlamazsın. Sana
 Not defteri üç alandır:
 - plan: İki üç cümlelik metin, planı bozan koşul ve planın geçerli olduğu son an. En fazla \
 {nbk.PLAN_TEXT_MAX} ve {nbk.PLAN_BREAK_MAX} karakter.
-- seviyeler_notu: Kilit seviyeler ve neden önemli oldukları, en fazla {nbk.NOTE_MAX} karakter. Tepe ve dip \
-rakamlarını sistem 2. adımda yazdıklarından deftere kendisi taşır.
+- seviyeler_notu: Kilit seviyeler ve neden önemli oldukları, en fazla {nbk.NOTE_MAX} karakter.{carried}
 - gundem: Etkisi süren haberler ve yaklaşan olaylar, tarihleriyle, en fazla {nbk.AGENDA_MAX} karakter.
 
 Planı geçerli dersen metni ve bozulma koşulu olduğu gibi taşınır, yalnızca geçerlilik saatini değiştirebilirsin. \
@@ -218,9 +185,7 @@ karar verirsin.
 
 - WebSearch ve WebFetch: Haber, makro gelişme, ekonomik takvim, piyasa yorumu ya da istediğin herhangi bir bilgi \
 için web'de arama yapar ve sayfa okur.
-- Agent ile arastirmaci: Bir araştırma görevini Haiku modeline devreder. Haiku web'de araştırır ve sana özet \
-getirir. Bu, kendi bağlamını uzun sayfalarla doldurmadan geniş bir araştırma yapmanı sağlar.
-- Piyasa araçları: Herhangi bir paritede istediğin aralıkta ve sayıda mum, istediğin ayarlarla gösterge hesabı, \
+{_team_text(team)}- Piyasa araçları: Herhangi bir paritede istediğin aralıkta ve sayıda mum, istediğin ayarlarla gösterge hesabı, \
 destek ve direnç seviyeleri, hacim profili, pariteler arası korelasyon, emir defteri, fonlama geçmişi, açık \
 pozisyon geçmişi, long short oranları, likidasyonlar, kendi geçmiş kararların ve kapanmış işlemlerin. Likidasyon \
 verisi Binance'in akışından örneklenir: her parite için saniyede yalnızca en büyük likidasyon kaydedilir, bu yüzden \
@@ -292,9 +257,7 @@ limit emirler, kırılım ve geri çekilme emirleri, TP, SL, iz süren stop ve s
 pozitifse long'lar öder, short'lar alır, negatifse tersi. Ödeme pozisyonun marjininden düşer ya da marjine \
 eklenir ve likidasyon fiyatını değiştirir.
 - Fiyat alarmı: Bir paritede bir fiyat seviyesi ve kendine bir not verirsin. Fiyat oraya değince hemen çağrılırsın \
-ve notunu görürsün. Alarm işlem açmaz. Alarmların numarası emirlerden ayrıdır. Rejimi uygun bulmadığın bir \
-paritede beklediğin fiyata sistemin kurduğu alarm da listede görünür, yeni bir beklenen fiyat yazınca eskisinin \
-yerini alır.
+ve notunu görürsün. Alarm işlem açmaz. Alarmların numarası emirlerden ayrıdır.{alarm_rule}
 - Sen yalnızca çağrıldığında karar verirsin. Bir sonraki çağrının kaç dakika sonra olacağını sen seçersin, \
 {min_wait} ile {max_wait} dakika arası. Bir giriş emrinin gerçekleşmesi ya da açılamaması, emir süresinin \
 dolması, TP, SL, iz süren stop, likidasyon, bir alarm ya da açık pozisyonun geçersizlik fiyatı olduğunda beklemeden \

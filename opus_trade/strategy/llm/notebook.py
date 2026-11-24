@@ -19,9 +19,10 @@ description: Not defterinin şeması, sınırları, okunması ve birleştirilmes
 # gösterilir ve planın süresi dolmuş sayılır. Opus ilk çağrıda yeni plan
 # yazmak zorunda kalır, eski bilgiyi yeni biçime kendisi taşır.
 #
-# NOTE: Yapının tepe ve dip rakamlarını Opus defterde yazmaz. Kararın
-# pariteler alanında 2. adımda yazdığı değerler sistem tarafından deftere
-# taşınır, talimat/defter.md. Opus yalnızca seviyelerin notunu yazar.
+# NOTE: Yapının tepe ve dip rakamlarını Opus defterde yazmaz. Yapı adımı olan
+# türde kararın pariteler alanında yazdığı değerler sistem tarafından deftere
+# taşınır, talimat/defter.md. Opus yalnızca seviyelerin notunu yazar. Yapı
+# adımı olmayan türde defterde rakam yoktur.
 #
 # NOTE: Sınırlar hem şemada maxLength olarak hem burada durur. Şema claude
 # komutunda zorlanır, Opus aşan metni aynı çağrıda kısaltır. problems()
@@ -81,8 +82,13 @@ class Notebook:
                 "gundem": self.agenda}
 
 
-def schema() -> dict:
-    """Karar şemasındaki not_defteri alanını döndürür."""
+def schema(carried: str = "") -> dict:
+    """Karar şemasındaki not_defteri alanını döndürür.
+
+    Args:
+        carried: Seviyeler notunun açıklamasına eklenen cümle, sistemin deftere taşıdığı rakamları söyler.
+    """
+    note = "Kilit seviyeler ve neden önemli oldukları." + (f" {carried}" if carried else "")
     plan = {"type": "object", "additionalProperties": False, "required": ["metin", "bozulma", "gecerlilik"],
             "properties": {
                 "metin": {"type": "string", "maxLength": PLAN_TEXT_MAX,
@@ -97,9 +103,7 @@ def schema() -> dict:
                            "koşulu aynen taşınır, buradaki planından yalnızca geçerlilik saati alınır.",
             "properties": {
                 "plan": plan,
-                "seviyeler_notu": {"type": "string", "maxLength": NOTE_MAX,
-                                   "description": "Kilit seviyeler ve neden önemli oldukları. Tepe ve dip "
-                                                  "rakamlarını sistem pariteler alanından taşır."},
+                "seviyeler_notu": {"type": "string", "maxLength": NOTE_MAX, "description": note},
                 "gundem": {"type": "string", "maxLength": AGENDA_MAX,
                            "description": "Etkisi süren haberler ve yaklaşan olaylar, tarihleriyle."}}}
 
@@ -160,15 +164,15 @@ def problems(payload: dict) -> list[str]:
     return out
 
 
-def merge(old: Notebook, new: dict, review: str, swings: dict, now: int) -> tuple[Notebook, bool]:
+def merge(old: Notebook, new: dict, review: str, now: int, swings: dict | None = None) -> tuple[Notebook, bool]:
     """Eski defterle Opus'un yeni defterini birleştirir.
 
     Args:
         old: Hafızadaki defter.
         new: Kararın not_defteri alanı.
         review: Opus'un defter sınamasında plan için seçtiği, PLAN_REVIEWS'tan biri.
-        swings: Kararın pariteler alanından parite ve aralık başına tepeler ve dipler.
         now: Şu an, planın süresi için.
+        swings: Parite ve aralık başına tepeler ve dipler, yapı adımı olan türde. Yoksa defterde rakam olmaz.
 
     Returns:
         Yeni defter ve eski planın metniyle bozulma koşulunun Opus'un farklı yazdığına rağmen taşınıp taşınmadığı.
@@ -181,7 +185,7 @@ def merge(old: Notebook, new: dict, review: str, swings: dict, now: int) -> tupl
         carried = (new["plan"]["metin"], new["plan"]["bozulma"]) != (old.plan.get("metin"), old.plan.get("bozulma"))
     else:
         plan, carried = new["plan"], False
-    return Notebook(plan=plan, note=new["seviyeler_notu"], swings=swings, agenda=new["gundem"]), carried
+    return Notebook(plan=plan, note=new["seviyeler_notu"], swings=swings or {}, agenda=new["gundem"]), carried
 
 
 def _swings_text(swings: dict) -> list[str]:

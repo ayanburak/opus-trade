@@ -101,6 +101,7 @@ class Facts:
         late_min: Son kararın istediği uyanma anından bu yana geçen dakika, eşiği aştıysa.
         admin_24h: Yöneticinin son yirmi dört saatte hesapta yaptığı işlemler, saatiyle birer cümle.
         version_start: Yürürlükteki sürümün başlangıç anı.
+        team_today: Rolden bugün çalışan alt görev sayısına. Gün Türkiye saatiyle gece yarısı başlar.
     """
 
     today_count: int = 0
@@ -120,6 +121,7 @@ class Facts:
     late_min: int | None = None
     admin_24h: tuple[str, ...] = ()
     version_start: int = 0
+    team_today: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,70 @@
+# Çağrı
+
+Şu an 24 Kasım 2026 Salı, 20:00. Hafta içi. Türkiye saati, UTC+3.
+
+Çağrılma nedeni: İstediğin bekleme süresi doldu.
+
+# Yöneticiden
+
+- Teklif: altında acele etme.
+
+# Not defterin
+
+Sınanacak eski hali. Kararının defter_sinamasi alanında her bölümünü bugünkü veriyle değerlendir.
+
+## Plan
+
+Altında 1 saatlik ilk yükselen dipten long.
+Bozulma koşulu: 4040 altı
+Geçerlilik: 25.11.2026 08:00
+
+## Yapı
+
+Son okuduğun tepe ve dipler, 24.11 19:00 kararından:
+- XAUUSDT 4 saatlik: tepeler 4120.0, 4110.0, dipler 4010.0, 4030.0
+
+Seviyelerin notu: 4050 destek.
+
+## Gündem
+
+25.11 ABD verisi.
+
+# Son kararların
+
+- 24.11 19:00 · XAUUSDT düzenli trend · uygun · BTCUSDT yatay · uygun değil · Altında dip bekleniyor.
+  - emir_ver #2 XAUUSDT: verildi.
+
+# Hesap
+
+Nakit: 12.00 dolar
+Kullanılabilir bakiye: 9.97 dolar
+Özkaynak: 12.00 dolar, başlangıç 10, getiri yüzde +20.00
+Paritelerin kaldıracı: XAUUSDT 10x, BTCUSDT 20x
+
+Açık pozisyonlar:
+- BTCUSDT short, miktar 0.002, marjin 6.05, büyüklük 121.00, giriş 60500.0, güncel 60200.0, mark 60210.0, açılış 24.11 18:00, likidasyon 70000.0, açık kâr/zarar +0.58, fonlama -0.0010
+  Giriş notu, 24.11 18:00: risk beyanı yüzde 4,00, geçersizlik 61200.0: 61200 üstü kapanış Gerekçe: Yapı net.
+  Koruma emirleri:
+  - #1 SL 61300.0 miktar kalanın tamamı
+
+Bekleyen giriş emirleri:
+- #2 XAUUSDT long limit 4060.0 miktar 0.01, ayırdığı 2.03, gerçekleşince kurulacak koruma: SL 4030.0 miktar girişin tamamı, geçerlilik 24.11 21:00
+  Giriş notu: risk beyanı yüzde 3,00, geçersizlik 4040.0: 4040 altı Gerekçe: Dip yakın.
+
+Alarmlar:
+- alarm #1 XAUUSDT 4100.0, not: Direnç kırılırsa bak.
+
+Bugün: 1 pozisyon kapandı, 1 tanesi zararla stoplandı, günün neti -0.42 dolar. Art arda zararla kapanan pozisyon: 1.
+Son kapanan pozisyonlar, eskiden yeniye:
+- #5 XAUUSDT long, net -0.42, SL ile kapandı, 24.11 18:30
+Son 3 bekleyen giriş emrinden 2 tanesi doldu, 1 tanesi iptal edildi, süresi doldu ya da açılamadı.
+Sınıflandırılmayı bekleyen pozisyonlar, kapanan_islemler alanında:
+- #5 XAUUSDT long, net -0.42, SL ile kapandı, 24.11 18:30
+
+Başlangıçtan beri kapanan işlemler: 3, kazanan 1, toplam net -0.30 dolar, ödenen toplam komisyon 0.04
+
+# Piyasa saatleri
+
+Açık: New York borsası, NYSE ve Nasdaq, kapanış yarın 00:00; CME vadelileri, altın ve bitcoin vadelileri dahil, kapanış yarın 01:00. Sıradaki açılışlar: Tokyo borsası yarın 03:00, Hong Kong borsası yarın 04:30. 26 Kasım Perşembe: New York borsası, NYSE ve Nasdaq tatil nedeniyle kapalı. 26 Kasım Perşembe: CME vadelileri, altın ve bitcoin vadelileri dahil tatil nedeniyle kapalı. 27 Kasım Cuma: New York borsası, NYSE ve Nasdaq erken kapanacak, kapanış 21:00. 27 Kasım Cuma: CME vadelileri, altın ve bitcoin vadelileri dahil erken kapanacak, kapanış 21:00.
+
+KARTLAR

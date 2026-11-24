@@ -4,15 +4,13 @@ importable: yok
 
 LLM stratejisinin testleri. Opus'un Türkçe eylemi yanlış komuta çevrilirse
 yanlış pozisyon kapanır. Talimata yasak bir kelime ya da yanlış bir oran
-girerse Opus'un davranışı fark edilmeden değişir. claude çıktısı yanlış
-okunursa karar ya da araç kaydı kaybolur. Gerçek Opus çağrısı yapılmaz.
+girerse Opus'un davranışı fark edilmeden değişir. Gerçek Opus çağrısı
+yapılmaz. claude istemcisinin testleri tests/unit/llm'dedir.
 
 description: strategy.llm paketi için birim testleri.
 """
 
 import asyncio
-import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -23,9 +21,9 @@ from opus_trade.domain.trading import (AccountEvent, AccountState, Actor, AmendO
                                        EventKind, Order, OrderType, PlaceOrder, Position, Protection, Ref, SetLeverage,
                                        Trade)
 from opus_trade.strategy.base import ActionResult, Context, Wake
-from opus_trade.strategy.llm import actions, prompt
+from opus_trade.strategy.llm import actions, kinds, prompt
 from opus_trade.strategy.llm import strategy as llm_strategy
-from opus_trade.strategy.llm.client import ClaudeCliClient, LLMError, LLMRequest, LLMResult
+from opus_trade.llm.base import LLMResult
 from opus_trade.triggers.price_alert import Alert
 from tests.fakes import catalog
 
@@ -172,11 +170,11 @@ def test_schema_requires_symbol_and_side_on_every_numbered_action():
 
 # --- Talimat ve istem ---
 
-def _system(**kw) -> str:
-    args = dict(balance=10, specs=[catalog().get(SOL)], fees=FeeSchedule(taker=0.0004, maker=0.0001), style="",
-                min_wait=15, max_wait=180, step_limit=25, structure=("4h", "1h"), fit_regimes=("duzenli_trend",),
-                now=NOW)
-    return prompt.system_prompt(**{**args, **kw})
+def _system(structure=("4h", "1h"), fit_regimes=("duzenli_trend",), **kw) -> str:
+    fees = FeeSchedule(taker=0.0004, maker=0.0001)
+    s = kinds.structured(None, catalog(), None, {}, None, kw.pop("style", ""), "opus", "high", 15, 180, 25, 600,
+                         structure_high=structure[0], structure_low=structure[1], fit_regimes=fit_regimes, fees=fees)
+    return s.system(_ctx())
 
 
 def test_system_prompt_has_no_forbidden_words_and_uses_real_fees():
@@ -340,7 +338,7 @@ def _decide(monkeypatch, tmp_path, k, state=STATE, memory=None):
         return "KARTLAR"
     monkeypatch.setattr(llm_strategy, "cards_text", cards)
     fake = FakeLLM(k)
-    s = llm_strategy.LLMStrategy(fake, catalog(), tmp_path, {}, tmp_path / "m.db", "", "opus", "high", 15, 180, 25, 600)
+    s = kinds.structured(fake, catalog(), tmp_path, {}, tmp_path / "m.db", "", "opus", "high", 15, 180, 25, 600)
     return asyncio.run(s.decide(_ctx(state=state, memory=memory or {}))), fake
 
 
@@ -358,7 +356,7 @@ def test_decide_turns_actions_into_commands_alarms_and_errors(monkeypatch, tmp_p
     assert d.chained == [False, True] and d.annotations == [None, None]
     assert d.alarms[0]["op"] == "add" and d.alarms[0]["price"] == 90
     assert not d.errors[0].ok and "birlikte verilemez" in d.errors[0].message
-    assert d.wait_s == 15 * 60 and d.record["template_version"] == prompt.TEMPLATE_VERSION
+    assert d.wait_s == 15 * 60 and d.record["template_version"] == kinds.STRUCTURED.version
     assert d.memory["notebook"]["plan"] == PLAN and d.memory["notebook_at"] == NOW
     assert d.memory["notebook"]["yapi"]["rakamlar"][SOL]["1h"]["dipler"] == [97, 98]
     assert fake.requests[0].max_turns == 30 and "defter_sinamasi" in fake.requests[0].schema["properties"]
@@ -427,63 +425,8 @@ def test_valid_plan_is_carried_and_reviews_and_suggestion_are_passed_on(monkeypa
 def test_structure_must_have_a_longer_upper_interval(tmp_path):
     """Üst aralık alt aralıktan uzun değilse uyum tanımsız kalır, profil kurulmaz."""
     with pytest.raises(ValueError, match="üst aralığı"):
-        llm_strategy.LLMStrategy(None, catalog(), tmp_path, {}, tmp_path, "", "opus", "high", 15, 180, 25, 600,
+        kinds.structured(None, catalog(), tmp_path, {}, tmp_path, "", "opus", "high", 15, 180, 25, 600,
                                  structure_high="1h", structure_low="4h")
-
-
-# --- claude istemcisi ---
-
-FAKE = '''import json, sys
-mode = sys.argv[sys.argv.index("--model") + 1]
-sys.stdin.read()
-out = lambda m: print(json.dumps(m), flush=True)
-out({"type": "system", "session_id": "s1"})
-out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "mcp__piyasa__mumlar",
-     "input": {"sembol": "BTCUSDT"}}]}})
-out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "mum listesi"}]}})
-if mode == "ok":
-    out({"type": "result", "structured_output": {"ozet": "tamam"}, "usage": {}, "total_cost_usd": 0.2})
-elif mode == "turns":
-    out({"type": "result", "subtype": "error_max_turns"})
-else:
-    print("bir hata oldu", file=sys.stderr)
-'''
-
-
-def _client(tmp_path) -> ClaudeCliClient:
-    script = tmp_path / "claude"
-    script.write_text(f"#!{sys.executable}\n" + FAKE)
-    script.chmod(0o755)
-    return ClaudeCliClient(Path(sys.executable), tmp_path, claude=str(script))
-
-
-def _req(tmp_path, model: str) -> LLMRequest:
-    return LLMRequest("talimat", "istem", {"type": "object"}, model, "high", 30, tmp_path / "work", timeout_s=20)
-
-
-def test_client_reads_decision_and_tool_results(tmp_path):
-    """Araç sonuçları kayda girmezse Opus'un neye bakarak karar verdiği sonradan incelenemez."""
-    seen = []
-    res = asyncio.run(_client(tmp_path).call(_req(tmp_path, "ok"), seen.append))
-    assert res.decision == {"ozet": "tamam"} and res.cost_usd == 0.2
-    assert res.tools[0]["name"] == "piyasa.mumlar" and res.tools[0]["result"] == "mum listesi"
-    assert seen[0]["title"] == "sembol=BTCUSDT"
-
-
-@pytest.mark.parametrize("mode, text", [("turns", "adım sınırına ulaştı"), ("crash", "bir hata oldu")])
-def test_client_failures_keep_the_tools_used_so_far(tmp_path, mode, text):
-    """Başarısız çağrının da araç kaydı kalmalı, limitin neye harcandığı görünsün."""
-    with pytest.raises(LLMError, match=text) as e:
-        asyncio.run(_client(tmp_path).call(_req(tmp_path, mode)))
-    assert e.value.tools[0]["name"] == "piyasa.mumlar"
-
-
-def test_command_gives_no_file_or_shell_tools(tmp_path):
-    """Opus'a dosya, terminal ya da kod çalıştırma aracı verilmez. Bir değişiklik bunu açarsa sunucu tehlikeye girer."""
-    cmd = _client(tmp_path).command(_req(tmp_path, "ok"))
-    assert cmd[cmd.index("--tools") + 1] == "WebSearch,WebFetch,Agent"
-    assert cmd[cmd.index("--allowedTools") + 1] == "WebSearch,WebFetch,Agent,mcp__piyasa"
-    assert json.loads(cmd[cmd.index("--json-schema") + 1]) == {"type": "object"}
 
 
 # --- İstemin bölümleri ---
@@ -548,3 +491,85 @@ def test_multi_param_keeps_choice_order_and_needs_one():
         validate((p,), {"fit": []})
     with pytest.raises(ValueError, match="Geçersiz: d"):
         validate((p,), {"fit": ["d"]})
+
+
+# --- Ekip ---
+
+class TeamLLM:
+    """Çağrı sürerken ekip sunucusu gibi kayıt dosyasına iki görev yazar."""
+
+    def __init__(self, decision, fail=False):
+        self.decision = decision
+        self.fail = fail
+        self.requests = []
+
+    async def call(self, req, on_tool=None):
+        from opus_trade.llm.base import LLMError
+        from opus_trade.team import log
+        self.requests.append(req)
+        path = Path(req.toolset.servers["ekip"].env["OPUS_TEAM_LOG"])
+        for role in ("haiku", "haiku"):
+            log.write(path, {"role": role, "tools": [{"name": "WebSearch", "title": "fed"}], "usage": None})
+        if self.fail:
+            raise LLMError("zaman aşımı", [{"name": "ekip.gorev_ver", "title": "x"}])
+        return LLMResult(self.decision, "{}", [{"name": "ekip.gorev_ver", "title": "x"}], {}, 1.0, 0.1)
+
+
+def _team_decide(monkeypatch, tmp_path, llm, facts=None):
+    async def cards(*a):
+        return "KARTLAR"
+    monkeypatch.setattr(llm_strategy, "cards_text", cards)
+    (tmp_path / "ekip.jsonl").write_text('{"role": "eski çağrıdan"}\n')
+    s = kinds.structured(llm, catalog(), tmp_path, {"OPUS_PROFILE": "1"}, tmp_path / "m.db", "", "opus", "high", 15,
+                         180, 25, 600)
+    from opus_trade.strategy.base import Facts
+    return asyncio.run(s.decide(_ctx(state=EMPTY, facts=facts or Facts())))
+
+
+def test_team_tasks_go_into_the_record_and_their_tools_are_marked_sub(monkeypatch, tmp_path):
+    """Alt görevler kaydın team alanına, araçları alt işaretiyle araç listesine girer. Eski çağrının kalıntısı
+    karışmaz, dosya okunduktan sonra silinir."""
+    llm = TeamLLM(_k())
+    d = _team_decide(monkeypatch, tmp_path, llm)
+    assert [r["role"] for r in d.record["team"]] == ["haiku", "haiku"]
+    assert [(t["name"], t["sub"]) for t in d.record["tools"][1:]] == [("WebSearch", True), ("WebSearch", True)]
+    assert not (tmp_path / "ekip.jsonl").exists()
+    req = llm.requests[0]
+    assert int(req.env["MCP_TOOL_TIMEOUT"]) < req.timeout_s * 1000
+
+
+def test_daily_use_narrows_the_quota_given_to_the_team_server(monkeypatch, tmp_path):
+    """Bugün 95 Haiku görevi çalıştıysa günlük sınır 100 olan türde bu çağrıda 5 hak kalır."""
+    import json as json_
+    from opus_trade.strategy.base import Facts
+    llm = TeamLLM(_k())
+    _team_decide(monkeypatch, tmp_path, llm, Facts(team_today={"haiku": 95}))
+    assert json_.loads(llm.requests[0].toolset.servers["ekip"].env["OPUS_TEAM_QUOTA"])["haiku"] == 5
+
+
+def test_a_failed_call_keeps_its_team_tasks(monkeypatch, tmp_path):
+    """Çağrı hatayla bitse de alt görevlerin tüketimi kayda girer, dosya silinir."""
+    from opus_trade.llm.base import LLMError
+    with pytest.raises(LLMError) as e:
+        _team_decide(monkeypatch, tmp_path, TeamLLM(_k(), fail=True))
+    assert len(e.value.record["team"]) == 2 and e.value.tools[-1]["sub"] is True
+    assert not (tmp_path / "ekip.jsonl").exists()
+
+
+def test_old_profile_versions_open_with_the_default_team_quota(tmp_path):
+    """Kayıtlı eski sürüm kota parametresi taşımaz ve doğrulanmadan kurulur. Türün varsayılanıyla açılmalı, yoksa
+    Trend ve Altın ekip aracını hiç görmezdi. Panelden verilen kota varsayılanın yerini alır."""
+    from opus_trade import plugins
+    from opus_trade.registry import validate
+    from opus_trade.strategy.base import STRATEGIES, Deps
+    plugins.load()
+    entry = STRATEGIES.get("llm")
+    deps = Deps(None, catalog(), None, {"work_dir": tmp_path, "tool_env": {}, "market_db": tmp_path})
+    old = entry.build(deps, style="x", model="opus", effort="high", min_wait=5, max_wait=2800, step_limit=25,
+                      timeout_s=600, structure_high="4h", structure_low="1h", fit_regimes=("duzenli_trend",))
+    assert old.team.per_call == {"opus": 0, "sonnet": 0, "haiku": 10} and old.team.daily["haiku"] == 100
+    params = validate(entry.params, {"team_opus": 2, "daily_opus": 5})
+    assert params["team_haiku"] == 10 and params["team_opus"] == 2
+    assert entry.build(deps, **params).team.remaining({"opus": 4}) == {"opus": 1, "sonnet": 0, "haiku": 10}
+    with pytest.raises(TypeError, match="team_gpt"):
+        kinds.structured(None, catalog(), tmp_path, {}, tmp_path, "", "opus", "high", 5, 60, 5, 600, team_gpt=1)

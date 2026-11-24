@@ -195,15 +195,18 @@ def create_app(core: Core) -> FastAPI:
                 "symbols": [_plain(core.catalog.get(s)) for s in core.catalog.symbols]}
 
     # LLM stratejisinin Opus'a açtığı araçlar ve karar şemasındaki eylemler.
-    # Piyasa araçları araç sunucusunun kendi listesinden, araştırmacı istemcinin
-    # ayarından, eylemler ACTIONS'tan okunur, panel hiçbir listeyi elle tutmaz.
+    # Piyasa araçları araç sunucusunun kendi listesinden, yerleşik araçlar
+    # stratejinin araç takımından, alt ajanlar ekibin rol kayıt defterinden, eylemler ACTIONS'tan okunur, panel hiçbir listeyi elle tutmaz.
     # Araç sunucusu ağır bir modüldür, yalnızca bu uç çağrılınca yüklenir.
     @app.get("/registry/llm")
     async def llm_registry():
         from ..strategy.llm.actions import ACTIONS
-        from ..strategy.llm.client import BUILTIN_TOOLS, RESEARCHER
+        from ..strategy.llm.toolkit import BUILTIN_TOOLS
+        from ..team.roles import ROLES
+        from ..team.roles import toolset as team_toolset
         from ..tools.market import server
 
+        sub = team_toolset({})
         tools = []
         for t in await server.list_tools():
             props, required = t.input_schema.get("properties", {}), set(t.input_schema.get("required", []))
@@ -211,7 +214,8 @@ def create_app(core: Core) -> FastAPI:
                           "params": [{"name": k, "type": v.get("type") or "any", "default": v.get("default"),
                                       "required": k in required} for k, v in props.items()]})
         return {"server": server.name, "tools": tools, "builtin": list(BUILTIN_TOOLS),
-                "agents": [{"name": k, **v} for k, v in RESEARCHER.items()],
+                "agents": [{"name": r.key, "description": f"{r.name}: {r.description}", "model": r.model,
+                            "tools": list(sub.builtin) + list(sub.servers)} for r in ROLES.values()],
                 "actions": [{"type": t, "description": d, "required": r, "optional": o} for t, d, r, o in ACTIONS]}
 
     # --- Profiller ---

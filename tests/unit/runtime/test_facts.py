@@ -203,3 +203,14 @@ def test_notes_of_open_orders_and_positions_come_with_the_facts(desk):
     desk.notes.attach_position(o.id, p.id)
     f = desk.facts()
     assert f.order_notes == {} and f.position_notes[p.id][0].invalid_text == "90 altı"
+
+
+def test_team_tasks_of_today_are_counted_by_role(desk):
+    """Günlük kota bugün çalışan alt görevlerden hesaplanır. Dünkü ve atlanan görev sayılmaz,
+    hatalı çağrının görevi sayılır."""
+    haiku, opus = {"role": "haiku"}, {"role": "opus"}
+    desk.journal.add(1, 1, T - 86400, [], [], {"team": [haiku, haiku]}, None, None)
+    desk.journal.add(1, 1, T - 600, [], [], {"team": [haiku, opus, {**haiku, "skipped": True}]}, None, None)
+    desk.journal.add(1, 1, T - 300, [], [], {"team": [haiku]}, "zaman aşımı", None)
+    desk.journal.add(1, 1, T - 100, [], [], {}, None, None)
+    assert desk.facts().team_today == {"haiku": 2, "opus": 1}
