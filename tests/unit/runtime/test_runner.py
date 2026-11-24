@@ -94,7 +94,8 @@ class World:
         self.sup = Supervisor(self.repo, self.ledger, self.journal, self.state, self.market, NullStream(), self.clock,
                               EventBus(), self.access, catalog(), BINANCE_STANDARD,
                               lambda p: Deps(self.clock, catalog()))
-        self.service = ProfileService(self.repo, self.ledger, self.journal, catalog(), self.clock, self.sup.refresh)
+        self.service = ProfileService(self.repo, self.ledger, self.journal, self.state, catalog(), self.clock,
+                                      self.sup.refresh)
         Scripted.script, Scripted.seen, Scripted.fail, Scripted.hold = [], [], [], None
 
     def config(self, **params) -> ProfileConfig:
@@ -184,6 +185,19 @@ def test_reset_keeps_old_trades_and_needs_a_stopped_profile(tmp_path):
     w.service.move(p.id, "stop")
     p = w.service.reset_account(p.id)
     assert p.account_id != old and w.ledger.cash(p.account_id) == 100.0
+
+
+def test_reset_cancels_pending_alerts_and_wakes(tmp_path):
+    """Eski hesabın alarmı ve verilmemiş uyandırması yeni hesaba geçmez. Kalsalardı eski pozisyonun notlarıyla yeni
+    hesabı uyandırırlardı. Yeniden kurulan çalıştırıcı da alarmsız başlar."""
+    w = World(tmp_path)
+    p, r = w.running()
+    w.state.add_alert(p.id, r.alerts.add(SOL, 120.0, 100.0, "eski", "strategy", T))
+    w.state.push_wake(p.id, T, "account", None)
+    w.service.move(p.id, "stop")
+    w.service.reset_account(p.id)
+    assert w.state.alerts(p.id) == [] and w.state.wakes(p.id) == []
+    assert w.sup.runners[p.id].alerts.alerts == []
 
 
 # --- Çalıştırıcı ---

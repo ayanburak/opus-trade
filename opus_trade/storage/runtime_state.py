@@ -43,6 +43,12 @@ class StateRepo:
             self.con.execute("UPDATE alerts SET status = ?, resolved_at = ? WHERE profile_id = ? AND number = ? "
                              "AND status = 'pending'", (status, now, profile_id, number))
 
+    def cancel_alerts(self, profile_id: int, now: int) -> None:
+        """Profilin bekleyen bütün alarmlarını iptal eder."""
+        with self.con:
+            self.con.execute("UPDATE alerts SET status = 'cancelled', resolved_at = ? WHERE profile_id = ? "
+                             "AND status = 'pending'", (now, profile_id))
+
     # --- Bekleyen uyandırmalar ---
 
     def push_wake(self, profile_id: int, time: int, kind: str, data: str | None) -> None:
@@ -57,6 +63,11 @@ class StateRepo:
     def drop_wakes(self, ids: list[int]) -> None:
         with self.con:
             self.con.executemany("DELETE FROM pending_wakes WHERE id = ?", [(i,) for i in ids])
+
+    def clear_wakes(self, profile_id: int) -> None:
+        """Profilin stratejiye verilmemiş bütün uyandırmalarını siler."""
+        with self.con:
+            self.con.execute("DELETE FROM pending_wakes WHERE profile_id = ?", (profile_id,))
 
     # --- Ayarlar ---
 

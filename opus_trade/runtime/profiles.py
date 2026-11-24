@@ -38,6 +38,7 @@ from ..registry import validate
 from ..storage.journal import JournalRepo
 from ..storage.ledger import Ledger
 from ..storage.profiles import ProfileRepo
+from ..storage.runtime_state import StateRepo
 from ..strategy.base import STRATEGIES
 from ..triggers.base import TRIGGERS
 
@@ -65,16 +66,18 @@ class ProfileService:
         repo: Profil deposu.
         ledger: Hesap defteri.
         journal: Strateji hafızasının deposu, kopyalama ve sıfırlama için.
+        state: Alarmların ve bekleyen uyandırmaların deposu, sıfırlama için.
         catalog: İşlem yapılabilen pariteler.
         clock: Saat.
         on_change: Bir profil değişince profilin kimliğiyle çağrılır.
     """
 
-    def __init__(self, repo: ProfileRepo, ledger: Ledger, journal: JournalRepo, catalog: Catalog, clock: Clock,
-                 on_change: Callable[[int], None] = lambda pid: None) -> None:
+    def __init__(self, repo: ProfileRepo, ledger: Ledger, journal: JournalRepo, state: StateRepo, catalog: Catalog,
+                 clock: Clock, on_change: Callable[[int], None] = lambda pid: None) -> None:
         self.repo = repo
         self.ledger = ledger
         self.journal = journal
+        self.state = state
         self.catalog = catalog
         self.clock = clock
         self.on_change = on_change
@@ -155,7 +158,9 @@ class ProfileService:
         return p
 
     # Eski hesap kapanır ama kayıtları kalır. Hafıza silinir, eski hesabın
-    # pozisyonlarını anlatan bir not defteri yeni hesapta yanıltır.
+    # pozisyonlarını anlatan bir not defteri yeni hesapta yanıltır. Bekleyen
+    # alarmlar ve uyandırmalar da aynı nedenle kalkar, eski pozisyonun
+    # notlarıyla yeni hesabı uyandırırlardı.
     def reset_account(self, profile_id: int) -> Profile:
         p = self._get(profile_id)
         if p.area is not Area.PAPER:
@@ -167,6 +172,8 @@ class ProfileService:
         balance = self.repo.version(p.version_id).config.balance
         self.repo.update(p.id, account_id=self.ledger.create_account("paper", balance, now))
         self.journal.set_memory(p.id, {})
+        self.state.cancel_alerts(p.id, now)
+        self.state.clear_wakes(p.id)
         self.on_change(p.id)
         return self.repo.get(p.id)
 

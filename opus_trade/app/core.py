@@ -98,7 +98,7 @@ def assemble(cfg: AppConfig, clock: Clock, market: MarketData, stream: MarketStr
                      deps, NotesRepo(con))
     iv = Interventions(con, state, clock, sup.runners.get)
     sup.interventions = iv
-    service = ProfileService(repo, ledger, journal, catalog, clock, sup.refresh)
+    service = ProfileService(repo, ledger, journal, state, catalog, clock, sup.refresh)
     notes = NotificationRepo(con)
     notifier = Notifier(bus, notes, repo, journal, clock, [PanelChannel(bus)])
     return Core(repo, ledger, journal, state, service, sup, iv, access, bus, catalog, clock, notes, notifier,
