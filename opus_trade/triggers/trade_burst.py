@@ -13,11 +13,16 @@ description: Tekil işlem akışında tek yönlü patlama tetikleyicisi.
 
 # NOTE: Eşiklerin hepsi aynı işlemde geçilmelidir: 5 ve 60 saniyelik hareket
 # aynı yönde, işlem hızı normalin katı, hareket yönündeki tarafın hacim payı
-# ve fiyatın 20 dakikalık ortalamasından kopması. Normal, son 5 saniyeyi
-# saymayan önceki dakikalardır, yoksa patlama kendi normalini büyütürdü.
-# Normalde hiç işlem yoksa parite tamamen sakindir ve hız katı sonsuz sayılır.
+# ve fiyatın 20 dakikalık ortalamasından kopması. Normal, son normal_back_s
+# saniyeyi saymayan önceki dakikalardır, varsayılanı 60. Hareket 60 saniyede
+# ölçüldüğü için normal de o 60 saniyenin dışından alınır. Eskiden yalnızca son
+# 5 saniye dışarıda kalıyordu, bir dakikaya yayılan iğnenin ilk 55 saniyesi
+# normali şişirip iğneyi kendi kendine gizliyordu. 25.11 GUAUSDT 01:20'de
+# görüldü: normal saniyede 13 işlemken hesap 44 buldu. Normalde hiç işlem
+# yoksa parite tamamen sakindir ve hız katı sonsuz sayılır.
 #
-# NOTE: Bir paritenin özeti normalin penceresinden kısaysa sinyal verilmez.
+# NOTE: Bir paritenin özeti normalin penceresi ile dışarıda bırakılan sürenin
+# toplamından kısaysa sinyal verilmez.
 # Liste saat başı değişince yeni giren paritenin birkaç dakika ısınması
 # gerekir, eksik geçmişle ölçülen normal patlamayı ya gizler ya da uydurur.
 #
@@ -69,6 +74,7 @@ class TradeBurst(Trigger):
         side_share_pct: Hareket yönündeki tarafın son 5 saniyedeki en küçük hacim payı, yüzde.
         mean_gap_pct: Fiyatın 20 dakikalık ortalamasından en küçük kopması, yüzde.
         normal_s: Normalin penceresi, saniye.
+        normal_back_s: Normalin dışarıda bıraktığı son süre, saniye.
         cooldown_s: Aynı paritenin iki bildirimi arasındaki en kısa süre, saniye.
     """
 
@@ -76,7 +82,7 @@ class TradeBurst(Trigger):
 
     def __init__(self, setup: Setup, list_size: int = 20, ranking: str = "both", move_5s_pct: float = 3,
                  move_60s_pct: float = 5, rate_mult: float = 5, side_share_pct: float = 60, mean_gap_pct: float = 6,
-                 normal_s: int = 300, cooldown_s: int = 120) -> None:
+                 normal_s: int = 300, cooldown_s: int = 120, normal_back_s: int = 60) -> None:
         self.setup = setup
         self.flow: TradeFlow = setup.flow
         self.list_size = list_size
@@ -87,6 +93,7 @@ class TradeBurst(Trigger):
         self.side_share = side_share_pct / 100
         self.mean_gap = mean_gap_pct / 100
         self.normal_s = normal_s
+        self.normal_back = normal_back_s
         self.cooldown_s = cooldown_s
         self._version = -1
         self._list: list[str] = []
@@ -112,13 +119,13 @@ class TradeBurst(Trigger):
         if abs(m5) < self.move_5s:
             return []
         sec = trade.ms // 1000
-        if sec - self._last_fire.get(s, -10**9) < self.cooldown_s or f.span(s) < self.normal_s + 5:
+        if sec - self._last_fire.get(s, -10**9) < self.cooldown_s or f.span(s) < self.normal_s + self.normal_back:
             return []
         up = m5 > 0
         m60 = f.move(s, 60)
         if (m60 > 0) != up or abs(m60) < self.move_60s:
             return []
-        normal = f.count(s, self.normal_s, back=5) / self.normal_s
+        normal = f.count(s, self.normal_s, back=self.normal_back) / self.normal_s
         recent = f.count(s, 5) / 5
         mult = recent / normal if normal > 0 else float("inf")
         usd = f.usd(s, 5)
@@ -151,6 +158,7 @@ TRIGGERS.register(
            high=100),
      Param("mean_gap_pct", "float", "20 dakikalık ortalamadan en küçük kopma, yüzde", default=6, low=0, high=80),
      Param("normal_s", "int", "Normalin penceresi, saniye", default=300, low=30, high=1100),
+     Param("normal_back_s", "int", "Normalin dışarıda bıraktığı son süre, saniye", default=60, low=5, high=100),
      Param("cooldown_s", "int", "Aynı paritede iki sinyal arası, saniye", default=120, low=5, high=86400)),
     lambda setup, **p: TradeBurst(setup, **p),
 )

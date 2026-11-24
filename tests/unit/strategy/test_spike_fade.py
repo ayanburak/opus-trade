@@ -92,6 +92,28 @@ def test_quiet_symbol_bursting_one_way_fires_once():
     assert f.ms == f.time * 1000 + (f.ms % 1000)
 
 
+# 600 saniye beş saniyede bir işlem, normal saniyede 0,2. Sonra 55 saniye
+# saniyede 20 işlemle 1,00'dan 1,03'e yükseliş, sonra 5 saniye saniyede 15
+# alışla 1,035'ten 1,075'e patlama.
+def building_then_burst(t0: int = NOW) -> list[Trade]:
+    out = [Trade(SOL, (t0 + s) * 1000, 1.00, 10, s % 10 == 0) for s in range(0, 600, 5)]
+    out += [Trade(SOL, (t0 + 600) * 1000 + i * 50, round(1.00 + 0.03 * i / 1100, 6), 10, True) for i in range(1100)]
+    out += [Trade(SOL, (t0 + 655) * 1000 + i * 66, round(1.035 + 0.04 * i / 74, 6), 10, True) for i in range(75)]
+    return out
+
+
+def test_normal_excludes_the_minute_of_the_move_itself():
+    """Bir dakikaya yayılan iğnenin ilk 55 saniyesi normale girerse normal saniyede 0,2'den 3,8 işleme şişer, son 5
+    saniyenin 15 işlemi normalin yalnızca 3,9 katı görünür ve iğne kendi kendini gizler. Normal son 60 saniyenin
+    dışından ölçülünce kat 75'tir. 25.11 GUAUSDT 01:20'de görüldü."""
+    t, flow = burst_trigger()
+    t.wanted()
+    assert len(feed(t, flow, building_then_burst())) == 1
+    t, flow = burst_trigger(normal_back_s=5)
+    t.wanted()
+    assert feed(t, flow, building_then_burst()) == []
+
+
 def test_no_signal_before_the_normal_is_known():
     """Liste yeni değişmişse paritenin geçmişi kısadır. Eksik geçmişle ölçülen normal patlamayı uydurur."""
     t, flow = burst_trigger()
