@@ -38,10 +38,11 @@ export interface Position {
   notes?: EntryNote[]; by_admin?: boolean;
 }
 
-/** Bir girişin gerekçesi ve geçersizliği, yalnızca panelde. */
+/** Bir girişin gerekçesi ve geçersizliği, yalnızca panelde. oyun_plani yalnızca Opus Multi'de girişin planıdır. */
 export interface EntryNote {
   id: number; symbol: string; side: Side; invalid_price: number; invalid_text: string; created_at: number;
-  reason: { karsi_kanit?: string; risk_beyani?: { yuzde: number; gerekce: string }; son_stoptan_farki?: string };
+  reason: { karsi_kanit?: string; risk_beyani?: { yuzde: number; gerekce: string }; son_stoptan_farki?: string;
+            oyun_plani?: string };
 }
 
 /**
@@ -73,6 +74,8 @@ export interface Trade {
   entry_price: number; entry_time: number; exit_price: number; exit_time: number; reason: string;
   pnl: number; fee: number; funding: number; net: number; best_price: number; worst_price: number;
   tp_prices: number[]; sl: number | null; order_id: number | null;
+  /** Panelde gelir: pozisyonu açan oyun planı, yalnızca Opus Multi'de dolu. */
+  playbook?: string | null;
 }
 
 export interface EquityPoint { time: number; cash: number; equity: number; margin: number }

@@ -346,7 +346,13 @@ def create_app(core: Core) -> FastAPI:
     async def trades(pid: int):
         p = profile(pid)
         # net ve leverage property'dir, asdict onları almaz. Arayüzler kendisi hesaplamasın diye eklenir.
-        return [{**_plain(t), "net": t.net, "leverage": t.leverage} for t in reversed(core.ledger.trades(p.account_id))] if p.account_id else []
+        # playbook pozisyonu açan oyun planıdır, yalnızca Opus Multi'de dolu gelir.
+        if not p.account_id:
+            return []
+        found = core.ledger.trades(p.account_id)
+        plans = core.supervisor.notes.playbooks(sorted({t.position_id for t in found}))
+        return [{**_plain(t), "net": t.net, "leverage": t.leverage, "playbook": plans.get(t.position_id)}
+                for t in reversed(found)]
 
     @app.get("/profiles/{pid}/equity")
     async def equity(pid: int, since: int = 0):

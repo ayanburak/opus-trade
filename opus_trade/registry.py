@@ -42,7 +42,7 @@ class Param:
         kind: int, float, text, choice, multi, symbols ya da symbol_map.
         label: Formda görünen Türkçe ad.
         default: Verilmezse kullanılan değer. None ise parametre zorunludur.
-        low: Sayılarda en küçük değer.
+        low: Sayılarda en küçük değer. Metinde doluysa metin boş ya da yalnızca boşluk olamaz.
         high: Sayılarda en büyük değer.
         choices: choice ve multi türünde geçerli değerler.
         help: Formda alanın altında görünen kısa açıklama.
@@ -74,6 +74,8 @@ def _one(p: Param, v: Any) -> Any:
     if p.kind in ("int", "float"):
         return _number(p, v)
     if p.kind == "text":
+        if p.low and not str(v).strip():
+            raise ValueError(f"{p.label} boş olamaz.")
         return str(v)
     if p.kind == "choice":
         if v not in p.choices:

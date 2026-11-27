@@ -74,6 +74,15 @@ def test_two_entries_into_one_position_keep_both_notes_in_order(repo):
     assert set(repo.for_positions([1, 2])) == {1}
 
 
+def test_position_counts_under_the_plan_that_opened_it(repo):
+    """Opus Multi'de rejim başına sonuç pozisyonun ilk notundaki plandan sayılır. Sonradan eklenen girişin planı
+    pozisyonu başka plana taşımaz. Planı olmayan pozisyon sonuçta görünmez."""
+    _entry(repo, position_id=1, reason={"oyun_plani": "yatay"})
+    _entry(repo, position_id=1, reason={"oyun_plani": "düzenli trend"})
+    _entry(repo, position_id=2)
+    assert repo.playbooks([1, 2, 3]) == {1: "yatay"}
+
+
 def test_invalidation_is_handled_once(repo):
     """Aynı seviyeye ikinci değiş, emri ikinci kez iptal etmeye ya da Opus'u ikinci kez çağırmaya kalkmaz."""
     on_order = _entry(repo, order_id=1)

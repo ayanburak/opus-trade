@@ -332,6 +332,27 @@ async def test_close_preview_matches_the_real_close(api):
 
 
 @run
+async def test_trades_carry_the_plan_that_opened_the_position(api):
+    """Opus Multi'nin rejim başına özeti İşlemler ucundaki planla kurulur. Plan pozisyonun ilk giriş notundan gelir,
+    notu olmayan pozisyonun işleminde boştur."""
+    pid, r = await api.running(RULE)
+    entry = {"type": "order", "order_type": "market", "symbol": SOL, "side": "long", "qty": 1}
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": entry})
+    [pos] = (await api.call("GET", f"/profiles/{pid}/account"))["state"]["positions"]
+    api.core.supervisor.notes.add_entry(pid, r.broker.account_id, SOL, "long", {"oyun_plani": "aşırı uzama"}, 90.0,
+                                        "90 altı", api.clock.t, position_id=pos["id"])
+    close = {"type": "close", "symbol": SOL, "side": "long", "qty": 0.5}
+    await api.call("POST", f"/profiles/{pid}/interventions", json={"kind": "command", "params": close})
+    [t] = await api.call("GET", f"/profiles/{pid}/trades")
+    assert t["playbook"] == "aşırı uzama"
+    other, _ = await api.running(RULE)
+    await api.call("POST", f"/profiles/{other}/interventions", json={"kind": "command", "params": entry})
+    await api.call("POST", f"/profiles/{other}/interventions", json={"kind": "command", "params": close})
+    [t] = await api.call("GET", f"/profiles/{other}/trades")
+    assert t["playbook"] is None
+
+
+@run
 async def test_chain_sets_leverage_then_enters(api):
     """Panel kaldıracı girişle birlikte tek onayda gönderir. Önizleme yeni kaldıraçla hesaplamalı ama paritenin
     ayarını değiştirmemeli, gerçek giriş de önizlemedeki marjinle açılmalı.

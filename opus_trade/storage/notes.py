@@ -6,7 +6,8 @@ NotesRepo Opus'un kararlarına bağlı notları saklar: girişlerin gerekçesi v
 geçersizlik seviyesi, kapanan pozisyonların sınıflandırması ve fiyatın bir
 geçersizlik seviyesine değdiği anlar. add_entry() bir girişin notunu emre ya
 da pozisyona bağlı yazar, attach_position() dolan emrin notunu pozisyona
-bağlar. pending_invalidations() henüz işlenmemiş notları verir, mark_hit()
+bağlar. playbooks() pozisyonların oyun planını verir.
+pending_invalidations() henüz işlenmemiş notları verir, mark_hit()
 bir notu işlenmiş yapar. add_review() bir pozisyonu sınıflandırır.
 
 description: Giriş notlarının, pozisyon sınıflandırmalarının ve geçersizlik kayıtlarının deposu.
@@ -85,6 +86,19 @@ class NotesRepo:
         for pid in position_ids:
             if found := self.for_position(pid):
                 out[pid] = found
+        return out
+
+    # Pozisyonu ilk giriş açtığı için plan ilk notundan okunur. Aynı yönde
+    # sonradan eklenen giriş başka bir rejimde verilmiş olsa da pozisyon
+    # açanın planıyla sayılır, Burak'ın 27.11 kararı, tasks/opus-multi.
+    def playbooks(self, position_ids: list[int]) -> dict[int, str]:
+        """Pozisyonların oyun planını döndürür. Notu ya da planı olmayan pozisyon sözlüğe girmez."""
+        out: dict[int, str] = {}
+        for pid in position_ids:
+            r = self.con.execute("SELECT reason FROM entry_notes WHERE position_id = ? ORDER BY id LIMIT 1",
+                                 (pid,)).fetchone()
+            if r and (plan := json.loads(r["reason"]).get("oyun_plani")):
+                out[pid] = plan
         return out
 
     # --- Geçersizlik ---

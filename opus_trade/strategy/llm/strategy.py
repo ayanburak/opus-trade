@@ -28,8 +28,8 @@ description: Kararı Opus'a soran stratejinin evrensel makinesi.
 # verirse eski emir önce iptal olur.
 #
 # NOTE: Bu sınıf hiçbir piyasa okuma yöntemini bilmez. Rozet, beklenti
-# alarmları, deftere taşınan tepe ve dipler ve bir sonraki çağrının en geç
-# anı adımlardan gelir.
+# alarmları, deftere taşınan tepe ve dipler, girişin notuna eklenen alanlar,
+# örneğin oyun planı, ve bir sonraki çağrının en geç anı adımlardan gelir.
 
 from dataclasses import dataclass
 
@@ -234,6 +234,7 @@ class LLMStrategy(Strategy):
                 return
             busy.add((entry.symbol, str(entry.side)))
             note = _note(a)
+            note["reason"].update(self.steps.entry_note(a, entry, k, review))
         if t.note:
             d.notes.append(ActionResult(label, True, f"{label}: {t.note}"))
         self._add(d, t.item, label, note)

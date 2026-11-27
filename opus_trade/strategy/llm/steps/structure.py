@@ -23,6 +23,12 @@ description: Yapı ve rejim adımı.
 # Yapısı olmayan türde kârdaki pozisyona eklemek serbesttir, risk beyanı yine
 # gerçek riskle bağlar.
 #
+# NOTE: Girişin üst aralığın yönünde olma kuralı counter_regimes'teki
+# rejimlerde uygulanmaz. Opus Multi'de yatay, aşırı uzama ve dönüş
+# rejimlerinin oyun planı trende ters girebilir, yön o planın işidir. llm
+# türünde liste boştur, talimatın cümlesi ve davranış eskisiyle aynı kalır,
+# altın kopya testi bunu korur.
+#
 # XXX: Alan adları ve seçenekler Opus'a görünür, Türkçe kalır.
 
 from dataclasses import dataclass, field
@@ -113,6 +119,7 @@ class StructureStep(DecisionStep):
     Args:
         structure: Üst ve alt aralık, cards.INTERVALS'tan.
         fit_regimes: Stratejinin çalıştığı rejimler, REGIMES anahtarları.
+        counter_regimes: Girişin üst aralığın yönünde olma kuralının uygulanmadığı rejimler.
 
     Raises:
         ValueError: Üst aralık alt aralıktan uzun değilse.
@@ -121,12 +128,14 @@ class StructureStep(DecisionStep):
     key = "structure"
     size = 2
 
-    def __init__(self, structure: tuple[str, str], fit_regimes: tuple[str, ...]) -> None:
+    def __init__(self, structure: tuple[str, str], fit_regimes: tuple[str, ...],
+                 counter_regimes: tuple[str, ...] = ()) -> None:
         super().__init__()
         if INTERVALS.index(structure[0]) <= INTERVALS.index(structure[1]):
             raise ValueError("Yapının üst aralığı alt aralığından uzun olmalı.")
         self.structure = tuple(structure)
         self.fit_regimes = tuple(fit_regimes)
+        self.counter_regimes = tuple(counter_regimes)
 
     def _part(self, review: Review) -> StructureReview:
         return review.parts.setdefault(self.key, StructureReview())
@@ -155,9 +164,19 @@ class StructureStep(DecisionStep):
         top, low = INTERVAL_NAMES[self.structure[0]], INTERVAL_NAMES[self.structure[1]]
         return (f"Sistem girişleri ayrıca şöyle denetler. Short girişin {low} grafikte yazdığın son tepenin altında "
                 f"olur, SL'n o tepenin üstünde. Long girişin yazdığın son dibin üstünde olur, SL'n o dibin altında. Bir "
-                f"önceki tepe ya da dip stopunun yeridir, girişinin değil. {top} yönü yükselen ya da alçalan "
-                f"yazdıysan giriş o yönde olur. Aynı yönde açık pozisyonun stopu girişe taşınmadıysa ya da aynı yönde "
-                f"bekleyen bir giriş emrin varsa yeni giriş reddedilir.")
+                f"önceki tepe ya da dip stopunun yeridir, girişinin değil. {self._direction_rule(top)} Aynı yönde açık "
+                f"pozisyonun stopu girişe taşınmadıysa ya da aynı yönde bekleyen bir giriş emrin varsa yeni giriş "
+                f"reddedilir.")
+
+    # Yön kuralının talimattaki cümlesi. counter_regimes boşsa llm türünün
+    # cümlesi harfi harfine aynı kalır.
+    def _direction_rule(self, top: str) -> str:
+        if not self.counter_regimes:
+            return f"{top} yönü yükselen ya da alçalan yazdıysan giriş o yönde olur."
+        names = [REGIMES[x] for x in self.counter_regimes]
+        free = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} ve {names[-1]}"
+        return (f"Rejimi düzenli trend okuduysan ve {top} yönü yükselen ya da alçalan yazdıysan giriş o yönde olur. "
+                f"{free[0].upper()}{free[1:]} rejimlerinde girişin yönü o rejimin oyun planındadır.")
 
     def sections(self) -> list[str]:
         top, low = INTERVAL_NAMES[self.structure[0]], INTERVAL_NAMES[self.structure[1]]
@@ -285,7 +304,8 @@ Rejimlerin rakam eşiği yoktur, rakamları kanıt alanında sen yazarsın."""]
             return fail(f"adım {self.first + 1}, {sym} rejim", "bu çağrıda rejimi stratejine uygun bulmadın, giriş "
                                                               "yapamazsın.")
         trend = part.trend.get(sym)
-        if trend is not None and trend != str(side):
+        regime = k["pariteler"][sym]["rejim"]["rejim"]
+        if trend is not None and trend != str(side) and regime not in self.counter_regimes:
             return fail(f"adım {at}, {sym} yön", f"üst aralığın yönünü {'yükselen' if trend == 'long' else 'alçalan'} "
                                                  f"yazdın, {side} giriş bununla çelişiyor.")
 

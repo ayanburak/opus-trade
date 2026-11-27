@@ -5,8 +5,8 @@ importable: DecisionStep, Steps
 DecisionStep bir karar adımının soyut sınıfıdır. Bir adım sisteme şunları
 katar: karar şemasına alanlar, talimatın Nasıl karar verirsin bölümüne
 adım metni ve varsa ek bölüm, hesabın kurallarına cümle, kararın bütününe bakan denetim, tek bir
-girişin denetimi, günlük kaydına alanlar, not defterine taşınan veri,
-alarmlar ve bir sonraki çağrının en geç anı. Varsayılan uygulamalar boş
+girişin denetimi, girişin notuna alanlar, günlük kaydına alanlar, not
+defterine taşınan veri, alarmlar ve bir sonraki çağrının en geç anı. Varsayılan uygulamalar boş
 döner, bir adım yalnızca ihtiyacı olanı yazar.
 
 Steps bir strateji türünün adım listesidir. Adımları sırayla numaralar ve
@@ -21,6 +21,8 @@ description: Karar adımının soyut sınıfı ve adım listesi.
 # NOTE: Adımların numarası talimatta ve ret metinlerinde listedeki sıradan
 # üretilir. Bir adım birden çok numaralı adım taşıyabilir, size onu söyler.
 # Yapı adımı yapı ve rejim diye iki adımdır. first Steps kurulurken yazılır.
+# size sıfır olan adım numara almaz, yalnızca metin ve denetim katar. Oyun
+# planı adımı böyledir, Opus'un yazdığı ayrı bir alanı yoktur.
 #
 # NOTE: Girişin denetimleri adımların sırasıyla yapılır, ilk takılan ret
 # metni döner. Yöntem adımları evrensel giriş alanlarından önce durduğu için
@@ -93,6 +95,10 @@ class DecisionStep(ABC):
             at: Giriş alanları adımının numarası, ret metninde girişin hangi adımda takıldığı için.
         """
         return None
+
+    def entry_note(self, a: dict, cmd: PlaceOrder, k: dict, review: Review) -> dict:
+        """Geçen bir girişin notunun reason alanına eklediği anahtarları döndürür, örneğin oyun planı."""
+        return {}
 
     def record(self, k: dict) -> dict:
         """Günlük kaydına eklediği alanları döndürür, örneğin rozet."""
@@ -179,6 +185,12 @@ class Steps:
             if why := s.entry_problem(a, cmd, k, review, ctx, leverage, busy, self.entry_no):
                 return why
         return None
+
+    def entry_note(self, a: dict, cmd: PlaceOrder, k: dict, review: Review) -> dict:
+        out = {}
+        for s in self.items:
+            out.update(s.entry_note(a, cmd, k, review))
+        return out
 
     def record(self, k: dict) -> dict:
         out = {}

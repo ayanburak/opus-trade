@@ -376,13 +376,16 @@ def _unguarded(p: Position, exits: list[Order]) -> float:
     return max(0.0, round(p.qty - sum(o.qty for o in stops), 10))
 
 
+# Giriş notunun Opus'a giden satırı. Oyun planı yalnızca Opus Multi'nin
+# notlarında vardır, diğer türlerin satırı eskisiyle aynı kalır.
 def _thesis(t: Thesis) -> str:
     risk = t.reason.get("risk_beyani") or {}
     why = (risk.get("gerekce") or "").strip()
     if len(why) > _REASON_SHOWN:
         why = why[:_REASON_SHOWN].rsplit(" ", 1)[0] + "..."
     said = f"risk beyanı yüzde {numbers.num(float(risk['yuzde']), 2)}, " if "yuzde" in risk else ""
-    return f"{said}geçersizlik {price(t.invalid_price)}: {t.invalid_text}" + (f" Gerekçe: {why}" if why else "")
+    plan = f"oyun planı {t.reason['oyun_plani']}, " if t.reason.get("oyun_plani") else ""
+    return f"{plan}{said}geçersizlik {price(t.invalid_price)}: {t.invalid_text}" + (f" Gerekçe: {why}" if why else "")
 
 
 def _position_lines(p: Position, s: AccountState, ctx: Context) -> list[str]:

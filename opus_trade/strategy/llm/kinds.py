@@ -1,6 +1,7 @@
 """
 file: kinds.py
-importable: STRUCTURED, STRUCTURED_TEAM, OPEN, OPEN_TEAM, COMMON_PARAMS, team_params, structured, free
+importable: STRUCTURED, STRUCTURED_TEAM, OPEN, OPEN_TEAM, MULTI, MULTI_REGIMES, COMMON_PARAMS, team_params,
+            structured, free, multi
 
 LLM strateji türleri ve kayıtları. Her tür evrensel makineyi, LLMStrategy'yi,
 kendi karar adımları, talimat sürümü ve hedef metniyle kurar. Ortak
@@ -8,8 +9,9 @@ parametreler tek yerde tanımlanır, her tür kendi parametrelerini ekler.
 
     llm       Opus, yapı okumalı: defter, yapı ve rejim, kapanan işlemler, giriş alanları.
     llm_open  Opus, serbest: defter, kapanan işlemler, giriş alanları. Yöntem Opus'undur.
+    llm_multi Opus Multi: defter, yapı ve rejim, oyun planı, kapanan işlemler, giriş alanları.
 
-structured() ve free() türleri kayıt defterini kullanmadan kurar, testler
+structured(), free() ve multi() türleri kayıt defterini kullanmadan kurar, testler
 ve yerel denemeler içindir.
 
 description: LLM strateji türlerinin kayıtları.
@@ -34,6 +36,7 @@ from .steps.base import Steps
 from .steps.book import BookStep
 from .steps.closed import ClosedStep
 from .steps.entry import EntryStep
+from .steps.playbook import DEFAULT_PLANS, PLAN_PARAMS, PlaybookStep
 from .steps.structure import REGIMES, StructureStep
 from ...team.policy import TeamPolicy
 from ...team.roles import ROLE_KEYS, ROLES
@@ -155,5 +158,52 @@ STRATEGIES.register(
     "ajanlara bölebilir.",
     COMMON_PARAMS + team_params(OPEN_TEAM),
     lambda deps, **p: free(*_deps(deps), **p),
+    LLMStrategy,
+)
+
+
+# --- Opus Multi ---
+
+# Yapı okumalı türün talimatı ve hedefiyle aynı makine, tek farkı her rejimin
+# kendi oyun planı. Uygun rejimler parametre değildir: belirsiz dışındaki
+# dört rejimin hepsinde bir plan çalışır. Yön kuralı yalnızca düzenli trendde
+# kalır, diğer üç rejimde yön planın işidir. Kararlar
+# tasks/opus-multi/kararlar.md'dedir.
+MULTI = Template(version=1, goal=STRUCTURED.goal)
+
+MULTI_REGIMES = ("duzenli_trend", "yatay", "asiri_uzama", "donus")
+
+_COUNTER = ("yatay", "asiri_uzama", "donus")
+
+# Boş plan kayıtta reddedilir. Kurulumda reddedilseydi çalışan profil eski
+# çalıştırıcısını kaybeder, yalnızca günlüğe yazılırdı.
+_PLAN_PARAMS = tuple(Param(PLAN_PARAMS[r], "text", f"Oyun planı: {REGIMES[r]}", default=DEFAULT_PLANS[r], low=1,
+                           help="Opus bu rejimi okuduğu paritede bu planla girer.") for r in MULTI_REGIMES)
+
+
+def multi(llm, catalog, work_dir, tool_env: dict, market_db, style: str, model: str, effort: str, min_wait: int,
+          max_wait: int, step_limit: int, timeout_s: int, structure_high: str = "4h", structure_low: str = "1h",
+          plan_trend: str = DEFAULT_PLANS["duzenli_trend"], plan_range: str = DEFAULT_PLANS["yatay"],
+          plan_stretch: str = DEFAULT_PLANS["asiri_uzama"], plan_reversal: str = DEFAULT_PLANS["donus"],
+          fees: FeeSchedule = BINANCE_STANDARD, **team: int) -> LLMStrategy:
+    """Opus Multi türünü kurar. Parametreler yapı okumalı türünkilerdir, uygun rejimler yerine dört oyun planı gelir.
+
+    Raises:
+        ValueError: Üst aralık alt aralıktan uzun değilse ya da bir plan boşsa.
+    """
+    structure = (structure_high, structure_low)
+    plans = {"duzenli_trend": plan_trend, "yatay": plan_range, "asiri_uzama": plan_stretch, "donus": plan_reversal}
+    steps = Steps([BookStep(), StructureStep(structure, MULTI_REGIMES, _COUNTER), PlaybookStep(plans), ClosedStep(),
+                   EntryStep(fees)])
+    return LLMStrategy(llm, catalog, work_dir, tool_env, market_db, style, model, effort, min_wait, max_wait,
+                       step_limit, timeout_s, MULTI, steps, structure, _policy(STRUCTURED_TEAM, team), fees)
+
+
+STRATEGIES.register(
+    "llm_multi", "Opus Multi",
+    "Kararı her uyanmada Opus'a sorar. Opus her paritenin rejimini okur ve o rejimin oyun planıyla girer. Açık "
+    "pozisyonu onu açan planla yönetir. Belirsiz rejimde giriş açmaz.",
+    COMMON_PARAMS + _STRUCTURE_PARAMS[:2] + _PLAN_PARAMS + team_params(STRUCTURED_TEAM),
+    lambda deps, **p: multi(*_deps(deps), **p),
     LLMStrategy,
 )
