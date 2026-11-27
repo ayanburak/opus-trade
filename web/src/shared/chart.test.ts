@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { intervalSeconds, mergeBar } from "./chart";
+import { digits, intervalSeconds, mergeBar, roundPrice } from "./chart";
 import type { Candle } from "./types";
 
 const candle = (time: number, high: number, low: number, close: number): Candle =>
@@ -25,5 +25,18 @@ describe("mergeBar", () => {
 
   it("aralıkların saniye karşılığı", () => {
     expect([intervalSeconds("1m"), intervalSeconds("4h"), intervalSeconds("1d")]).toEqual([60, 14400, 86400]);
+  });
+});
+
+describe("digits", () => {
+  // Grafik ekseni ve grafikten okunan fiyat bu haneyle yazılır. Sabit dört hane
+  // AKEUSDT'nin 0,001148'ini 0,0011'e yuvarlıyordu, grafikten verilen emir
+  // yüzde dört yanlış fiyatla giderdi.
+  it("bir doların altında beş anlamlı hane verir, büyük fiyatlar değişmez", () => {
+    expect(digits(0.001148)).toBe(7);
+    expect(roundPrice(0.00114834)).toBe(0.0011483);
+    expect(digits(0.5)).toBe(5);
+    expect(digits(97.98)).toBe(2);
+    expect(digits(59822.3)).toBe(1);
   });
 });

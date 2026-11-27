@@ -46,7 +46,7 @@ REASONS = {"tp": "TP ile kapandı", "sl": "SL ile kapandı", "liquidation": "lik
 def price(x: float | None) -> str:
     if x is None:
         return "yok"
-    return f"{x:.{numbers.price_digits(x)}f}"
+    return numbers.price_text(x)
 
 
 def local(t: int) -> datetime:

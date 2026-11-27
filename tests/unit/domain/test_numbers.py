@@ -38,3 +38,12 @@ def test_price_and_qty():
     assert numbers.price(1608.94) == "1608,9"
     assert numbers.price(None) == "yok"
     assert numbers.qty(0.041, "ETHUSDT") == "0,041 ETH"
+
+
+def test_small_prices_keep_their_digits():
+    """Bir doların altındaki fiyat yuvarlanıp başka bir fiyata dönüşmez. Sabit dört basamak 0,001148'lik bir emri
+    Opus'a 0,0011 diye gösteriyordu. Opus'un gördüğü noktalı yazı da aynı kuraldadır. Büyük fiyatlar değişmez."""
+    from opus_trade.strategy.llm.texts import price
+    assert numbers.price(0.001148) == "0,001148" and price(0.001148) == "0.001148"
+    assert numbers.price(0.00105) == "0,00105" and price(0.000012345) == "0.000012345"
+    assert numbers.price(0.5) == "0,5000" and price(1.2345) == "1.2345" and price(59822.3) == "59822.3"

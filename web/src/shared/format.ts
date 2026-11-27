@@ -39,11 +39,17 @@ export function parseNum(text: string): number | null {
   return Number(s);
 }
 
+// Bir doların altında beş anlamlı haneye yetecek kadar basamak verilir,
+// sondaki sıfırlar atılır ama en az dört basamak kalır. Çekirdeğin
+// numbers.price_digits'iyle aynı kuraldır. Sabit dört basamak 0,001148'i
+// 0,0011 yazıyordu.
 /** Sayıyı Türkçe biçimde yazar, ondalık hane sayısı verilmezse fiyatın büyüklüğüne göre seçilir. */
 export function num(x: number | null | undefined, digits?: number): string {
   if (x == null || Number.isNaN(x)) return "—";
-  const d = digits ?? (Math.abs(x) >= 1000 ? 1 : Math.abs(x) >= 10 ? 2 : 4);
-  return x.toLocaleString("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: d }).replace("-", "−");
+  const a = Math.abs(x);
+  const d = digits ?? (a >= 1000 ? 1 : a >= 10 ? 2 : 4);
+  const max = digits == null && a > 0 && a < 1 ? Math.max(4, 4 - Math.floor(Math.log10(a))) : d;
+  return x.toLocaleString("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: max }).replace("-", "−");
 }
 
 /** Emir ve pozisyon miktarı. Sondaki sıfırlar yazılmaz, miktar adımı paritesine göre değişir. */

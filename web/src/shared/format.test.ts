@@ -32,6 +32,14 @@ describe("parseNum", () => {
 });
 
 describe("gösterim", () => {
+  it("bir doların altındaki fiyat yuvarlanıp başka bir fiyata dönüşmez, 0,001148 0,0011 olmamalı", () => {
+    expect(num(0.001148)).toBe("0,001148");
+    expect(num(0.00105)).toBe("0,00105");
+    expect(num(0.5)).toBe("0,5000");
+    expect(num(97.98)).toBe("97,98");
+    expect(num(0.001148, 2)).toBe("0,00");
+  });
+
   it("Türkçe ayraçlar ve eksi işareti kullanılır", () => {
     expect(num(62099.1, 2)).toBe("62.099,10");
     expect(money(13.61)).toBe("$13,61");

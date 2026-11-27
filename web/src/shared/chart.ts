@@ -28,9 +28,10 @@ export function intervalSeconds(iv: string): number {
   return n * ({ m: 60, h: 3600, d: 86400 } as Record<string, number>)[iv.slice(-1)];
 }
 
-/** Fiyatın gösterildiği ondalık hane sayısı, format.ts num() ile aynı kural. */
+/** Fiyatın gösterildiği ondalık hane sayısı, format.ts num() ile aynı kural: bir doların altında beş anlamlı hane. */
 export function digits(price: number): number {
   const a = Math.abs(price);
+  if (a > 0 && a < 1) return Math.max(4, 4 - Math.floor(Math.log10(a)));
   return a >= 1000 ? 1 : a >= 10 ? 2 : 4;
 }
 
