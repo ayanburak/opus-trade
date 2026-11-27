@@ -23,11 +23,14 @@ description: Yapı ve rejim adımı.
 # Yapısı olmayan türde kârdaki pozisyona eklemek serbesttir, risk beyanı yine
 # gerçek riskle bağlar.
 #
-# NOTE: Girişin üst aralığın yönünde olma kuralı counter_regimes'teki
-# rejimlerde uygulanmaz. Opus Multi'de yatay, aşırı uzama ve dönüş
-# rejimlerinin oyun planı trende ters girebilir, yön o planın işidir. llm
-# türünde liste boştur, talimatın cümlesi ve davranış eskisiyle aynı kalır,
-# altın kopya testi bunu korur.
+# NOTE: Girişin üst aralığın yönünde olma kuralı ve girişin ile SL'nin son
+# alt aralık tepesine ya da dibine göre yeri counter_regimes'teki rejimlerde
+# uygulanmaz. İkisi de trend yöntemine aittir. Opus Multi'de yatay, aşırı
+# uzama ve dönüş rejimlerinin oyun planı trende ters girebilir, bant
+# kenarından giriş de son alt aralık dibinin altında kalabilir, 27.11'de ilk
+# kararda görüldü. Yön ve yer o planın işidir. llm türünde liste boştur,
+# talimatın cümlesi ve davranış eskisiyle aynı kalır, altın kopya testi bunu
+# korur.
 #
 # XXX: Alan adları ve seçenekler Opus'a görünür, Türkçe kalır.
 
@@ -160,23 +163,22 @@ class StructureStep(DecisionStep):
                 f"yönetiyorsan beklediğin bir şey olmayabilir, o zaman yok seçersin. Uygun olmayan paritede giriş "
                 f"yapamazsın."]
 
+    # counter_regimes boşsa llm türünün metni harfi harfine aynı kalır. Doluysa
+    # yer ve yön kuralları düzenli trende bağlanır, diğer rejimlerde ikisi de
+    # oyun planına bırakılır.
     def entry_rules(self) -> str:
         top, low = INTERVAL_NAMES[self.structure[0]], INTERVAL_NAMES[self.structure[1]]
-        return (f"Sistem girişleri ayrıca şöyle denetler. Short girişin {low} grafikte yazdığın son tepenin altında "
-                f"olur, SL'n o tepenin üstünde. Long girişin yazdığın son dibin üstünde olur, SL'n o dibin altında. Bir "
-                f"önceki tepe ya da dip stopunun yeridir, girişinin değil. {self._direction_rule(top)} Aynı yönde açık "
-                f"pozisyonun stopu girişe taşınmadıysa ya da aynı yönde bekleyen bir giriş emrin varsa yeni giriş "
-                f"reddedilir.")
-
-    # Yön kuralının talimattaki cümlesi. counter_regimes boşsa llm türünün
-    # cümlesi harfi harfine aynı kalır.
-    def _direction_rule(self, top: str) -> str:
+        level = (f"hort girişin {low} grafikte yazdığın son tepenin altında olur, SL'n o tepenin üstünde. Long girişin "
+                 f"yazdığın son dibin üstünde olur, SL'n o dibin altında. Bir önceki tepe ya da dip stopunun yeridir, "
+                 f"girişinin değil. {top} yönü yükselen ya da alçalan yazdıysan giriş o yönde olur.")
+        add = ("Aynı yönde açık pozisyonun stopu girişe taşınmadıysa ya da aynı yönde bekleyen bir giriş emrin varsa yeni "
+               "giriş reddedilir.")
         if not self.counter_regimes:
-            return f"{top} yönü yükselen ya da alçalan yazdıysan giriş o yönde olur."
+            return f"Sistem girişleri ayrıca şöyle denetler. S{level} {add}"
         names = [REGIMES[x] for x in self.counter_regimes]
         free = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} ve {names[-1]}"
-        return (f"Rejimi düzenli trend okuduysan ve {top} yönü yükselen ya da alçalan yazdıysan giriş o yönde olur. "
-                f"{free[0].upper()}{free[1:]} rejimlerinde girişin yönü o rejimin oyun planındadır.")
+        return (f"Sistem girişleri ayrıca şöyle denetler. Rejimi düzenli trend okuduysan s{level} "
+                f"{free[0].upper()}{free[1:]} rejimlerinde girişin yönü ve yeri o rejimin oyun planındadır. {add}")
 
     def sections(self) -> list[str]:
         top, low = INTERVAL_NAMES[self.structure[0]], INTERVAL_NAMES[self.structure[1]]
@@ -298,18 +300,25 @@ Rejimlerin rakam eşiği yoktur, rakamları kanıt alanında sen yazarsın."""]
                       busy: set[tuple[str, str]], at: int) -> str | None:
         part = self._part(review)
         sym, side = cmd.symbol, cmd.side
-        key = (sym, str(side))
         entry = entry_price(cmd, ctx)
         if not part.fit.get(sym, False):
             return fail(f"adım {self.first + 1}, {sym} rejim", "bu çağrıda rejimi stratejine uygun bulmadın, giriş "
                                                               "yapamazsın.")
         trend = part.trend.get(sym)
         regime = k["pariteler"][sym]["rejim"]["rejim"]
-        if trend is not None and trend != str(side) and regime not in self.counter_regimes:
+        if regime not in self.counter_regimes:
+            if why := self._trend_problem(a, entry, side, k["pariteler"][sym]["yapi"]["alt"], trend, sym, at):
+                return why
+        return self._adding_problem(cmd, k, review, ctx, busy, at)
+
+    # Trend yönteminin iki kuralı: giriş üst aralığın yönünde olur, giriş ve SL
+    # son alt aralık tepesine ya da dibine göre yerinde durur.
+    @staticmethod
+    def _trend_problem(a: dict, entry: float, side: Side, low: dict, trend: str | None, sym: str,
+                       at: int) -> str | None:
+        if trend is not None and trend != str(side):
             return fail(f"adım {at}, {sym} yön", f"üst aralığın yönünü {'yükselen' if trend == 'long' else 'alçalan'} "
                                                  f"yazdın, {side} giriş bununla çelişiyor.")
-
-        low = k["pariteler"][sym]["yapi"]["alt"]
         sl = a.get("sl")
         if side is Side.SHORT:
             top = low["tepeler"][-1]
@@ -329,10 +338,17 @@ Rejimlerin rakam eşiği yoktur, rakamları kanıt alanında sen yazarsın."""]
             if sl is not None and sl >= bottom:
                 return fail(f"adım {at}, giriş seviyesi", f"SL {price(sl)}, son alt aralık dibi {price(bottom)} ya da "
                                                           f"üstünde. Stop o dibin ötesinde durur.")
+        return None
 
-        # Aynı yönde ekleme: açık pozisyonun stopu girişe taşınmadıysa, aynı yönde
-        # bekleyen bir giriş varsa ya da bu kararda aynı yönde bir giriş zaten
-        # verildiyse reddedilir. Bu kararda iptal edilen bekleyen giriş sayılmaz.
+    # Aynı yönde ekleme: açık pozisyonun stopu girişe taşınmadıysa, aynı yönde
+    # bekleyen bir giriş varsa ya da bu kararda aynı yönde bir giriş zaten
+    # verildiyse reddedilir. Bu kararda iptal edilen bekleyen giriş sayılmaz.
+    # Kural her rejimde geçerlidir.
+    @staticmethod
+    def _adding_problem(cmd: PlaceOrder, k: dict, review: Review, ctx: Context, busy: set[tuple[str, str]],
+                        at: int) -> str | None:
+        sym, side = cmd.symbol, cmd.side
+        key = (sym, str(side))
         p = ctx.state.position(sym, side)
         if p is not None:
             stop = worst_stop(ctx, sym, side)

@@ -166,10 +166,11 @@ STRATEGIES.register(
 
 # Yapı okumalı türün talimatı ve hedefiyle aynı makine, tek farkı her rejimin
 # kendi oyun planı. Uygun rejimler parametre değildir: belirsiz dışındaki
-# dört rejimin hepsinde bir plan çalışır. Yön kuralı yalnızca düzenli trendde
-# kalır, diğer üç rejimde yön planın işidir. Kararlar
+# dört rejimin hepsinde bir plan çalışır. Girişin yönü ve yeri kuralları
+# yalnızca düzenli trendde kalır, diğer üç rejimde ikisi de planın işidir.
+# Sürüm 2'de yer kuralı da düzenli trende bağlandı. Kararlar
 # tasks/opus-multi/kararlar.md'dedir.
-MULTI = Template(version=1, goal=STRUCTURED.goal)
+MULTI = Template(version=2, goal=STRUCTURED.goal)
 
 MULTI_REGIMES = ("duzenli_trend", "yatay", "asiri_uzama", "donus")
 

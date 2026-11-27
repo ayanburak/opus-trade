@@ -101,9 +101,9 @@ def test_prompt_carries_the_plans_and_the_narrowed_direction_rule():
     text = multi(plan_range="BANT PLANI").system(ctx())
     assert "### Oyun planları" in text and "- Yatay: BANT PLANI" in text and "- Belirsiz: Giriş açmazsın." in text
     assert f"- Dönüş: {DEFAULT_PLANS['donus']}" in text
-    assert "Yatay, aşırı uzama ve dönüş rejimlerinde girişin yönü o rejimin oyun planındadır." in text
-    assert "girişinin değil. 4 saatlik yönü" not in text
-    assert "girişinin değil. Rejimi düzenli trend okuduysan ve 4 saatlik yönü" in text
+    assert ("Sistem girişleri ayrıca şöyle denetler. Rejimi düzenli trend okuduysan short girişin 1 saatlik grafikte"
+            in text)
+    assert "Yatay, aşırı uzama ve dönüş rejimlerinde girişin yönü ve yeri o rejimin oyun planındadır." in text
     assert "Stratejin şu rejimlerde çalışır: düzenli trend, yatay, aşırı uzama, dönüş." in text
     assert "Açık pozisyonu, rejim değişse de, onu açan planın kurallarıyla yönetirsin." in text
     assert "İlk beş adım" in text and "4. Son işlemler" in text and "5. Giriş alanları" in text
@@ -133,6 +133,31 @@ def test_counter_trend_entry_passes_outside_the_trend_and_carries_its_plan(monke
     assert d.commands[-1].side is Side.LONG
     assert d.annotations[-1]["reason"]["oyun_plani"] == plan
     assert d.record["template_version"] == kinds.MULTI.version
+
+
+# Bandın üst kenarından short: giriş 1 saatlik son tepenin, 102'nin, üstünde.
+# Trend yönteminin yer kuralına takılırdı.
+EDGE_SHORT = {"tip": "emir_ver", "sembol": SOL, "yon": "short", "tur": "limit", "fiyat": 102.5, "marjin_usd": 10,
+              "sl": 104, "karsi_kanit": "Günlük düşüşte, ama 4 saatlikte bant sürüyor.",
+              "risk_beyani": {"yuzde": 3.5, "gerekce": "Kenar net."},
+              "gecersizlik": {"metin": "103.5 üstü kapanış", "fiyat": 103.5}}
+
+
+def test_band_edge_entry_passes_in_range_and_is_refused_in_a_regular_trend(monkeypatch):
+    """Yatay planın kenardan girişi son alt aralık tepesinin ötesinde kalabilir, kabul edilir. Düzenli trendde aynı
+    giriş yer kuralıyla reddedilir. Kural 27.11'de ilk kararda bant kenarından girişi engelledi."""
+    d = decide(monkeypatch, decision("yatay", [EDGE_SHORT]))
+    assert d.errors == [] and d.commands[-1].side is Side.SHORT
+    assert d.annotations[-1]["reason"]["oyun_plani"] == "yatay"
+    d = decide(monkeypatch, decision("duzenli_trend", [EDGE_SHORT]))
+    assert d.commands == [] and "giriş seviyesi" in d.errors[0].message
+
+
+def test_adding_rule_holds_in_every_regime(monkeypatch):
+    """Aynı yönde ekleme kuralı yönteme değil yapı adımının bütününe aittir, oyun planı onu kaldırmaz."""
+    d = decide(monkeypatch, decision("yatay", [EDGE_SHORT, EDGE_SHORT]))
+    assert len([c for c in d.commands if getattr(c, "side", None) is Side.SHORT]) == 1
+    assert "aynı yönde ekleme" in d.errors[0].message
 
 
 def test_counter_trend_entry_is_refused_in_a_regular_trend(monkeypatch):
